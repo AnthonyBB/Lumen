@@ -7,16 +7,76 @@
  *    server-side ItemDatabase, never from the client.
  *  - Chests are stored in-memory keyed by chestId; each player gets one
  *    personal chest keyed as `chest_${socketId}`.
+ *
+ * Persistence notes:
+ *  - The in-memory Map is the source of truth during a session.
+ *  - MongoDB is written asynchronously (fire-and-forget) after every mutation.
+ *  - If the DB is unavailable, the server continues operating in-memory only.
+ *  - Call loadChest(userId) when a player connects to restore saved state.
  */
 
 import type { ChestStorage, InventoryItem } from '../types/index.js';
 import { InventoryManager } from './InventoryManager.js';
+import { isDbConnected } from '../db/connection.js';
+import { ChestStorageModel } from '../db/models/ChestStorageModel.js';
 
 export class ChestManager {
   /** chestId → ChestStorage */
   private chests: Map<string, ChestStorage> = new Map();
 
   constructor(private readonly inventoryManager: InventoryManager) {}
+
+  // -------------------------------------------------------------------------
+  // Persistence helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Persist a chest to MongoDB.
+   * Fire-and-forget — never awaited by callers.
+   */
+  private persistChest(ownerId: string, chest: ChestStorage): void {
+    if (!isDbConnected()) return;
+
+    ChestStorageModel.findOneAndUpdate(
+      { userId: ownerId },
+      {
+        items:     chest.items,
+        maxSlots:  chest.maxSlots,
+        updatedAt: new Date(),
+      },
+      { upsert: true, new: true },
+    )
+      .exec()
+      .catch((err: unknown) => console.error('[DB] persistChest failed:', err));
+  }
+
+  /**
+   * Load a player's chest from MongoDB into the in-memory map.
+   * If no record exists the map is left unchanged (getOrCreatePlayerChest
+   * handles the initial write).
+   *
+   * Call this when a player connects / logs in.
+   */
+  async loadChest(userId: string): Promise<void> {
+    if (!isDbConnected()) return;
+
+    try {
+      const doc = await ChestStorageModel.findOne({ userId }).lean().exec();
+      if (!doc) return;
+
+      const chestId = `chest_${userId}`;
+      const chest: ChestStorage = {
+        chestId,
+        ownerId:  userId,
+        items:    (doc.items as InventoryItem[]) ?? [],
+        maxSlots: (doc.maxSlots as number) ?? 20,
+      };
+
+      this.chests.set(chestId, chest);
+    } catch (err) {
+      console.error('[DB] loadChest failed:', err);
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -53,10 +113,20 @@ export class ChestManager {
   /**
    * Returns the player's personal chest, creating it if necessary.
    * Guaranteed to never return undefined.
+   *
+   * When a DB record already exists it will have been loaded by loadChest()
+   * before this is called, so we only write to the DB when creating a fresh
+   * chest.
    */
   getOrCreatePlayerChest(playerId: string): ChestStorage {
     const chestId = `chest_${playerId}`;
-    return this.createChest(playerId, chestId);
+    const existing = this.chests.get(chestId);
+    if (existing) return existing;
+
+    const chest = this.createChest(playerId, chestId);
+    // Persist the newly created empty chest
+    this.persistChest(playerId, chest);
+    return chest;
   }
 
   /**
@@ -98,6 +168,8 @@ export class ChestManager {
 
     // Add to chest (use the item object that was already in the inventory)
     chest.items.push({ ...item });
+
+    this.persistChest(fromPlayerId, chest);
     return true;
   }
 
@@ -133,6 +205,7 @@ export class ChestManager {
       return false;
     }
 
+    this.persistChest(toPlayerId, chest);
     return true;
   }
 }

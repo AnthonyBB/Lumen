@@ -83,11 +83,17 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
   } = game;
 
   // ── player:join ──────────────────────────────────────────────────────────
-  socket.on('player:join', (payload: PlayerJoinPayload) => {
+  socket.on('player:join', async (payload: PlayerJoinPayload) => {
     if (typeof payload?.username !== 'string') {
       socket.emit('error', { message: 'Invalid join payload.' });
       return;
     }
+
+    // Load persisted inventory and chest from MongoDB before creating new ones.
+    // Uses the username as the stable userId for DB lookups.
+    const userId = payload.username;
+    await inventoryManager.loadInventory(userId);
+    await chestManager.loadChest(userId);
 
     const result = game.playerJoin(socket.id, payload.username);
 

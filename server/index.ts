@@ -79,10 +79,13 @@ io.on('connection', (socket) => {
 // Start
 // ---------------------------------------------------------------------------
 
-httpServer.listen(PORT, () => {
-  console.log(`🌟 Lumen server running on http://localhost:${PORT}`);
-  console.log(`   CORS origin: ${CLIENT_ORIGIN}`);
-  console.log(`   Health check: http://localhost:${PORT}/health`);
+// Connect to MongoDB before accepting connections (non-blocking on failure)
+connectDB().then(() => {
+  httpServer.listen(PORT, () => {
+    console.log(`🌟 Lumen server running on http://localhost:${PORT}`);
+    console.log(`   CORS origin: ${CLIENT_ORIGIN}`);
+    console.log(`   Health check: http://localhost:${PORT}/health`);
+  });
 });
 
 // Connect to MongoDB after the HTTP server is listening so startup errors

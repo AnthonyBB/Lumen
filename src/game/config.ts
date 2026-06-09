@@ -4,6 +4,7 @@ import { WorldScene } from './scenes/WorldScene'
 import { UIScene } from './scenes/UIScene'
 import { ClassroomScene } from './scenes/ClassroomScene'
 import { CharacterScene } from './scenes/CharacterScene'
+import { EquipmentScene } from './scenes/EquipmentScene'
 import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
@@ -20,7 +21,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
       debug: false,
     },
   },
-  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene],
+  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene],
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

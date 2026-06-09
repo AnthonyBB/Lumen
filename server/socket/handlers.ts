@@ -72,7 +72,16 @@ function isSafeNumber(v: unknown, min: number, max: number): boolean {
 // Handler registration
 // ---------------------------------------------------------------------------
 
-export function registerHandlers(io: Server, socket: Socket, game: GameManager): void {
+export function registerHandlers(
+  io: Server,
+  socket: Socket,
+  game: GameManager,
+  onlinePlayers: Set<string>,
+): void {
+  // ── players:get_online ────────────────────────────────────────────────────
+  socket.on('players:get_online', () => {
+    socket.emit('players:online', onlinePlayers.size)
+  })
   const {
     playerManager,
     questionEngine,
@@ -273,6 +282,13 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
       !VALID_DIFFICULTIES.has(payload.difficulty as Difficulty)
     ) {
       socket.emit('error', { message: 'Invalid learning start payload. Provide a valid subject and difficulty.' });
+      return;
+    }
+
+    // Age-gating: child accounts may only access easy/medium difficulty
+    const ageGroup = (socket.data.ageGroup as string) ?? 'child';
+    if (ageGroup === 'child' && payload.difficulty === 'hard') {
+      socket.emit('error', { message: 'Hard difficulty is not available for your age group.' });
       return;
     }
 

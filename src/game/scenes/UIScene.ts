@@ -1,8 +1,16 @@
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { InventoryStore } from '../systems/InventoryStore'
 
+// Access the socket initialised by GamePage
+function getLumenSocket(): Socket | undefined {
+  return (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+}
+
 export class UIScene extends Phaser.Scene {
+  private playersOnlineText?: Phaser.GameObjects.Text
+
   constructor() {
     super({ key: 'UIScene' })
   }
@@ -82,6 +90,38 @@ export class UIScene extends Phaser.Scene {
       fontFamily: 'Arial, sans-serif',
       color: '#ffffff',
     }).setOrigin(0.5, 0)
+
+    // ── Players Online (top-center) ───────────────────────────────────────────
+    const onlineBg = this.add.graphics()
+    onlineBg.fillStyle(0x000000, 0.5)
+    onlineBg.fillRoundedRect(GAME_WIDTH / 2 - 80, 6, 160, 36, 8)
+
+    this.add.text(GAME_WIDTH / 2, 14, 'Players Online', {
+      fontSize: '10px',
+      fontFamily: 'Arial, sans-serif',
+      color: '#888888',
+      fontStyle: 'bold',
+    }).setOrigin(0.5, 0)
+
+    this.playersOnlineText = this.add.text(GAME_WIDTH / 2, 26, '—', {
+      fontSize: '13px',
+      fontFamily: 'Georgia, serif',
+      color: '#ffd700',
+      fontStyle: 'bold',
+    }).setOrigin(0.5, 0)
+
+    // Connect to socket for live updates
+    const socket = getLumenSocket()
+    if (socket) {
+      socket.on('players:online', (count: number) => {
+        this.playersOnlineText?.setText(String(count))
+      })
+      socket.emit('players:get_online')
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      getLumenSocket()?.off('players:online')
+    })
 
     // Bottom-center: movement hint + equipment shortcut
     this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 22, 'Arrow keys or WASD to move', {

@@ -136,6 +136,7 @@ export class WorldScene extends Phaser.Scene {
       { label: 'Learning Center', x: 1050, y: 1100, w: 192, h: 192 },
       { label: 'Combat Training', x: 1510, y: 1100, w: 252, h: 180 },
       { label: 'Market',          x: 1280, y: 1420, w: 220, h: 157 },
+      { label: 'Combat Strategy', x: 1510, y: 1420, w: 196, h: 196 },
     ]
 
     for (const def of buildingDefs) {

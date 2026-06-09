@@ -25,9 +25,10 @@ export class BootScene extends Phaser.Scene {
     // building_learning = purple house (magical / scholarly)
     // building_combat   = large stone house
     // building_market   = wider commercial house
-    this.load.image('building_learning', '/assets/buildings/house_purple.png')
-    this.load.image('building_combat',   '/assets/buildings/house_3.png')
-    this.load.image('building_market',   '/assets/buildings/house_2.png')
+    this.load.image('building_learning',  '/assets/buildings/house_purple.png')
+    this.load.image('building_combat',    '/assets/buildings/house_3.png')
+    this.load.image('building_market',    '/assets/buildings/house_2.png')
+    this.load.image('building_strategy',  '/assets/buildings/house_1.png')
 
     // ── WORLD PROPS ─────────────────────────────────────────────────────────────
     this.load.image('well',     '/assets/buildings/well.png')

@@ -21,6 +21,7 @@ export class BootScene extends Phaser.Scene {
     this.load.image('building_learning', '/assets/sprites/building_learning.svg')
     this.load.image('building_combat',   '/assets/sprites/building_combat.svg')
     this.load.image('building_market',   '/assets/sprites/building_market.svg')
+    this.load.image('chest',             '/assets/sprites/chest.svg')
 
     // ── SHADOW (still programmatic — 40×8) ───────────────────────────────
     const shadowGfx = this.make.graphics({ x: 0, y: 0 })

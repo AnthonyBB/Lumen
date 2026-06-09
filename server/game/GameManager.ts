@@ -11,6 +11,7 @@ import { PlayerManager } from './PlayerManager.js';
 import { QuestionEngine } from './QuestionEngine.js';
 import { CombatManager } from './CombatManager.js';
 import { InventoryManager } from './InventoryManager.js';
+import { ChestManager } from './ChestManager.js';
 
 /** Known zones in the game world. */
 const STARTING_ZONES: string[] = ['town', 'forest', 'dungeon', 'academy'];
@@ -20,6 +21,7 @@ export class GameManager {
   public readonly questionEngine: QuestionEngine;
   public readonly combatManager: CombatManager;
   public readonly inventoryManager: InventoryManager;
+  public readonly chestManager: ChestManager;
 
   /** zoneId → Zone */
   private zones: Map<string, Zone> = new Map();
@@ -29,6 +31,7 @@ export class GameManager {
     this.questionEngine = new QuestionEngine();
     this.combatManager = new CombatManager(this.questionEngine, this.playerManager);
     this.inventoryManager = new InventoryManager();
+    this.chestManager = new ChestManager(this.inventoryManager);
 
     // Initialise all known zones
     for (const id of STARTING_ZONES) {

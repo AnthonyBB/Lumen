@@ -92,19 +92,28 @@ export class UIScene extends Phaser.Scene {
       padding: { x: 10, y: 4 },
     }).setOrigin(0.5, 1)
 
-    // Bottom-right: Equipment shortcut hint
+    // Bottom-right: Equipment + Chest shortcut hints
     const eqBg = this.add.graphics()
     eqBg.fillStyle(0x000000, 0.5)
-    eqBg.fillRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 60, 148, 50, 8)
+    eqBg.fillRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 80, 148, 72, 8)
     eqBg.lineStyle(1, 0xffd700, 0.4)
-    eqBg.strokeRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 60, 148, 50, 8)
+    eqBg.strokeRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 80, 148, 72, 8)
 
-    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 54, '[I]  Equipment', {
+    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 74, '[I]  Equipment', {
       fontSize: '11px', fontFamily: 'Arial', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0)
 
-    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 36, 'Open gear screen', {
+    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 56, 'Open gear screen', {
       fontSize: '10px', fontFamily: 'Arial', color: '#888888',
+    }).setOrigin(0.5, 0)
+
+    // Divider line
+    const eqDiv = this.add.graphics()
+    eqDiv.lineStyle(1, 0x333355, 0.7)
+    eqDiv.lineBetween(GAME_WIDTH - 148, GAME_HEIGHT - 42, GAME_WIDTH - 12, GAME_HEIGHT - 42)
+
+    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 40, '[E near chest]  Storage', {
+      fontSize: '10px', fontFamily: 'Arial', color: '#aaddff',
     }).setOrigin(0.5, 0)
 
     // ── Inventory bar (bottom-left) ───────────────────────────────────────────

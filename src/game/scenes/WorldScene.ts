@@ -24,6 +24,10 @@ export class WorldScene extends Phaser.Scene {
   private popupOpen = false
   private characterOpen = false
 
+  // Chest
+  private chestPos = { x: 1280, y: 1220 }
+  private nearChest = false
+
   constructor() {
     super({ key: 'WorldScene' })
   }
@@ -76,6 +80,21 @@ export class WorldScene extends Phaser.Scene {
       const b = new Building(this, def.x, def.y, def.label, def.w, def.h)
       this.buildings.push({ building: b, label: def.label, x: def.x, y: def.y })
     }
+
+    // Chest — personal storage
+    const chestImg = this.add.image(this.chestPos.x, this.chestPos.y, 'chest')
+      .setDepth(4)
+      .setScale(2)
+    void chestImg
+
+    // Floating "Chest" label above the sprite
+    this.add.text(this.chestPos.x, this.chestPos.y - 56, 'Chest', {
+      fontSize: '13px',
+      fontFamily: 'Arial, sans-serif',
+      color: '#ffd700',
+      backgroundColor: '#00000099',
+      padding: { x: 6, y: 3 },
+    }).setOrigin(0.5, 0.5).setDepth(5)
 
     // Player at world center
     this.player = new Player(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
@@ -239,8 +258,15 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // Check proximity to chest
+    const chestDist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      this.chestPos.x, this.chestPos.y
+    )
+    this.nearChest = chestDist < 80
+
     if (nearBuilding && !this.popupOpen) {
-      this.promptText.setVisible(true)
+      this.promptText.setText('Press E to enter').setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         if (nearBuilding.label === 'Learning Center') {
           // Launch the full classroom scene
@@ -249,6 +275,14 @@ export class WorldScene extends Phaser.Scene {
           return
         }
         this.openPopup(nearBuilding.label)
+      }
+    } else if (this.nearChest && !this.popupOpen) {
+      this.promptText.setText('Press E to open chest').setVisible(true)
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        this.player.setVelocity(0, 0)
+        this.scene.stop('UIScene')
+        this.scene.start('ChestScene')
+        return
       }
     } else {
       this.promptText.setVisible(false)

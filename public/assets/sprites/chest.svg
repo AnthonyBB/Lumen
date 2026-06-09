@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="40" viewBox="0 0 48 40" shape-rendering="crispEdges">
+  <!-- Shadow beneath chest -->
+  <ellipse cx="24" cy="38" rx="18" ry="3" fill="#000000" fill-opacity="0.35"/>
+
+  <!-- Chest body (dark wood brown) -->
+  <rect x="2" y="18" width="44" height="20" fill="#92400e"/>
+  <!-- Shadow side (right) -->
+  <rect x="40" y="18" width="6" height="20" fill="#78350f"/>
+  <!-- Shadow side (bottom) -->
+  <rect x="2" y="34" width="44" height="4" fill="#78350f"/>
+
+  <!-- Front panel inset detail -->
+  <rect x="8" y="22" width="32" height="12" fill="#7c2d12"/>
+
+  <!-- Chest lid (lighter top) -->
+  <rect x="2" y="6" width="44" height="13" fill="#a16207"/>
+  <!-- Lid top highlight stripe -->
+  <rect x="2" y="6" width="44" height="3" fill="#d97706"/>
+  <!-- Lid shadow side (right) -->
+  <rect x="40" y="6" width="6" height="13" fill="#92400e"/>
+
+  <!-- Metal band on lid -->
+  <rect x="2" y="12" width="44" height="4" fill="#374151"/>
+  <!-- Metal band rivets on lid band -->
+  <rect x="6"  y="13" width="3" height="2" fill="#4b5563"/>
+  <rect x="20" y="13" width="3" height="2" fill="#4b5563"/>
+  <rect x="34" y="13" width="3" height="2" fill="#4b5563"/>
+
+  <!-- Metal band on body -->
+  <rect x="2" y="24" width="44" height="4" fill="#374151"/>
+  <!-- Metal band rivets on body band -->
+  <rect x="6"  y="25" width="3" height="2" fill="#4b5563"/>
+  <rect x="20" y="25" width="3" height="2" fill="#4b5563"/>
+  <rect x="34" y="25" width="3" height="2" fill="#4b5563"/>
+
+  <!-- Latch/lock plate (gold) -->
+  <rect x="20" y="15" width="8" height="8" fill="#fbbf24"/>
+  <!-- Lock border -->
+  <rect x="20" y="15" width="8" height="8" fill="none" stroke="#92400e" stroke-width="1"/>
+  <!-- Keyhole (dark dot) -->
+  <rect x="23" y="17" width="2" height="2" fill="#1c1917"/>
+  <rect x="23" y="19" width="2" height="3" fill="#1c1917"/>
+
+  <!-- Outline -->
+  <rect x="2" y="6" width="44" height="32" fill="none" stroke="#451a03" stroke-width="1"/>
+  <!-- Lid outline -->
+  <rect x="2" y="6" width="44" height="13" fill="none" stroke="#451a03" stroke-width="1"/>
+</svg>

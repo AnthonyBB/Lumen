@@ -23,6 +23,7 @@ import type {
   InventoryEquipPayload,
   InventoryUnequipPayload,
   EquipmentSlotKey,
+  ChestTransferPayload,
 } from '../types/index.js';
 
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
@@ -63,7 +64,7 @@ function isSafeNumber(v: unknown, min: number, max: number): boolean {
 // ---------------------------------------------------------------------------
 
 export function registerHandlers(io: Server, socket: Socket, game: GameManager): void {
-  const { playerManager, combatManager, inventoryManager } = game;
+  const { playerManager, combatManager, inventoryManager, chestManager } = game;
 
   // ── player:join ──────────────────────────────────────────────────────────
   socket.on('player:join', (payload: PlayerJoinPayload) => {
@@ -338,6 +339,77 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
 
     const inventory = inventoryManager.getInventory(socket.id)!;
     socket.emit('inventory:updated', inventory);
+  });
+
+  // ── chest:open ───────────────────────────────────────────────────────────
+  socket.on('chest:open', (payload: { chestId: string }) => {
+    if (typeof payload?.chestId !== 'string') {
+      socket.emit('error', { message: 'Invalid chest open payload.' });
+      return;
+    }
+
+    const inventory = inventoryManager.getInventory(socket.id);
+    if (!inventory) {
+      socket.emit('error', { message: 'You must join before opening a chest.' });
+      return;
+    }
+
+    // Each player has one personal chest — get or create it
+    const chest = chestManager.getOrCreatePlayerChest(socket.id);
+
+    socket.emit('chest:data', { chest, inventory });
+  });
+
+  // ── chest:transfer ───────────────────────────────────────────────────────
+  socket.on('chest:transfer', (payload: ChestTransferPayload) => {
+    if (
+      typeof payload?.chestId !== 'string' ||
+      typeof payload?.itemId  !== 'string' ||
+      (payload?.direction !== 'to_chest' && payload?.direction !== 'from_chest')
+    ) {
+      socket.emit('error', { message: 'Invalid chest transfer payload.' });
+      return;
+    }
+
+    const chest = chestManager.getChest(payload.chestId);
+    if (!chest) {
+      socket.emit('error', { message: 'Chest not found.' });
+      return;
+    }
+
+    // Ownership check
+    if (chest.ownerId !== socket.id) {
+      socket.emit('error', { message: 'You do not own this chest.' });
+      return;
+    }
+
+    let success = false;
+
+    if (payload.direction === 'to_chest') {
+      // Find the item in the player's inventory to pass the full object
+      const inv = inventoryManager.getInventory(socket.id);
+      if (!inv) {
+        socket.emit('error', { message: 'Inventory not found.' });
+        return;
+      }
+      const item = inv.items.find((i) => i.id === payload.itemId);
+      if (!item) {
+        socket.emit('error', { message: 'Item not found in your inventory.' });
+        return;
+      }
+      success = chestManager.transferToChest(payload.chestId, socket.id, item);
+    } else {
+      success = chestManager.transferFromChest(payload.chestId, socket.id, payload.itemId);
+    }
+
+    if (!success) {
+      socket.emit('error', { message: 'Transfer failed. Check chest capacity or item ownership.' });
+      return;
+    }
+
+    const updatedInventory = inventoryManager.getInventory(socket.id)!;
+    const updatedChest = chestManager.getChest(payload.chestId)!;
+    socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
   });
 
   // ── disconnect ───────────────────────────────────────────────────────────

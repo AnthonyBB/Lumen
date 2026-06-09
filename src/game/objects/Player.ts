@@ -19,8 +19,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setDepth(10)
 
     const body = this.body as Phaser.Physics.Arcade.Body
-    body.setSize(20, 24)
-    body.setOffset(2, 8)
+    body.setSize(18, 28)
+    body.setOffset(7, 18)
   }
 
   update(cursors: CursorKeys, wasd: WASDKeys) {

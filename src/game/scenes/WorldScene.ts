@@ -69,11 +69,11 @@ export class WorldScene extends Phaser.Scene {
       void tree
     }
 
-    // Buildings
+    // Buildings — grouped close together near world center
     const buildingDefs = [
-      { label: 'Learning Center', x: 480, y: 400, w: 200, h: 140 },
-      { label: 'Combat Training', x: 1800, y: 400, w: 200, h: 140 },
-      { label: 'Market', x: 1280, y: 1900, w: 180, h: 130 },
+      { label: 'Learning Center', x: 1050, y: 1100, w: 200, h: 140 },
+      { label: 'Combat Training', x: 1510, y: 1100, w: 200, h: 140 },
+      { label: 'Market',          x: 1280, y: 1420, w: 180, h: 130 },
     ]
 
     for (const def of buildingDefs) {

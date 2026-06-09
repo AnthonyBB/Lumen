@@ -4,106 +4,154 @@
   <!-- Ground shadow -->
   <ellipse cx="100" cy="234" rx="86" ry="8" fill="#000000" fill-opacity="0.16"/>
 
-  <!-- ── Warm tan stone walls ── -->
-  <rect x="16" y="80" width="168" height="154" fill="#a89070"/>
-  <!-- Grout lines -->
-  <rect x="16" y="100" width="168" height="2" fill="#7a6a52"/>
-  <rect x="16" y="120" width="168" height="2" fill="#7a6a52"/>
-  <rect x="16" y="140" width="168" height="2" fill="#7a6a52"/>
-  <rect x="16" y="160" width="168" height="2" fill="#7a6a52"/>
-  <rect x="16" y="180" width="168" height="2" fill="#7a6a52"/>
-  <rect x="16" y="200" width="168" height="2" fill="#7a6a52"/>
-  <rect x="16" y="220" width="168" height="2" fill="#7a6a52"/>
-  <!-- Vertical joints alternating -->
-  <rect x="56"  y="80"  width="2" height="20" fill="#7a6a52"/>
-  <rect x="100" y="80"  width="2" height="20" fill="#7a6a52"/>
-  <rect x="144" y="80"  width="2" height="20" fill="#7a6a52"/>
-  <rect x="34"  y="100" width="2" height="20" fill="#7a6a52"/>
-  <rect x="78"  y="100" width="2" height="20" fill="#7a6a52"/>
-  <rect x="122" y="100" width="2" height="20" fill="#7a6a52"/>
-  <rect x="166" y="100" width="2" height="20" fill="#7a6a52"/>
-  <rect x="56"  y="120" width="2" height="20" fill="#7a6a52"/>
-  <rect x="100" y="120" width="2" height="20" fill="#7a6a52"/>
-  <rect x="144" y="120" width="2" height="20" fill="#7a6a52"/>
-  <rect x="34"  y="140" width="2" height="20" fill="#7a6a52"/>
-  <rect x="78"  y="140" width="2" height="20" fill="#7a6a52"/>
-  <rect x="122" y="140" width="2" height="20" fill="#7a6a52"/>
-  <rect x="166" y="140" width="2" height="20" fill="#7a6a52"/>
-  <rect x="56"  y="160" width="2" height="20" fill="#7a6a52"/>
-  <rect x="100" y="160" width="2" height="20" fill="#7a6a52"/>
-  <rect x="144" y="160" width="2" height="20" fill="#7a6a52"/>
-  <rect x="34"  y="180" width="2" height="20" fill="#7a6a52"/>
-  <rect x="78"  y="180" width="2" height="20" fill="#7a6a52"/>
-  <rect x="122" y="180" width="2" height="20" fill="#7a6a52"/>
-  <rect x="166" y="180" width="2" height="20" fill="#7a6a52"/>
-  <rect x="56"  y="200" width="2" height="20" fill="#7a6a52"/>
-  <rect x="100" y="200" width="2" height="20" fill="#7a6a52"/>
-  <rect x="144" y="200" width="2" height="20" fill="#7a6a52"/>
-  <rect x="34"  y="220" width="2" height="14" fill="#7a6a52"/>
-  <rect x="78"  y="220" width="2" height="14" fill="#7a6a52"/>
-  <rect x="122" y="220" width="2" height="14" fill="#7a6a52"/>
-  <rect x="166" y="220" width="2" height="14" fill="#7a6a52"/>
+  <!-- ── Warm sandstone walls ── -->
+  <rect x="16" y="80" width="168" height="154" fill="#d4a97a"/>
+  <!-- Wall shadow right -->
+  <rect x="174" y="80" width="10"  height="154" fill="#b8895a"/>
+  <!-- Wall highlight left -->
+  <rect x="16"  y="80" width="4"   height="154" fill="#e8c99a"/>
+  <!-- Stone block lines every 22px -->
+  <rect x="16" y="102" width="168" height="1" fill="#b8895a"/>
+  <rect x="16" y="124" width="168" height="1" fill="#b8895a"/>
+  <rect x="16" y="146" width="168" height="1" fill="#b8895a"/>
+  <rect x="16" y="168" width="168" height="1" fill="#b8895a"/>
+  <rect x="16" y="190" width="168" height="1" fill="#b8895a"/>
+  <rect x="16" y="212" width="168" height="1" fill="#b8895a"/>
+  <rect x="16" y="234" width="168" height="1" fill="#b8895a"/>
+  <!-- Vertical joints row 1 -->
+  <rect x="58"  y="80"  width="1" height="22" fill="#b8895a"/>
+  <rect x="100" y="80"  width="1" height="22" fill="#b8895a"/>
+  <rect x="142" y="80"  width="1" height="22" fill="#b8895a"/>
+  <!-- Row 2 offset -->
+  <rect x="38"  y="102" width="1" height="22" fill="#b8895a"/>
+  <rect x="80"  y="102" width="1" height="22" fill="#b8895a"/>
+  <rect x="122" y="102" width="1" height="22" fill="#b8895a"/>
+  <rect x="164" y="102" width="1" height="22" fill="#b8895a"/>
+  <rect x="58"  y="124" width="1" height="22" fill="#b8895a"/>
+  <rect x="100" y="124" width="1" height="22" fill="#b8895a"/>
+  <rect x="142" y="124" width="1" height="22" fill="#b8895a"/>
+  <rect x="38"  y="146" width="1" height="22" fill="#b8895a"/>
+  <rect x="80"  y="146" width="1" height="22" fill="#b8895a"/>
+  <rect x="122" y="146" width="1" height="22" fill="#b8895a"/>
+  <rect x="164" y="146" width="1" height="22" fill="#b8895a"/>
 
-  <!-- ── Thatched roof ── -->
-  <!-- Main roof shape — triangle approximation -->
-  <polygon points="100,10 8,80 192,80" fill="#78350f"/>
-  <!-- Thatch texture lines -->
-  <polygon points="100,10 46,60 54,60"  fill="#92400e"/>
-  <polygon points="100,10 62,70 70,70"  fill="#92400e"/>
-  <polygon points="100,10 78,76 86,76"  fill="#92400e"/>
-  <polygon points="100,10 154,60 146,60" fill="#92400e"/>
-  <polygon points="100,10 138,70 130,70" fill="#92400e"/>
-  <polygon points="100,10 122,76 114,76" fill="#92400e"/>
-  <!-- Roof ridge highlight -->
-  <polygon points="100,10 96,30 104,30"  fill="#92400e"/>
+  <!-- ── Thatched roof — layered horizontal bands ── -->
+  <!-- Base dark triangle -->
+  <polygon points="100,8 8,80 192,80" fill="#92400e"/>
+  <!-- Thatch band 1 -->
+  <polygon points="100,8 22,68 178,68" fill="#a16207"/>
+  <!-- Thatch band 2 -->
+  <polygon points="100,8 34,72 166,72" fill="#92400e"/>
+  <!-- Thatch band 3 -->
+  <polygon points="100,8 46,76 154,76" fill="#a16207"/>
+  <!-- Thatch band 4 -->
+  <polygon points="100,8 58,78 142,78" fill="#92400e"/>
+  <!-- Thatch band 5 — near ridge -->
+  <polygon points="100,8 76,62 124,62" fill="#a16207"/>
+  <!-- Ridge cap -->
+  <polygon points="100,8 96,26 104,26" fill="#7c2d12"/>
+  <!-- Underside shadow along eaves -->
+  <polygon points="100,8 8,80 28,80"  fill="#7c2d12"/>
+  <polygon points="100,8 172,80 192,80" fill="#7c2d12"/>
 
-  <!-- ── Colorful awning ── -->
-  <!-- Awning bracket + canopy (alternating red/cream stripes) -->
-  <rect x="16" y="80" width="168" height="20" fill="#dc2626"/>
-  <rect x="16" y="80"  width="28" height="20" fill="#f5f5f4"/>
-  <rect x="72" y="80"  width="28" height="20" fill="#f5f5f4"/>
-  <rect x="128" y="80" width="28" height="20" fill="#f5f5f4"/>
-  <!-- Awning fringe bottom -->
-  <rect x="16" y="98" width="168" height="4"  fill="#dc2626"/>
+  <!-- ── Decorative chimney ── -->
+  <rect x="152" y="20" width="14" height="42" fill="#b8895a"/>
+  <!-- Chimney shadow -->
+  <rect x="160" y="20" width="6"  height="42" fill="#8a6040"/>
+  <!-- Chimney cap -->
+  <rect x="150" y="16" width="18" height="6"  fill="#6b4226"/>
+  <rect x="149" y="14" width="20" height="4"  fill="#6b4226"/>
 
-  <!-- ── Open arch entrance ── -->
-  <rect x="74" y="158" width="52" height="80" fill="#1c1917"/>
-  <!-- Arch top -->
-  <rect x="78" y="148" width="44" height="14" fill="#1c1917"/>
-  <rect x="84" y="142" width="32" height="8"  fill="#1c1917"/>
-  <rect x="92" y="138" width="16" height="6"  fill="#1c1917"/>
+  <!-- ── Striped fabric awning ── -->
+  <!-- Awning droops slightly — drawn as rect with slight width variation -->
+  <!-- Red and cream vertical stripe pairs -->
+  <rect x="16" y="80" width="168" height="22" fill="#dc2626"/>
+  <rect x="16" y="80"  width="24" height="22" fill="#f5f5f4"/>
+  <rect x="56" y="80"  width="24" height="22" fill="#f5f5f4"/>
+  <rect x="96" y="80"  width="24" height="22" fill="#f5f5f4"/>
+  <rect x="136" y="80" width="24" height="22" fill="#f5f5f4"/>
+  <!-- Drooping bottom edge -->
+  <rect x="16" y="100" width="168" height="4" fill="#b91c1c"/>
+  <!-- Awning fringe tabs -->
+  <rect x="22"  y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="38"  y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="54"  y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="70"  y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="86"  y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="102" y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="118" y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="134" y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="150" y="102" width="8" height="4" fill="#dc2626"/>
+  <rect x="166" y="102" width="8" height="4" fill="#dc2626"/>
 
-  <!-- ── Hanging sign with gold coin ── -->
-  <!-- Sign board -->
-  <rect x="72" y="104" width="56" height="28" fill="#4a3018"/>
-  <rect x="73" y="105" width="54" height="26" fill="#6b4a28"/>
-  <!-- Coin -->
-  <rect x="92" y="108" width="16" height="16" fill="#fbbf24"/>
-  <rect x="90" y="110" width="20" height="12" fill="#fbbf24"/>
-  <rect x="94" y="106" width="12" height="20" fill="#fbbf24"/>
+  <!-- ── Open arch entrance (center) ── -->
+  <rect x="72" y="156" width="56" height="80" fill="#2e1a0a"/>
+  <!-- Arch top steps -->
+  <rect x="76" y="146" width="48" height="14" fill="#2e1a0a"/>
+  <rect x="82" y="140" width="36" height="8"  fill="#2e1a0a"/>
+  <rect x="88" y="136" width="24" height="6"  fill="#2e1a0a"/>
+  <!-- Wooden post frames -->
+  <rect x="72"  y="140" width="6"  height="96" fill="#7c4a1a"/>
+  <rect x="122" y="140" width="6"  height="96" fill="#7c4a1a"/>
+
+  <!-- ── Display window (right side) ── -->
+  <!-- Window frame -->
+  <rect x="130" y="118" width="40" height="34" fill="#7c4a1a"/>
+  <!-- Warm light glow -->
+  <rect x="132" y="120" width="36" height="30" fill="#fef9c3"/>
+  <!-- Window dividers -->
+  <rect x="148" y="120" width="2" height="30" fill="#7c4a1a"/>
+  <rect x="132" y="132" width="36" height="2" fill="#7c4a1a"/>
+  <!-- Item silhouettes inside -->
+  <!-- Sword shape -->
+  <rect x="135" y="123" width="2" height="8"  fill="#6b7280"/>
+  <rect x="133" y="128" width="6" height="1"  fill="#6b7280"/>
+  <!-- Potion shape -->
+  <rect x="142" y="125" width="4" height="6"  fill="#6b7280"/>
+  <rect x="143" y="124" width="2" height="2"  fill="#6b7280"/>
+  <!-- Right side items -->
+  <rect x="153" y="122" width="2" height="9"  fill="#6b7280"/>
+  <rect x="156" y="126" width="5" height="5"  fill="#6b7280"/>
+
+  <!-- ── Hanging sign on post ── -->
+  <!-- Post chain/rope -->
+  <rect x="100" y="106" width="2" height="6"  fill="#7c4a1a"/>
+  <!-- Wooden sign board -->
+  <rect x="72"  y="112" width="56" height="26" fill="#4a3018"/>
+  <rect x="73"  y="113" width="54" height="24" fill="#7c4a1a"/>
+  <!-- Gold coin emblem -->
+  <rect x="92"  y="116" width="16" height="16" fill="#fbbf24"/>
+  <rect x="90"  y="118" width="20" height="12" fill="#fbbf24"/>
+  <rect x="94"  y="114" width="12" height="20" fill="#fbbf24"/>
   <!-- Coin highlight -->
-  <rect x="94" y="108" width="4" height="4" fill="#fde68a"/>
+  <rect x="94"  y="116" width="4"  height="4"  fill="#fde68a"/>
   <!-- Coin inner ring -->
-  <rect x="95" y="112" width="10" height="6" fill="#d97706"/>
-  <rect x="93" y="113" width="14" height="4" fill="#d97706"/>
+  <rect x="96"  y="120" width="8"  height="6"  fill="#d97706"/>
+  <rect x="94"  y="121" width="12" height="4"  fill="#d97706"/>
 
-  <!-- ── Window boxes with green details ── -->
-  <!-- Left window box -->
-  <rect x="22" y="108" width="34" height="30" fill="#1c1917"/>
-  <rect x="24" y="110" width="30" height="26" fill="#a89070" fill-opacity="0.4"/>
-  <!-- Plants -->
-  <rect x="24" y="110" width="30" height="10" fill="#16a34a"/>
-  <rect x="22" y="108" width="34" height="4" fill="#4a3018"/>
-  <!-- Window pane -->
-  <rect x="36" y="110" width="2" height="26" fill="#4a3018"/>
-  <rect x="24" y="121" width="30" height="2" fill="#4a3018"/>
+  <!-- ── Flower boxes under window ── -->
+  <!-- Right side flower box -->
+  <rect x="130" y="152" width="40" height="8"  fill="#7c4a1a"/>
+  <rect x="132" y="148" width="36" height="8"  fill="#16a34a"/>
+  <!-- Flowers -->
+  <rect x="134" y="144" width="3" height="4"  fill="#ef4444"/>
+  <rect x="140" y="146" width="3" height="2"  fill="#fbbf24"/>
+  <rect x="146" y="144" width="3" height="4"  fill="#ef4444"/>
+  <rect x="152" y="146" width="3" height="2"  fill="#fbbf24"/>
+  <rect x="158" y="144" width="3" height="4"  fill="#ef4444"/>
+  <rect x="163" y="146" width="3" height="2"  fill="#fbbf24"/>
 
-  <!-- Right window box -->
-  <rect x="144" y="108" width="34" height="30" fill="#1c1917"/>
-  <rect x="146" y="110" width="30" height="26" fill="#a89070" fill-opacity="0.4"/>
-  <rect x="146" y="110" width="30" height="10" fill="#16a34a"/>
-  <rect x="144" y="108" width="34" height="4" fill="#4a3018"/>
-  <rect x="158" y="110" width="2" height="26" fill="#4a3018"/>
-  <rect x="146" y="121" width="30" height="2" fill="#4a3018"/>
+  <!-- ── Barrel beside entrance ── -->
+  <!-- Barrel body -->
+  <rect x="18" y="188" width="20" height="44" fill="#92400e"/>
+  <!-- Barrel curve illusion -->
+  <rect x="16" y="196" width="24" height="28" fill="#92400e"/>
+  <!-- Iron bands -->
+  <rect x="16" y="196" width="24" height="3"  fill="#374151"/>
+  <rect x="16" y="220" width="24" height="3"  fill="#374151"/>
+  <!-- Band highlights -->
+  <rect x="16" y="196" width="24" height="1"  fill="#6b7280"/>
+  <!-- Barrel top -->
+  <rect x="18" y="186" width="20" height="4"  fill="#7c3010"/>
 
 </svg>

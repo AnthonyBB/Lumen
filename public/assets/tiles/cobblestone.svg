@@ -1,45 +1,109 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"
      shape-rendering="crispEdges" image-rendering="pixelated">
-  <!-- Grout background -->
-  <rect x="0" y="0" width="64" height="64" fill="#4a4458"/>
 
-  <!-- Row 0  y=2  stones at x=2,22,42  18×14 -->
-  <rect x="2"  y="2"  width="18" height="14" fill="#7c7490"/>
-  <rect x="22" y="2"  width="18" height="14" fill="#6b6380"/>
-  <rect x="42" y="2"  width="18" height="14" fill="#7c7490"/>
-  <!-- Row 0 highlights -->
-  <rect x="2"  y="2"  width="2" height="2" fill="#9990a8"/>
-  <rect x="22" y="2"  width="2" height="2" fill="#9990a8"/>
-  <rect x="42" y="2"  width="2" height="2" fill="#9990a8"/>
+  <!-- Grout background: warm grey-brown -->
+  <rect x="0" y="0" width="64" height="64" fill="#7a6e5a"/>
 
-  <!-- Row 1  y=18  stones at x=12,32,52 -->
-  <rect x="12" y="18" width="18" height="14" fill="#6b6380"/>
-  <rect x="32" y="18" width="18" height="14" fill="#7c7490"/>
-  <rect x="52" y="18" width="10" height="14" fill="#6b6380"/>
-  <rect x="0"  y="18" width="10" height="14" fill="#6b6380"/>
-  <!-- Row 1 highlights -->
-  <rect x="12" y="18" width="2" height="2" fill="#9990a8"/>
-  <rect x="32" y="18" width="2" height="2" fill="#9990a8"/>
-  <rect x="52" y="18" width="2" height="2" fill="#9990a8"/>
-  <rect x="0"  y="18" width="2" height="2" fill="#9990a8"/>
+  <!-- Row 0  y=2  (unshifted)  stones ~18x12 with 2px grout -->
+  <rect x="2"  y="2"  width="18" height="12" fill="#c8b99a"/>
+  <rect x="22" y="2"  width="18" height="12" fill="#c8b99a"/>
+  <rect x="42" y="2"  width="20" height="12" fill="#c8b99a"/>
+  <!-- Shadow bottom/right edges -->
+  <rect x="2"  y="12" width="18" height="2"  fill="#a89878"/>
+  <rect x="18" y="2"  width="2"  height="12" fill="#a89878"/>
+  <rect x="22" y="12" width="18" height="2"  fill="#a89878"/>
+  <rect x="38" y="2"  width="2"  height="12" fill="#a89878"/>
+  <rect x="42" y="12" width="20" height="2"  fill="#a89878"/>
+  <rect x="60" y="2"  width="2"  height="12" fill="#a89878"/>
+  <!-- Highlight top/left edges -->
+  <rect x="2"  y="2"  width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="2"  y="2"  width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="22" y="2"  width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="22" y="2"  width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="42" y="2"  width="20" height="1"  fill="#e0d4b8"/>
+  <rect x="42" y="2"  width="1"  height="12" fill="#e0d4b8"/>
 
-  <!-- Row 2  y=34  stones at x=2,22,42 -->
-  <rect x="2"  y="34" width="18" height="14" fill="#7c7490"/>
-  <rect x="22" y="34" width="18" height="14" fill="#6b6380"/>
-  <rect x="42" y="34" width="18" height="14" fill="#7c7490"/>
-  <!-- Row 2 highlights -->
-  <rect x="2"  y="34" width="2" height="2" fill="#9990a8"/>
-  <rect x="22" y="34" width="2" height="2" fill="#9990a8"/>
-  <rect x="42" y="34" width="2" height="2" fill="#9990a8"/>
+  <!-- Row 1  y=16  (offset 9px) -->
+  <rect x="0"  y="16" width="11" height="12" fill="#c8b99a"/>
+  <rect x="13" y="16" width="18" height="12" fill="#c8b99a"/>
+  <rect x="33" y="16" width="18" height="12" fill="#c8b99a"/>
+  <rect x="53" y="16" width="11" height="12" fill="#c8b99a"/>
+  <!-- Shadows -->
+  <rect x="0"  y="26" width="11" height="2"  fill="#a89878"/>
+  <rect x="9"  y="16" width="2"  height="12" fill="#a89878"/>
+  <rect x="13" y="26" width="18" height="2"  fill="#a89878"/>
+  <rect x="29" y="16" width="2"  height="12" fill="#a89878"/>
+  <rect x="33" y="26" width="18" height="2"  fill="#a89878"/>
+  <rect x="49" y="16" width="2"  height="12" fill="#a89878"/>
+  <rect x="53" y="26" width="11" height="2"  fill="#a89878"/>
+  <rect x="62" y="16" width="2"  height="12" fill="#a89878"/>
+  <!-- Highlights -->
+  <rect x="0"  y="16" width="11" height="1"  fill="#e0d4b8"/>
+  <rect x="0"  y="16" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="13" y="16" width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="13" y="16" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="33" y="16" width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="33" y="16" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="53" y="16" width="11" height="1"  fill="#e0d4b8"/>
+  <rect x="53" y="16" width="1"  height="12" fill="#e0d4b8"/>
 
-  <!-- Row 3  y=50  stones at x=12,32,52 -->
-  <rect x="12" y="50" width="18" height="12" fill="#6b6380"/>
-  <rect x="32" y="50" width="18" height="12" fill="#7c7490"/>
-  <rect x="52" y="50" width="10" height="12" fill="#6b6380"/>
-  <rect x="0"  y="50" width="10" height="12" fill="#6b6380"/>
-  <!-- Row 3 highlights -->
-  <rect x="12" y="50" width="2" height="2" fill="#9990a8"/>
-  <rect x="32" y="50" width="2" height="2" fill="#9990a8"/>
-  <rect x="52" y="50" width="2" height="2" fill="#9990a8"/>
-  <rect x="0"  y="50" width="2" height="2" fill="#9990a8"/>
+  <!-- Row 2  y=30  (unshifted) -->
+  <rect x="2"  y="30" width="18" height="12" fill="#c8b99a"/>
+  <rect x="22" y="30" width="18" height="12" fill="#c8b99a"/>
+  <rect x="42" y="30" width="20" height="12" fill="#c8b99a"/>
+  <!-- Shadows -->
+  <rect x="2"  y="40" width="18" height="2"  fill="#a89878"/>
+  <rect x="18" y="30" width="2"  height="12" fill="#a89878"/>
+  <rect x="22" y="40" width="18" height="2"  fill="#a89878"/>
+  <rect x="38" y="30" width="2"  height="12" fill="#a89878"/>
+  <rect x="42" y="40" width="20" height="2"  fill="#a89878"/>
+  <rect x="60" y="30" width="2"  height="12" fill="#a89878"/>
+  <!-- Highlights -->
+  <rect x="2"  y="30" width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="2"  y="30" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="22" y="30" width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="22" y="30" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="42" y="30" width="20" height="1"  fill="#e0d4b8"/>
+  <rect x="42" y="30" width="1"  height="12" fill="#e0d4b8"/>
+
+  <!-- Row 3  y=44  (offset 9px) -->
+  <rect x="0"  y="44" width="11" height="12" fill="#c8b99a"/>
+  <rect x="13" y="44" width="18" height="12" fill="#c8b99a"/>
+  <rect x="33" y="44" width="18" height="12" fill="#c8b99a"/>
+  <rect x="53" y="44" width="11" height="12" fill="#c8b99a"/>
+  <!-- Shadows -->
+  <rect x="0"  y="54" width="11" height="2"  fill="#a89878"/>
+  <rect x="9"  y="44" width="2"  height="12" fill="#a89878"/>
+  <rect x="13" y="54" width="18" height="2"  fill="#a89878"/>
+  <rect x="29" y="44" width="2"  height="12" fill="#a89878"/>
+  <rect x="33" y="54" width="18" height="2"  fill="#a89878"/>
+  <rect x="49" y="44" width="2"  height="12" fill="#a89878"/>
+  <rect x="53" y="54" width="11" height="2"  fill="#a89878"/>
+  <rect x="62" y="44" width="2"  height="12" fill="#a89878"/>
+  <!-- Highlights -->
+  <rect x="0"  y="44" width="11" height="1"  fill="#e0d4b8"/>
+  <rect x="0"  y="44" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="13" y="44" width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="13" y="44" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="33" y="44" width="18" height="1"  fill="#e0d4b8"/>
+  <rect x="33" y="44" width="1"  height="12" fill="#e0d4b8"/>
+  <rect x="53" y="44" width="11" height="1"  fill="#e0d4b8"/>
+  <rect x="53" y="44" width="1"  height="12" fill="#e0d4b8"/>
+
+  <!-- Row 4  y=58  (unshifted partial) -->
+  <rect x="2"  y="58" width="18" height="6" fill="#c8b99a"/>
+  <rect x="22" y="58" width="18" height="6" fill="#c8b99a"/>
+  <rect x="42" y="58" width="20" height="6" fill="#c8b99a"/>
+  <!-- Shadows -->
+  <rect x="18" y="58" width="2" height="6" fill="#a89878"/>
+  <rect x="38" y="58" width="2" height="6" fill="#a89878"/>
+  <rect x="60" y="58" width="2" height="6" fill="#a89878"/>
+  <!-- Highlights -->
+  <rect x="2"  y="58" width="18" height="1" fill="#e0d4b8"/>
+  <rect x="2"  y="58" width="1"  height="6" fill="#e0d4b8"/>
+  <rect x="22" y="58" width="18" height="1" fill="#e0d4b8"/>
+  <rect x="22" y="58" width="1"  height="6" fill="#e0d4b8"/>
+  <rect x="42" y="58" width="20" height="1" fill="#e0d4b8"/>
+  <rect x="42" y="58" width="1"  height="6" fill="#e0d4b8"/>
+
 </svg>

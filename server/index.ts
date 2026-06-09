@@ -11,12 +11,14 @@
  *  - See individual manager files for per-feature security notes.
  */
 
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { GameManager } from './game/GameManager.js';
 import { registerHandlers } from './socket/handlers.js';
+import { connectDB } from './db/connection.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -77,8 +79,11 @@ io.on('connection', (socket) => {
 // Start
 // ---------------------------------------------------------------------------
 
-httpServer.listen(PORT, () => {
-  console.log(`🌟 Lumen server running on http://localhost:${PORT}`);
-  console.log(`   CORS origin: ${CLIENT_ORIGIN}`);
-  console.log(`   Health check: http://localhost:${PORT}/health`);
+// Connect to MongoDB before accepting connections (non-blocking on failure)
+connectDB().then(() => {
+  httpServer.listen(PORT, () => {
+    console.log(`🌟 Lumen server running on http://localhost:${PORT}`);
+    console.log(`   CORS origin: ${CLIENT_ORIGIN}`);
+    console.log(`   Health check: http://localhost:${PORT}/health`);
+  });
 });

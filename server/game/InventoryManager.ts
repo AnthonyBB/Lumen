@@ -6,31 +6,105 @@
  *  - The client only sends itemId + slot; the server confirms ownership and
  *    slot compatibility before touching any state.
  *  - Item stats never originate from the client.
+ *
+ * Persistence notes:
+ *  - The in-memory Map is the source of truth during a session.
+ *  - MongoDB is written asynchronously (fire-and-forget) after every mutation.
+ *  - If the DB is unavailable, the server continues operating in-memory only.
+ *  - Call loadInventory(userId) when a player connects to restore saved state.
  */
 
 import type { PlayerInventory, InventoryItem, EquipmentSlotKey } from '../types/index.js';
 import { getStarterItems, createItem, getItemSlot } from './ItemDatabase.js';
+import { isDbConnected } from '../db/connection.js';
+import { PlayerInventoryModel } from '../db/models/PlayerInventoryModel.js';
 
 export class InventoryManager {
   /** socketId / playerId → PlayerInventory */
   private inventories: Map<string, PlayerInventory> = new Map();
 
   // -------------------------------------------------------------------------
+  // Persistence helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Persist the in-memory inventory for `playerId` to MongoDB.
+   * Fire-and-forget — never awaited by callers.
+   */
+  private persistInventory(playerId: string): void {
+    if (!isDbConnected()) return;
+
+    const inv = this.inventories.get(playerId);
+    if (!inv) return;
+
+    PlayerInventoryModel.findOneAndUpdate(
+      { userId: playerId },
+      {
+        items:     inv.items,
+        equipment: inv.equipment,
+        gold:      inv.gold,
+        updatedAt: new Date(),
+      },
+      { upsert: true, new: true },
+    )
+      .exec()
+      .catch((err: unknown) => console.error('[DB] persistInventory failed:', err));
+  }
+
+  /**
+   * Load a player's inventory from MongoDB into the in-memory map.
+   * If no record exists the map is left unchanged (createInventory handles
+   * the initial write).
+   *
+   * Call this when a player connects / logs in.
+   */
+  async loadInventory(userId: string): Promise<void> {
+    if (!isDbConnected()) return;
+
+    try {
+      const doc = await PlayerInventoryModel.findOne({ userId }).lean().exec();
+      if (!doc) return;
+
+      const inventory: PlayerInventory = {
+        playerId:  userId,
+        items:     (doc.items as InventoryItem[]) ?? [],
+        equipment: (doc.equipment as PlayerInventory['equipment']) ?? {},
+        gold:      (doc.gold as number) ?? 0,
+      };
+
+      this.inventories.set(userId, inventory);
+    } catch (err) {
+      console.error('[DB] loadInventory failed:', err);
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
 
   /**
-   * Create a fresh inventory pre-loaded with starter items.
-   * Called automatically when a player joins.
+   * Return an existing inventory (loaded from DB or created this session), or
+   * create a fresh one pre-loaded with starter items.
+   *
+   * When a DB record already exists it will have been loaded by loadInventory()
+   * before this is called, so we only create a brand-new inventory when one is
+   * truly absent.
    */
   createInventory(playerId: string): PlayerInventory {
+    const existing = this.inventories.get(playerId);
+    if (existing) return existing;
+
     const inventory: PlayerInventory = {
       playerId,
-      items: getStarterItems(),
+      items:     getStarterItems(),
       equipment: {},
-      gold: 0,
+      gold:      0,
     };
     this.inventories.set(playerId, inventory);
+
+    // Persist to DB only if there is no existing record (upsert is idempotent)
+    this.persistInventory(playerId);
+
     return inventory;
   }
 
@@ -64,11 +138,13 @@ export class InventoryManager {
       const existing = inv.items.find((i) => i.itemType === item.itemType);
       if (existing) {
         existing.quantity += item.quantity;
+        this.persistInventory(playerId);
         return true;
       }
     }
 
     inv.items.push({ ...item });
+    this.persistInventory(playerId);
     return true;
   }
 
@@ -90,6 +166,8 @@ export class InventoryManager {
     } else {
       inv.items.splice(idx, 1);
     }
+
+    this.persistInventory(playerId);
     return true;
   }
 
@@ -127,6 +205,8 @@ export class InventoryManager {
     // Move from bag to slot
     inv.equipment[slot] = item;
     inv.items.splice(itemIdx, 1);
+
+    this.persistInventory(playerId);
     return true;
   }
 
@@ -143,6 +223,8 @@ export class InventoryManager {
 
     inv.items.push(item);
     delete inv.equipment[slot];
+
+    this.persistInventory(playerId);
     return true;
   }
 
@@ -167,5 +249,7 @@ export class InventoryManager {
     } else {
       inv.items.push(shard);
     }
+
+    this.persistInventory(playerId);
   }
 }

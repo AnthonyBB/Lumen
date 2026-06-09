@@ -65,8 +65,11 @@ export class ChestScene extends Phaser.Scene {
 
   private chestPanel!:     Phaser.GameObjects.Container
   private inventoryPanel!: Phaser.GameObjects.Container
-  private takeBtn!:        Phaser.GameObjects.Container
-  private storeBtn!:       Phaser.GameObjects.Container
+
+  // Drag state
+  private dragGhost: Phaser.GameObjects.Graphics | null = null
+  private dragItem:  ChestItem | null = null
+  private dragSource: 'chest' | 'inventory' | null = null
 
   private escKey!: Phaser.Input.Keyboard.Key
 
@@ -88,7 +91,6 @@ export class ChestScene extends Phaser.Scene {
     this.inventoryPanel = this.add.container(0, 0)
     this.buildChestPanel()
     this.buildInventoryPanel()
-    this.buildTransferButtons()
 
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
   }
@@ -212,16 +214,6 @@ export class ChestScene extends Phaser.Scene {
       const item = this.chestItems[i] ?? null
       this.createSlot(this.chestPanel, sx, sy, item, 'chest', i)
     }
-
-    // "Take" button at bottom of chest panel
-    const btnX = LEFT_X + LEFT_W / 2 - 70
-    const btnY = PANEL_Y + PANEL_H - 44
-    this.takeBtn = this.makeButton(
-      '<- Take',
-      btnX, btnY, 140, 32,
-      !!this.selectedChestItem,
-      () => this.handleTake()
-    )
   }
 
   // ── Inventory panel (right) ───────────────────────────────────────────────────
@@ -252,16 +244,6 @@ export class ChestScene extends Phaser.Scene {
       const item = this.inventoryItems[i] ?? null
       this.createSlot(this.inventoryPanel, sx, sy, item, 'inventory', i)
     }
-
-    // "Store" button at bottom of inventory panel
-    const btnX = RIGHT_X + RIGHT_W / 2 - 70
-    const btnY = PANEL_Y + PANEL_H - 44
-    this.storeBtn = this.makeButton(
-      'Store ->',
-      btnX, btnY, 140, 32,
-      !!this.selectedInventoryItem,
-      () => this.handleStore()
-    )
   }
 
   // ── Slot creation ─────────────────────────────────────────────────────────────
@@ -320,11 +302,13 @@ export class ChestScene extends Phaser.Scene {
         }).setOrigin(1, 0))
       }
 
-      // Hit zone
+      // Hit zone — interactive and draggable
       const hit = this.add.rectangle(x + SLOT_W / 2, y + SLOT_H / 2, SLOT_W, SLOT_H, 0, 0)
-        .setInteractive({ useHandCursor: true })
+        .setInteractive({ useHandCursor: true, draggable: true })
+
       hit.on('pointerover', () => drawSlot(true))
       hit.on('pointerout',  () => drawSlot(false))
+
       hit.on('pointerdown', () => {
         if (source === 'chest') {
           this.selectedChestItem = (this.selectedChestItem?.id === item.id) ? null : item
@@ -335,8 +319,65 @@ export class ChestScene extends Phaser.Scene {
         }
         this.buildChestPanel()
         this.buildInventoryPanel()
-        this.buildTransferButtons()
       })
+
+      hit.on('dragstart', (_pointer: Phaser.Input.Pointer) => {
+        this.dragItem   = item
+        this.dragSource = source
+
+        // Create ghost at current pointer position
+        const ghost = this.add.graphics()
+        ghost.setDepth(100)
+        // Draw a semi-transparent slot background
+        ghost.fillStyle(0x1a1a3a, 0.6)
+        ghost.fillRoundedRect(-SLOT_W / 2, -SLOT_H / 2, SLOT_W, SLOT_H, 8)
+        ghost.lineStyle(2, RARITY_COLOR[item.rarity], 0.8)
+        ghost.strokeRoundedRect(-SLOT_W / 2, -SLOT_H / 2, SLOT_W, SLOT_H, 8)
+        // Draw item icon centered on ghost origin
+        this.drawItemIcon(ghost, 0, 4, item.icon as IconType, RARITY_COLOR[item.rarity], 0.9)
+        ghost.setAlpha(0.6)
+        this.dragGhost = ghost
+      })
+
+      hit.on('drag', (_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
+        if (this.dragGhost) {
+          this.dragGhost.setPosition(dragX, dragY)
+        }
+      })
+
+      hit.on('dragend', (_pointer: Phaser.Input.Pointer, dragX: number, _dragY: number) => {
+        if (this.dragGhost) {
+          this.dragGhost.destroy()
+          this.dragGhost = null
+        }
+
+        if (!this.dragItem || !this.dragSource) return
+
+        // Determine which panel the item was dropped on by x coordinate
+        const inChestArea     = dragX >= LEFT_X && dragX <= LEFT_X + LEFT_W
+        const inInventoryArea = dragX >= RIGHT_X
+
+        const droppedOnChest     = inChestArea
+        const droppedOnInventory = inInventoryArea
+
+        if (this.dragSource === 'chest' && droppedOnInventory) {
+          // Dragged from chest → inventory panel: take
+          this.selectedChestItem = this.dragItem
+          this.handleTake()
+        } else if (this.dragSource === 'inventory' && droppedOnChest) {
+          // Dragged from inventory → chest panel: store
+          this.selectedInventoryItem = this.dragItem
+          this.handleStore()
+        } else {
+          // Dropped on same panel or outside — reset visual state
+          this.buildChestPanel()
+          this.buildInventoryPanel()
+        }
+
+        this.dragItem   = null
+        this.dragSource = null
+      })
+
       container.add(hit)
     } else {
       // Empty slot faint label
@@ -344,32 +385,6 @@ export class ChestScene extends Phaser.Scene {
         fontSize: '9px', fontFamily: 'Arial, sans-serif', color: '#222233',
       }).setOrigin(0.5, 0.5))
     }
-  }
-
-  // ── Transfer buttons (center column) ─────────────────────────────────────────
-
-  buildTransferButtons() {
-    if (this.takeBtn)  this.takeBtn.destroy()
-    if (this.storeBtn) this.storeBtn.destroy()
-
-    const btnX    = DIVIDER_X - 58
-    const midY    = PANEL_Y + PANEL_H / 2
-    const btnW    = 120
-    const btnH    = 36
-
-    this.takeBtn = this.makeButton(
-      '<- Take',
-      btnX, midY - 48, btnW, btnH,
-      !!this.selectedChestItem,
-      () => this.handleTake()
-    )
-
-    this.storeBtn = this.makeButton(
-      'Store ->',
-      btnX, midY + 12, btnW, btnH,
-      !!this.selectedInventoryItem,
-      () => this.handleStore()
-    )
   }
 
   // ── Transfer actions ──────────────────────────────────────────────────────────
@@ -382,7 +397,6 @@ export class ChestScene extends Phaser.Scene {
     this.selectedChestItem = null
     this.buildChestPanel()
     this.buildInventoryPanel()
-    this.buildTransferButtons()
   }
 
   private handleStore() {
@@ -394,63 +408,6 @@ export class ChestScene extends Phaser.Scene {
     this.selectedInventoryItem = null
     this.buildChestPanel()
     this.buildInventoryPanel()
-    this.buildTransferButtons()
-  }
-
-  // ── Button helper ─────────────────────────────────────────────────────────────
-
-  private makeButton(
-    label: string,
-    x: number, y: number,
-    w: number, h: number,
-    active: boolean,
-    cb: () => void
-  ): Phaser.GameObjects.Container {
-    const btn = this.add.container(x, y)
-
-    const gfx = this.add.graphics()
-    const activeFill    = 0x2a1060
-    const activeHover   = 0x4a2090
-    const disabledFill  = 0x222233
-    const disabledBord  = 0x333344
-
-    const drawBg = (hov: boolean) => {
-      gfx.clear()
-      if (active) {
-        gfx.fillStyle(hov ? activeHover : activeFill, 1)
-        gfx.fillRoundedRect(0, 0, w, h, 7)
-        gfx.lineStyle(1.5, 0xffd700, 0.8)
-        gfx.strokeRoundedRect(0, 0, w, h, 7)
-      } else {
-        gfx.fillStyle(disabledFill, 1)
-        gfx.fillRoundedRect(0, 0, w, h, 7)
-        gfx.lineStyle(1, disabledBord, 1)
-        gfx.strokeRoundedRect(0, 0, w, h, 7)
-      }
-    }
-    drawBg(false)
-    btn.add(gfx)
-
-    const textCol = active ? '#ffd700' : '#555566'
-    const txt = this.add.text(w / 2, h / 2, label, {
-      fontSize: '13px', fontFamily: 'Georgia, serif',
-      color: textCol, fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5).setAlpha(active ? 1 : 0.5)
-    btn.add(txt)
-
-    if (active) {
-      const hit = this.add.rectangle(w / 2, h / 2, w, h, 0, 0)
-        .setInteractive({ useHandCursor: true })
-      hit.on('pointerover', () => drawBg(true))
-      hit.on('pointerout',  () => drawBg(false))
-      hit.on('pointerdown', () => {
-        drawBg(false)
-        this.time.delayedCall(80, () => cb())
-      })
-      btn.add(hit)
-    }
-
-    return btn
   }
 
   // ── Item icon drawing ─────────────────────────────────────────────────────────

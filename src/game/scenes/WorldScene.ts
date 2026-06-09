@@ -81,6 +81,81 @@ export class WorldScene extends Phaser.Scene {
       this.buildings.push({ building: b, label: def.label, x: def.x, y: def.y })
     }
 
+    // ── Decorative world elements ──────────────────────────────────────────
+
+    // Fountain at (1280, 1280)
+    {
+      const g = this.add.graphics().setDepth(3)
+      // Outer basin ring: dark stone
+      g.fillStyle(0x6b6470, 1)
+      g.fillCircle(1280, 1280, 28)
+      // Basin inner water
+      g.fillStyle(0x38bdf8, 1)
+      g.fillCircle(1280, 1280, 22)
+      // Water shimmer
+      g.fillStyle(0x7dd3fc, 0.6)
+      g.fillCircle(1278, 1277, 8)
+      // Center stone pillar
+      g.fillStyle(0x9ca3af, 1)
+      g.fillRect(1276, 1260, 8, 26)
+      // Water spray dots
+      g.fillStyle(0x7dd3fc, 1)
+      g.fillRect(1274, 1256, 3, 3)
+      g.fillRect(1282, 1256, 3, 3)
+      g.fillRect(1279, 1253, 3, 3)
+      g.fillStyle(0xbae6fd, 0.8)
+      g.fillRect(1272, 1259, 2, 2)
+      g.fillRect(1286, 1259, 2, 2)
+    }
+
+    // Lamp posts — 4 positions
+    for (const [lx, ly] of [[1100, 1180], [1460, 1180], [1100, 1350], [1460, 1350]] as [number, number][]) {
+      const g = this.add.graphics().setDepth(3)
+      // Iron pole
+      g.fillStyle(0x374151, 1)
+      g.fillRect(lx - 1, ly - 50, 3, 50)
+      // Lamp head hexagon approximated as rect
+      g.fillStyle(0xfbbf24, 1)
+      g.fillRect(lx - 7, ly - 60, 14, 12)
+      g.fillRect(lx - 5, ly - 64, 10, 6)
+      // Glow circle
+      g.fillStyle(0xfef3c7, 0.7)
+      g.fillCircle(lx, ly - 54, 6)
+    }
+
+    // Stone benches — 4 near fountain
+    for (const [bx, by] of [[1180, 1310], [1380, 1310], [1240, 1360], [1320, 1360]] as [number, number][]) {
+      const g = this.add.graphics().setDepth(3)
+      // Bench seat: cream stone
+      g.fillStyle(0xc8b99a, 1)
+      g.fillRect(bx - 18, by - 4, 36, 8)
+      // Bench legs: darker
+      g.fillStyle(0xa89878, 1)
+      g.fillRect(bx - 16, by + 4, 6, 6)
+      g.fillRect(bx + 10, by + 4, 6, 6)
+    }
+
+    // Garden bushes — 8 around village center
+    for (const [px, py] of [
+      [1000, 1200], [1560, 1200], [1000, 1380], [1560, 1380],
+      [1100, 1480], [1460, 1480], [1200, 1480], [1360, 1480],
+    ] as [number, number][]) {
+      const g = this.add.graphics().setDepth(3)
+      // Base circle
+      g.fillStyle(0x166534, 1)
+      g.fillCircle(px, py, 14)
+      // Mid circle offset up
+      g.fillStyle(0x16a34a, 1)
+      g.fillCircle(px, py - 5, 10)
+      // Top highlight ellipse
+      g.fillStyle(0x22c55e, 1)
+      g.fillEllipse(px - 3, py - 8, 10, 7)
+      // Tiny flower dot (alternate yellow/pink)
+      const flowerColor = (px + py) % 2 === 0 ? 0xf9d84a : 0xff8fa3
+      g.fillStyle(flowerColor, 1)
+      g.fillRect(px + 4, py - 12, 3, 3)
+    }
+
     // Chest — personal storage
     const chestImg = this.add.image(this.chestPos.x, this.chestPos.y, 'chest')
       .setDepth(4)

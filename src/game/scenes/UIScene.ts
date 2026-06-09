@@ -32,6 +32,19 @@ export class UIScene extends Phaser.Scene {
       color: '#ffd700',
     })
 
+    // [C] Character shortcut badge (below the avatar panel)
+    const charBadgeBg = this.add.graphics()
+    charBadgeBg.fillStyle(0x000000, 0.55)
+    charBadgeBg.fillRoundedRect(6, 66, 140, 22, 5)
+    charBadgeBg.lineStyle(1, 0xffd700, 0.5)
+    charBadgeBg.strokeRoundedRect(6, 66, 140, 22, 5)
+
+    this.add.text(76, 77, '[C] Character', {
+      fontSize: '12px',
+      fontFamily: 'Arial, sans-serif',
+      color: '#ffd700',
+    }).setOrigin(0.5, 0.5)
+
     // Panel background behind avatar area
     const panelBg = this.add.graphics()
     panelBg.fillStyle(0x000000, 0.5)

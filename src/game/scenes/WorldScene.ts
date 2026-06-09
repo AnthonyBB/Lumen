@@ -33,10 +33,14 @@ export class WorldScene extends Phaser.Scene {
   }
 
   create() {
-    // Background ground tiles (SVG grass tile has built-in detail)
-    this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 'ground').setOrigin(0, 0)
+    // ── Ground ───────────────────────────────────────────────────────────────
+    // Use the tileset PNG as a tileSprite — the grass variants create natural
+    // terrain variation.  tileScaleX/Y=4 makes each 16px tile render at 64px,
+    // matching the game's TILE_SIZE constant.
+    const ground = this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 'ground').setOrigin(0, 0)
+    ground.setTileScale(4, 4)
 
-    // Path tiles — cross through center
+    // ── Path (cobblestone road) ───────────────────────────────────────────────
     const centerX = WORLD_WIDTH / 2
     const centerY = WORLD_HEIGHT / 2
     const pathHalfW = 3  // tiles either side
@@ -47,7 +51,8 @@ export class WorldScene extends Phaser.Scene {
       for (let ty = -pathHalfH; ty <= pathHalfH; ty++) {
         const px = tx * TILE_SIZE
         const py = centerY + ty * TILE_SIZE
-        this.add.image(px, py, 'path').setOrigin(0, 0)
+        const p = this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path').setOrigin(0, 0)
+        p.setTileScale(4, 4)
       }
     }
 
@@ -56,24 +61,28 @@ export class WorldScene extends Phaser.Scene {
       for (let tx = -pathHalfW; tx <= pathHalfW; tx++) {
         const px = centerX + tx * TILE_SIZE
         const py = ty * TILE_SIZE
-        this.add.image(px, py, 'path').setOrigin(0, 0)
+        const p = this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path').setOrigin(0, 0)
+        p.setTileScale(4, 4)
       }
     }
 
-    // Trees around edges and corners
+    // ── Trees (keep SVG — no tree sprite in tileset pack) ────────────────────
     const treePositions = this.generateTreePositions(20)
     for (const [tx, ty] of treePositions) {
-      const shadow = this.add.image(tx + 16, ty + 44, 'shadow').setAlpha(0.5).setDepth(1)
-      const tree = this.add.image(tx, ty, 'tree').setOrigin(0, 0).setDepth(2)
-      void shadow
-      void tree
+      this.add.image(tx + 16, ty + 44, 'shadow').setAlpha(0.5).setDepth(1)
+      this.add.image(tx, ty, 'tree').setOrigin(0, 0).setDepth(2)
     }
 
-    // Buildings — grouped close together near world center
+    // ── Buildings ────────────────────────────────────────────────────────────
+    // Sizes chosen to maintain each sprite's natural aspect ratio while being
+    // large enough to fill the village area.
+    //   house_purple: 128x128 → 192x192 (1.5x, square)
+    //   house_3:      180x128 → 252x180 (1.4x, wide)
+    //   house_2:      157x112 → 220x157 (1.4x, wide)
     const buildingDefs = [
-      { label: 'Learning Center', x: 1050, y: 1100, w: 220, h: 260 },
-      { label: 'Combat Training', x: 1510, y: 1100, w: 220, h: 260 },
-      { label: 'Market',          x: 1280, y: 1420, w: 200, h: 240 },
+      { label: 'Learning Center', x: 1050, y: 1100, w: 192, h: 192 },
+      { label: 'Combat Training', x: 1510, y: 1100, w: 252, h: 180 },
+      { label: 'Market',          x: 1280, y: 1420, w: 220, h: 157 },
     ]
 
     for (const def of buildingDefs) {
@@ -81,88 +90,40 @@ export class WorldScene extends Phaser.Scene {
       this.buildings.push({ building: b, label: def.label, x: def.x, y: def.y })
     }
 
-    // ── Decorative world elements ──────────────────────────────────────────
+    // ── Decorative world elements ─────────────────────────────────────────────
 
-    // Fountain at (1280, 1280)
-    {
-      const g = this.add.graphics().setDepth(3)
-      // Outer basin ring: dark stone
-      g.fillStyle(0x6b6470, 1)
-      g.fillCircle(1280, 1280, 28)
-      // Basin inner water
-      g.fillStyle(0x38bdf8, 1)
-      g.fillCircle(1280, 1280, 22)
-      // Water shimmer
-      g.fillStyle(0x7dd3fc, 0.6)
-      g.fillCircle(1278, 1277, 8)
-      // Center stone pillar
-      g.fillStyle(0x9ca3af, 1)
-      g.fillRect(1276, 1260, 8, 26)
-      // Water spray dots
-      g.fillStyle(0x7dd3fc, 1)
-      g.fillRect(1274, 1256, 3, 3)
-      g.fillRect(1282, 1256, 3, 3)
-      g.fillRect(1279, 1253, 3, 3)
-      g.fillStyle(0xbae6fd, 0.8)
-      g.fillRect(1272, 1259, 2, 2)
-      g.fillRect(1286, 1259, 2, 2)
-    }
+    // Well — replaces the programmatic fountain
+    this.add.image(1280, 1285, 'well').setDepth(3).setScale(3)
 
-    // Lamp posts — 4 positions
+    // Lamp posts — PNG sprites scaled 3x (46x62 source → ~138x186 display)
     for (const [lx, ly] of [[1100, 1180], [1460, 1180], [1100, 1350], [1460, 1350]] as [number, number][]) {
-      const g = this.add.graphics().setDepth(3)
-      // Iron pole
-      g.fillStyle(0x374151, 1)
-      g.fillRect(lx - 1, ly - 50, 3, 50)
-      // Lamp head hexagon approximated as rect
-      g.fillStyle(0xfbbf24, 1)
-      g.fillRect(lx - 7, ly - 60, 14, 12)
-      g.fillRect(lx - 5, ly - 64, 10, 6)
-      // Glow circle
-      g.fillStyle(0xfef3c7, 0.7)
-      g.fillCircle(lx, ly - 54, 6)
+      this.add.image(lx, ly, 'lamppost').setDepth(3).setScale(2.5)
     }
 
-    // Stone benches — 4 near fountain
-    for (const [bx, by] of [[1180, 1310], [1380, 1310], [1240, 1360], [1320, 1360]] as [number, number][]) {
-      const g = this.add.graphics().setDepth(3)
-      // Bench seat: cream stone
-      g.fillStyle(0xc8b99a, 1)
-      g.fillRect(bx - 18, by - 4, 36, 8)
-      // Bench legs: darker
-      g.fillStyle(0xa89878, 1)
-      g.fillRect(bx - 16, by + 4, 6, 6)
-      g.fillRect(bx + 10, by + 4, 6, 6)
+    // Benches — 4 around the well
+    for (const [bx, by] of [[1190, 1310], [1370, 1310], [1250, 1360], [1310, 1360]] as [number, number][]) {
+      this.add.image(bx, by, 'bench').setDepth(3).setScale(3)
     }
 
-    // Garden bushes — 8 around village center
-    for (const [px, py] of [
-      [1000, 1200], [1560, 1200], [1000, 1380], [1560, 1380],
-      [1100, 1480], [1460, 1480], [1200, 1480], [1360, 1480],
+    // Barrels near the Market
+    for (const [bx, by] of [[1200, 1440], [1220, 1455], [1360, 1440], [1380, 1455]] as [number, number][]) {
+      this.add.image(bx, by, 'barrel').setDepth(3).setScale(2.5)
+    }
+
+    // Signs on paths as direction markers
+    this.add.image(1280, 1170, 'sign').setDepth(3).setScale(3)
+    this.add.image(1150, 1280, 'sign').setDepth(3).setScale(3).setFlipX(true)
+
+    // Rocks scattered around the edges of the village square
+    for (const [rx, ry] of [
+      [1010, 1220], [1550, 1220], [1010, 1380], [1550, 1380],
     ] as [number, number][]) {
-      const g = this.add.graphics().setDepth(3)
-      // Base circle
-      g.fillStyle(0x166534, 1)
-      g.fillCircle(px, py, 14)
-      // Mid circle offset up
-      g.fillStyle(0x16a34a, 1)
-      g.fillCircle(px, py - 5, 10)
-      // Top highlight ellipse
-      g.fillStyle(0x22c55e, 1)
-      g.fillEllipse(px - 3, py - 8, 10, 7)
-      // Tiny flower dot (alternate yellow/pink)
-      const flowerColor = (px + py) % 2 === 0 ? 0xf9d84a : 0xff8fa3
-      g.fillStyle(flowerColor, 1)
-      g.fillRect(px + 4, py - 12, 3, 3)
+      this.add.image(rx, ry, 'rock').setDepth(3).setScale(3)
     }
 
-    // Chest — personal storage
-    const chestImg = this.add.image(this.chestPos.x, this.chestPos.y, 'chest')
-      .setDepth(4)
-      .setScale(2)
-    void chestImg
+    // ── Chest — personal storage ──────────────────────────────────────────────
+    this.add.image(this.chestPos.x, this.chestPos.y, 'chest').setDepth(4).setScale(2)
 
-    // Floating "Chest" label above the sprite
     this.add.text(this.chestPos.x, this.chestPos.y - 56, 'Chest', {
       fontSize: '13px',
       fontFamily: 'Arial, sans-serif',
@@ -171,7 +132,7 @@ export class WorldScene extends Phaser.Scene {
       padding: { x: 6, y: 3 },
     }).setOrigin(0.5, 0.5).setDepth(5)
 
-    // Player at world center
+    // ── Player ────────────────────────────────────────────────────────────────
     this.player = new Player(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
 
     // Physics collisions between player and building colliders
@@ -179,7 +140,7 @@ export class WorldScene extends Phaser.Scene {
       this.physics.add.collider(this.player, entry.building.collider)
     }
 
-    // Camera
+    // ── Camera ────────────────────────────────────────────────────────────────
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1)
     this.cameras.main.setZoom(1)
@@ -187,7 +148,7 @@ export class WorldScene extends Phaser.Scene {
     // World bounds
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
 
-    // Input
+    // ── Input ─────────────────────────────────────────────────────────────────
     this.cursors = this.input.keyboard!.createCursorKeys()
     this.wasd = {
       W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
@@ -200,7 +161,7 @@ export class WorldScene extends Phaser.Scene {
     this.cKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.C)
     this.iKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.I)
 
-    // Proximity prompt text (camera-fixed via setScrollFactor)
+    // Proximity prompt (camera-fixed)
     this.promptText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 100, 'Press E to enter', {
       fontSize: '18px',
       fontFamily: 'Arial, sans-serif',
@@ -227,7 +188,6 @@ export class WorldScene extends Phaser.Scene {
     const positions: [number, number][] = []
     const margin = 64
     const zones = [
-      // corners and edges
       { xMin: margin, xMax: 400, yMin: margin, yMax: 400 },
       { xMin: WORLD_WIDTH - 400, xMax: WORLD_WIDTH - margin, yMin: margin, yMax: 400 },
       { xMin: margin, xMax: 400, yMin: WORLD_HEIGHT - 400, yMax: WORLD_HEIGHT - margin },
@@ -301,13 +261,12 @@ export class WorldScene extends Phaser.Scene {
   }
 
   update() {
-    // Open character screen with C key (when no popup is open)
+    // Open character screen with C key
     if (!this.popupOpen && !this.characterOpen && Phaser.Input.Keyboard.JustDown(this.cKey)) {
       this.characterOpen = true
       this.player.setVelocity(0, 0)
       this.scene.pause('WorldScene')
       this.scene.launch('CharacterScene')
-      // Listen for CharacterScene to stop so we can mark it closed
       this.scene.get('CharacterScene').events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
         this.characterOpen = false
       })
@@ -344,7 +303,6 @@ export class WorldScene extends Phaser.Scene {
       this.promptText.setText('Press E to enter').setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         if (nearBuilding.label === 'Learning Center') {
-          // Launch the full classroom scene
           this.scene.stop('UIScene')
           this.scene.start('ClassroomScene')
           return
@@ -370,7 +328,7 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // I key — open Equipment screen (only when world is active and popup closed)
+    // I key — open Equipment screen
     if (!this.popupOpen && Phaser.Input.Keyboard.JustDown(this.iKey)) {
       this.player.setVelocity(0, 0)
       this.scene.pause()

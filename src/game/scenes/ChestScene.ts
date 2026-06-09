@@ -1,7 +1,7 @@
 import Phaser from 'phaser'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types -----------------------------------------------------------------------
 
 type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
 type IconType = 'sword' | 'shield' | 'helm' | 'ring' | 'boots' | 'necklace' | 'belt' | 'gloves' | 'earring' | 'potion' | 'book'
@@ -16,7 +16,7 @@ interface ChestItem {
   icon: string
 }
 
-// ── Mock data ─────────────────────────────────────────────────────────────────
+// -- Mock data -------------------------------------------------------------------
 
 const MOCK_CHEST_ITEMS: ChestItem[] = [
   { id: 'chest_item_1', name: 'Health Potion', itemType: 'consumable', rarity: 'common',   stats: { hp: 30 },           quantity: 3, icon: 'potion' },
@@ -29,7 +29,7 @@ const MOCK_INVENTORY_ITEMS: ChestItem[] = [
   { id: 'ring_001',   name: 'Silver Ring',  itemType: 'ring1',    rarity: 'uncommon', stats: { spirit: 3 },   quantity: 1, icon: 'ring'   },
 ]
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -------------------------------------------------------------------
 
 const RARITY_COLOR: Record<Rarity, number> = {
   common:    0xaaaaaa,
@@ -54,7 +54,7 @@ const DIVIDER_X   = LEFT_X + LEFT_W + 20
 const RIGHT_X     = DIVIDER_X + 40
 const RIGHT_W     = GAME_WIDTH - RIGHT_X - 20
 
-// ── Scene ─────────────────────────────────────────────────────────────────────
+// -- Scene -----------------------------------------------------------------------
 
 export class ChestScene extends Phaser.Scene {
   private chestItems: ChestItem[] = []
@@ -84,6 +84,9 @@ export class ChestScene extends Phaser.Scene {
     this.drawFooter()
     this.drawDivider()
 
+    // Containers are created here; buildChestPanel / buildInventoryPanel
+    // immediately destroy-and-recreate them, but we need them defined first
+    // so the property references are valid before the first call.
     this.chestPanel     = this.add.container(0, 0)
     this.inventoryPanel = this.add.container(0, 0)
     this.buildChestPanel()
@@ -99,7 +102,7 @@ export class ChestScene extends Phaser.Scene {
     }
   }
 
-  // ── Background ───────────────────────────────────────────────────────────────
+  // -- Background -----------------------------------------------------------------
 
   private drawBackground() {
     const bg = this.add.graphics()
@@ -118,7 +121,7 @@ export class ChestScene extends Phaser.Scene {
     }
   }
 
-  // ── Header ────────────────────────────────────────────────────────────────────
+  // -- Header ---------------------------------------------------------------------
 
   private drawHeader() {
     const hg = this.add.graphics()
@@ -132,7 +135,7 @@ export class ChestScene extends Phaser.Scene {
     hg.lineBetween(50, 35, 450, 35)
     hg.lineBetween(GAME_WIDTH - 450, 35, GAME_WIDTH - 50, 35)
 
-    // Draw a small chest icon in the header (graphics)
+    // Small chest icon in the header
     const cx = GAME_WIDTH / 2 - 120
     const cy = 35
     const cg = this.add.graphics()
@@ -153,7 +156,7 @@ export class ChestScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5)
   }
 
-  // ── Footer ────────────────────────────────────────────────────────────────────
+  // -- Footer ---------------------------------------------------------------------
 
   private drawFooter() {
     const fg = this.add.graphics()
@@ -166,7 +169,7 @@ export class ChestScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5)
   }
 
-  // ── Center divider ────────────────────────────────────────────────────────────
+  // -- Center divider -------------------------------------------------------------
 
   private drawDivider() {
     const dg = this.add.graphics()
@@ -174,33 +177,49 @@ export class ChestScene extends Phaser.Scene {
     dg.lineBetween(DIVIDER_X + 18, PANEL_Y + 10, DIVIDER_X + 18, PANEL_Y + PANEL_H - 10)
   }
 
-  // ── Panel frames ─────────────────────────────────────────────────────────────
+  // -- Panel frame helper ---------------------------------------------------------
+  //
+  // The frame graphics object is added to `container` as its FIRST child.
+  // This ensures it renders BEHIND all item slots that are subsequently added
+  // to the same container.  Previously it was added directly to the scene's
+  // display list AFTER the container was created, which caused Phaser to draw
+  // the solid background on top of every slot, hiding all items.
 
-  private drawPanelFrame(x: number, y: number, w: number, h: number) {
+  private drawPanelFrame(
+    container: Phaser.GameObjects.Container,
+    x: number, y: number, w: number, h: number
+  ) {
     const g = this.add.graphics()
     g.fillStyle(0x12122e, 1)
     g.fillRoundedRect(x, y, w, h, 10)
     g.lineStyle(1, 0x2a2a5a, 1)
     g.strokeRoundedRect(x, y, w, h, 10)
+    container.add(g)   // <-- must be first child of container
   }
 
-  // ── Chest panel (left) ────────────────────────────────────────────────────────
+  // -- Chest panel (left) ---------------------------------------------------------
 
   buildChestPanel() {
     this.chestPanel.destroy()
     this.chestPanel = this.add.container(0, 0)
 
-    this.drawPanelFrame(LEFT_X, PANEL_Y, LEFT_W, PANEL_H)
+    // 1. Frame (first child = rendered behind everything else in the container)
+    this.drawPanelFrame(this.chestPanel, LEFT_X, PANEL_Y, LEFT_W, PANEL_H)
 
-    // Panel title
-    this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 16, 'Chest Storage', {
-      fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
-    }).setOrigin(0.5, 0)
+    // 2. Titles (added to container so they appear above the frame)
+    this.chestPanel.add(
+      this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 16, 'Chest Storage', {
+        fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+      }).setOrigin(0.5, 0)
+    )
 
-    this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 34, `${this.chestItems.length} / ${MAX_SLOTS}`, {
-      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
-    }).setOrigin(0.5, 0)
+    this.chestPanel.add(
+      this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 34, `${this.chestItems.length} / ${MAX_SLOTS}`, {
+        fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
+      }).setOrigin(0.5, 0)
+    )
 
+    // 3. Item slots
     const gridX = LEFT_X + (LEFT_W - (COLS * (SLOT_W + SLOT_PAD) - SLOT_PAD)) / 2
     const gridY = PANEL_Y + 58
 
@@ -213,7 +232,7 @@ export class ChestScene extends Phaser.Scene {
       this.createSlot(this.chestPanel, sx, sy, item, 'chest', i)
     }
 
-    // "Take" button at bottom of chest panel
+    // 4. "Take" button at bottom of chest panel
     const btnX = LEFT_X + LEFT_W / 2 - 70
     const btnY = PANEL_Y + PANEL_H - 44
     this.takeBtn = this.makeButton(
@@ -224,23 +243,29 @@ export class ChestScene extends Phaser.Scene {
     )
   }
 
-  // ── Inventory panel (right) ───────────────────────────────────────────────────
+  // -- Inventory panel (right) ----------------------------------------------------
 
   buildInventoryPanel() {
     this.inventoryPanel.destroy()
     this.inventoryPanel = this.add.container(0, 0)
 
-    this.drawPanelFrame(RIGHT_X, PANEL_Y, RIGHT_W, PANEL_H)
+    // 1. Frame (first child)
+    this.drawPanelFrame(this.inventoryPanel, RIGHT_X, PANEL_Y, RIGHT_W, PANEL_H)
 
-    // Panel title
-    this.add.text(RIGHT_X + RIGHT_W / 2, PANEL_Y + 16, 'Your Inventory', {
-      fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
-    }).setOrigin(0.5, 0)
+    // 2. Titles
+    this.inventoryPanel.add(
+      this.add.text(RIGHT_X + RIGHT_W / 2, PANEL_Y + 16, 'Your Inventory', {
+        fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+      }).setOrigin(0.5, 0)
+    )
 
-    this.add.text(RIGHT_X + RIGHT_W / 2, PANEL_Y + 34, `${this.inventoryItems.length} items`, {
-      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
-    }).setOrigin(0.5, 0)
+    this.inventoryPanel.add(
+      this.add.text(RIGHT_X + RIGHT_W / 2, PANEL_Y + 34, `${this.inventoryItems.length} items`, {
+        fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
+      }).setOrigin(0.5, 0)
+    )
 
+    // 3. Item slots
     const gridX = RIGHT_X + (RIGHT_W - (COLS * (SLOT_W + SLOT_PAD) - SLOT_PAD)) / 2
     const gridY = PANEL_Y + 58
 
@@ -253,7 +278,7 @@ export class ChestScene extends Phaser.Scene {
       this.createSlot(this.inventoryPanel, sx, sy, item, 'inventory', i)
     }
 
-    // "Store" button at bottom of inventory panel
+    // 4. "Store" button at bottom of inventory panel
     const btnX = RIGHT_X + RIGHT_W / 2 - 70
     const btnY = PANEL_Y + PANEL_H - 44
     this.storeBtn = this.makeButton(
@@ -264,7 +289,7 @@ export class ChestScene extends Phaser.Scene {
     )
   }
 
-  // ── Slot creation ─────────────────────────────────────────────────────────────
+  // -- Slot creation --------------------------------------------------------------
 
   private createSlot(
     container: Phaser.GameObjects.Container,
@@ -306,7 +331,7 @@ export class ChestScene extends Phaser.Scene {
       container.add(iconGfx)
 
       // Item name (truncated)
-      const nameStr = item.name.length > 10 ? item.name.slice(0, 9) + '…' : item.name
+      const nameStr = item.name.length > 10 ? item.name.slice(0, 9) + '...' : item.name
       const rarHex  = RARITY_COLOR[item.rarity].toString(16).padStart(6, '0')
       container.add(this.add.text(x + SLOT_W / 2, y + SLOT_H - 22, nameStr, {
         fontSize: '9px', fontFamily: 'Arial, sans-serif', color: `#${rarHex}`, fontStyle: 'bold',
@@ -341,12 +366,12 @@ export class ChestScene extends Phaser.Scene {
     } else {
       // Empty slot faint label
       container.add(this.add.text(x + SLOT_W / 2, y + SLOT_H / 2, 'empty', {
-        fontSize: '9px', fontFamily: 'Arial, sans-serif', color: '#222233',
+        fontSize: '9px', fontFamily: 'Arial, sans-serif', color: '#333355',
       }).setOrigin(0.5, 0.5))
     }
   }
 
-  // ── Transfer buttons (center column) ─────────────────────────────────────────
+  // -- Transfer buttons (center column) ------------------------------------------
 
   buildTransferButtons() {
     if (this.takeBtn)  this.takeBtn.destroy()
@@ -372,7 +397,7 @@ export class ChestScene extends Phaser.Scene {
     )
   }
 
-  // ── Transfer actions ──────────────────────────────────────────────────────────
+  // -- Transfer actions -----------------------------------------------------------
 
   private handleTake() {
     if (!this.selectedChestItem) return
@@ -397,7 +422,7 @@ export class ChestScene extends Phaser.Scene {
     this.buildTransferButtons()
   }
 
-  // ── Button helper ─────────────────────────────────────────────────────────────
+  // -- Button helper --------------------------------------------------------------
 
   private makeButton(
     label: string,
@@ -453,7 +478,7 @@ export class ChestScene extends Phaser.Scene {
     return btn
   }
 
-  // ── Item icon drawing ─────────────────────────────────────────────────────────
+  // -- Item icon drawing ----------------------------------------------------------
 
   private drawItemIcon(
     gfx: Phaser.GameObjects.Graphics,
@@ -556,31 +581,22 @@ export class ChestScene extends Phaser.Scene {
         break
       }
       case 'potion': {
-        // Round flask: circle top + narrow neck + wider body
         gfx.fillStyle(color, 1)
-        // Body (wider)
         gfx.fillCircle(x, y + 6 * s, 11 * s)
-        // Neck
         gfx.fillRect(x - 3 * s, y - 9 * s, 6 * s, 12 * s)
-        // Cork
         gfx.fillStyle(0x92400e, 1)
         gfx.fillRect(x - 4 * s, y - 13 * s, 8 * s, 5 * s)
-        // Shine
         gfx.fillStyle(0xffffff, 0.3)
         gfx.fillCircle(x - 4 * s, y + 2 * s, 4 * s)
         break
       }
       case 'book': {
-        // Book rectangle with spine line
         gfx.fillStyle(color, 1)
         gfx.fillRect(x - 13 * s, y - 14 * s, 26 * s, 28 * s)
-        // Spine
         gfx.fillStyle(0x1a3080, 1)
         gfx.fillRect(x - 13 * s, y - 14 * s, 5 * s, 28 * s)
-        // Pages
         gfx.fillStyle(0xf5f0e0, 0.9)
         gfx.fillRect(x - 7 * s, y - 12 * s, 18 * s, 24 * s)
-        // Text lines
         gfx.fillStyle(0x888888, 0.5)
         for (let l = 0; l < 4; l++) {
           gfx.fillRect(x - 5 * s, y - 8 * s + l * 6 * s, 14 * s, 2 * s)

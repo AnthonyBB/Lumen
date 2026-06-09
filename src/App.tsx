@@ -19,10 +19,14 @@ export default function App() {
         <Route
           path="/game"
           element={
-            <>
-              <Nav />
-              <GamePage token={token} />
-            </>
+            isAuthenticated ? (
+              <>
+                <Nav />
+                <GamePage token={token} />
+              </>
+            ) : (
+              <Navigate to="/" replace />
+            )
           }
         />
       </Routes>

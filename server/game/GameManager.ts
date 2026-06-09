@@ -10,6 +10,7 @@ import type { Zone, PublicPlayer } from '../types/index.js';
 import { PlayerManager } from './PlayerManager.js';
 import { QuestionEngine } from './QuestionEngine.js';
 import { CombatManager } from './CombatManager.js';
+import { InventoryManager } from './InventoryManager.js';
 
 /** Known zones in the game world. */
 const STARTING_ZONES: string[] = ['town', 'forest', 'dungeon', 'academy'];
@@ -18,6 +19,7 @@ export class GameManager {
   public readonly playerManager: PlayerManager;
   public readonly questionEngine: QuestionEngine;
   public readonly combatManager: CombatManager;
+  public readonly inventoryManager: InventoryManager;
 
   /** zoneId → Zone */
   private zones: Map<string, Zone> = new Map();
@@ -26,6 +28,7 @@ export class GameManager {
     this.playerManager = new PlayerManager();
     this.questionEngine = new QuestionEngine();
     this.combatManager = new CombatManager(this.questionEngine, this.playerManager);
+    this.inventoryManager = new InventoryManager();
 
     // Initialise all known zones
     for (const id of STARTING_ZONES) {
@@ -52,6 +55,9 @@ export class GameManager {
     const player = result.player!;
     this.addToZone(socketId, player.zone);
 
+    // Create a server-authoritative inventory pre-loaded with starter items
+    this.inventoryManager.createInventory(socketId);
+
     // Build zone player list (excluding the new joiner)
     const zonePlayers = this.getZonePlayers(player.zone).filter(
       (p) => p.id !== socketId,
@@ -77,6 +83,9 @@ export class GameManager {
 
     // Clean up any active combat sessions
     this.combatManager.endSessionsForPlayer(socketId);
+
+    // Release inventory memory
+    this.inventoryManager.deleteInventory(socketId);
 
     return { zone };
   }

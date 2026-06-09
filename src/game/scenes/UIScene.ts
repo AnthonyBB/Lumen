@@ -1,5 +1,6 @@
 import Phaser from 'phaser'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import { InventoryStore } from '../systems/InventoryStore'
 
 export class UIScene extends Phaser.Scene {
   constructor() {
@@ -89,20 +90,38 @@ export class UIScene extends Phaser.Scene {
       fontSize: '11px', fontFamily: 'Arial', color: '#88eeff', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
-    // Shard count — updates from registry
+    // Shard count — prefers InventoryStore (server-authoritative) with
+    // registry as fallback so ClassroomScene works before a player is connected.
     const shardCount = this.add.text(14, GAME_HEIGHT - 36, 'x 0', {
       fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
-    // Poll registry once per second for updates
+    const refreshShards = () => {
+      const inv = InventoryStore.get()
+      if (inv) {
+        // Server-authoritative: sum all shard stacks in the bag
+        const shardItem = inv.items.find(i => i.itemType === 'shard_of_knowledge')
+        shardCount.setText(`x ${shardItem ? shardItem.quantity : 0}`)
+      } else {
+        // Fallback: registry value written by ClassroomScene
+        const n = (this.registry.get('shards') as number) || 0
+        shardCount.setText(`x ${n}`)
+      }
+    }
+
+    // Listen for server inventory updates (immediate, no polling lag)
+    const unsubscribe = InventoryStore.onUpdate(() => refreshShards())
+
+    // Also poll registry every 500 ms — keeps ClassroomScene in sync before
+    // the player connects to the multiplayer server.
     this.time.addEvent({
       delay: 500,
       loop: true,
-      callback: () => {
-        const n = (this.registry.get('shards') as number) || 0
-        shardCount.setText(`x ${n}`)
-      },
+      callback: refreshShards,
     })
+
+    // Clean up the InventoryStore listener when this scene shuts down
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => unsubscribe())
 
     // Vignette overlay at screen edges
     const vignette = this.add.graphics()

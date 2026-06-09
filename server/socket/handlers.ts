@@ -20,7 +20,16 @@ import type {
   CombatStartPayload,
   CombatAnswerPayload,
   ChatMessagePayload,
+  InventoryEquipPayload,
+  InventoryUnequipPayload,
+  EquipmentSlotKey,
 } from '../types/index.js';
+
+/** All valid equipment slot names — used to reject unknown slot strings from clients. */
+const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
+  'mainHand', 'offHand', 'helm', 'earring',
+  'ring1', 'ring2', 'belt', 'shoes', 'gloves', 'necklace',
+]);
 
 /** Maximum chat message length (characters). */
 const MAX_CHAT_LENGTH = 200;
@@ -54,7 +63,7 @@ function isSafeNumber(v: unknown, min: number, max: number): boolean {
 // ---------------------------------------------------------------------------
 
 export function registerHandlers(io: Server, socket: Socket, game: GameManager): void {
-  const { playerManager, combatManager } = game;
+  const { playerManager, combatManager, inventoryManager } = game;
 
   // ── player:join ──────────────────────────────────────────────────────────
   socket.on('player:join', (payload: PlayerJoinPayload) => {
@@ -263,6 +272,72 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
       username: player.username,
       message: sanitised,
     });
+  });
+
+  // ── inventory:get ────────────────────────────────────────────────────────
+  socket.on('inventory:get', () => {
+    const inventory = inventoryManager.getInventory(socket.id);
+    if (!inventory) {
+      socket.emit('error', { message: 'Inventory not found. Have you joined yet?' });
+      return;
+    }
+    // Safe to send: stats come from the server; correctIndex is never in inventory data.
+    socket.emit('inventory:data', inventory);
+  });
+
+  // ── inventory:equip ──────────────────────────────────────────────────────
+  socket.on('inventory:equip', (payload: InventoryEquipPayload) => {
+    if (
+      typeof payload?.itemId !== 'string' ||
+      typeof payload?.slot !== 'string' ||
+      !VALID_SLOTS.has(payload.slot as EquipmentSlotKey)
+    ) {
+      socket.emit('error', { message: 'Invalid equip payload.' });
+      return;
+    }
+
+    const success = inventoryManager.equipItem(socket.id, payload.itemId, payload.slot as EquipmentSlotKey);
+    if (!success) {
+      socket.emit('error', { message: 'Cannot equip that item in that slot.' });
+      return;
+    }
+
+    const inventory = inventoryManager.getInventory(socket.id)!;
+    socket.emit('inventory:updated', inventory);
+  });
+
+  // ── inventory:unequip ────────────────────────────────────────────────────
+  socket.on('inventory:unequip', (payload: InventoryUnequipPayload) => {
+    if (
+      typeof payload?.slot !== 'string' ||
+      !VALID_SLOTS.has(payload.slot as EquipmentSlotKey)
+    ) {
+      socket.emit('error', { message: 'Invalid unequip payload.' });
+      return;
+    }
+
+    const success = inventoryManager.unequipItem(socket.id, payload.slot as EquipmentSlotKey);
+    if (!success) {
+      socket.emit('error', { message: 'Nothing equipped in that slot.' });
+      return;
+    }
+
+    const inventory = inventoryManager.getInventory(socket.id)!;
+    socket.emit('inventory:updated', inventory);
+  });
+
+  // ── inventory:add_shard ──────────────────────────────────────────────────
+  socket.on('inventory:add_shard', () => {
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before collecting shards.' });
+      return;
+    }
+
+    inventoryManager.addShard(socket.id);
+
+    const inventory = inventoryManager.getInventory(socket.id)!;
+    socket.emit('inventory:updated', inventory);
   });
 
   // ── disconnect ───────────────────────────────────────────────────────────

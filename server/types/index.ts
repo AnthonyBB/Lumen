@@ -169,3 +169,75 @@ export interface ChatBroadcastPayload {
 export interface ErrorPayload {
   message: string;
 }
+
+// ---------------------------------------------------------------------------
+// Inventory
+// ---------------------------------------------------------------------------
+
+export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+export type EquipmentSlotKey =
+  | 'mainHand'
+  | 'offHand'
+  | 'helm'
+  | 'earring'
+  | 'ring1'
+  | 'ring2'
+  | 'belt'
+  | 'shoes'
+  | 'gloves'
+  | 'necklace';
+
+export interface ItemStats {
+  attack?: number;
+  defense?: number;
+  hp?: number;
+  xp?: number;
+}
+
+export interface InventoryItem {
+  /** UUID — assigned server-side, never guessable by the client. */
+  id: string;
+  /** Stable item-type identifier (e.g. "worn_sword"). */
+  itemType: string;
+  name: string;
+  description: string;
+  rarity: ItemRarity;
+  stats: ItemStats;
+  quantity: number;
+  stackable: boolean;
+  /** Client-facing icon key / emoji. */
+  icon: string;
+}
+
+export interface EquipmentSlots {
+  mainHand?: InventoryItem;
+  offHand?: InventoryItem;
+  helm?: InventoryItem;
+  earring?: InventoryItem;
+  ring1?: InventoryItem;
+  ring2?: InventoryItem;
+  belt?: InventoryItem;
+  shoes?: InventoryItem;
+  gloves?: InventoryItem;
+  necklace?: InventoryItem;
+}
+
+export interface PlayerInventory {
+  playerId: string;
+  items: InventoryItem[];
+  equipment: EquipmentSlots;
+  gold: number;
+}
+
+// ---------------------------------------------------------------------------
+// Socket event payloads — Inventory (Client → Server)
+// ---------------------------------------------------------------------------
+
+export interface InventoryEquipPayload {
+  itemId: string;
+  slot: EquipmentSlotKey;
+}
+
+export interface InventoryUnequipPayload {
+  slot: EquipmentSlotKey;
+}

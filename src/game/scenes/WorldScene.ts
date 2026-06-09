@@ -17,9 +17,11 @@ export class WorldScene extends Phaser.Scene {
   private buildings: BuildingEntry[] = []
   private eKey!: Phaser.Input.Keyboard.Key
   private escKey!: Phaser.Input.Keyboard.Key
+  private cKey!: Phaser.Input.Keyboard.Key
   private promptText!: Phaser.GameObjects.Text
   private popup!: Phaser.GameObjects.Container
   private popupOpen = false
+  private characterOpen = false
 
   constructor() {
     super({ key: 'WorldScene' })
@@ -107,6 +109,7 @@ export class WorldScene extends Phaser.Scene {
     }
     this.eKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E)
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
+    this.cKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.C)
 
     // Proximity prompt text (camera-fixed via setScrollFactor)
     this.promptText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 100, 'Press E to enter', {
@@ -209,6 +212,19 @@ export class WorldScene extends Phaser.Scene {
   }
 
   update() {
+    // Open character screen with C key (when no popup is open)
+    if (!this.popupOpen && !this.characterOpen && Phaser.Input.Keyboard.JustDown(this.cKey)) {
+      this.characterOpen = true
+      this.player.setVelocity(0, 0)
+      this.scene.pause('WorldScene')
+      this.scene.launch('CharacterScene')
+      // Listen for CharacterScene to stop so we can mark it closed
+      this.scene.get('CharacterScene').events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+        this.characterOpen = false
+      })
+      return
+    }
+
     if (!this.popupOpen) {
       this.player.update(this.cursors, this.wasd)
     } else {

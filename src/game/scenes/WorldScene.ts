@@ -182,16 +182,11 @@ export class WorldScene extends Phaser.Scene {
       this.add.image(lx, ly, 'lamppost').setDepth(3).setScale(2.5)
     }
 
-    for (const [bx, by] of [[1190, 1310], [1370, 1310], [1250, 1360], [1310, 1360]] as [number, number][]) {
-      this.add.image(bx, by, 'bench').setDepth(3).setScale(3)
-    }
-
     for (const [bx, by] of [[1200, 1440], [1220, 1455], [1360, 1440], [1380, 1455]] as [number, number][]) {
       this.add.image(bx, by, 'barrel').setDepth(3).setScale(2.5)
     }
 
     this.add.image(1280, 1170, 'sign').setDepth(3).setScale(3)
-    this.add.image(1150, 1280, 'sign').setDepth(3).setScale(3).setFlipX(true)
 
     for (const [rx, ry] of [
       [1010, 1220], [1550, 1220], [1010, 1380], [1550, 1380],

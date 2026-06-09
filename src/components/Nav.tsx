@@ -22,15 +22,6 @@ export default function Nav() {
         </Link>
 
         <Link
-          to="/play"
-          className={`text-sm font-medium transition-colors ${
-            pathname === '/play' ? 'text-lumen-gold' : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          Play
-        </Link>
-
-        <Link
           to="/settings"
           className={`text-sm font-medium transition-colors ${
             pathname === '/settings' ? 'text-lumen-gold' : 'text-gray-400 hover:text-white'

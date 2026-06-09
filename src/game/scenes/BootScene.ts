@@ -47,9 +47,10 @@ export class BootScene extends Phaser.Scene {
     // Hat cone
     pg.fillStyle(0x2d0080, 1)
     pg.fillTriangle(16, 0, 7, 10, 25, 10)
-    // Hat star
+    // Hat star (drawn as a small diamond)
     pg.fillStyle(0xffd700, 1)
-    pg.fillStar(16, 4, 3, 4, 2)
+    pg.fillTriangle(16, 1, 14, 4, 18, 4)
+    pg.fillTriangle(16, 7, 14, 4, 18, 4)
 
     // Staff (right side)
     pg.fillStyle(0x8b6914, 1)

@@ -1,54 +1,58 @@
+// Manages turn-based PvP/PvE combat sessions. Not used for learning/classroom content.
+
 /**
  * CombatManager — handles turn-based combat sessions.
  *
  * Security / anti-cheat notes:
  *  - All damage calculations happen server-side.
- *  - Each question has a 30-second server-enforced time limit.  If the client
- *    takes longer, `submitAnswer` treats it as incorrect and applies damage.
  *  - The `CombatSession` is keyed by a random UUID unknown to the client
  *    before combat starts, preventing session forgery.
  *  - HP values are stored in the session (mirrored from PlayerManager) and
  *    updated only here.
+ *  - Question delivery and answer validation are handled externally (by the
+ *    socket handler and QuestionEngine).  CombatManager only consumes the
+ *    validated boolean result via processTurn().
  */
 
 import { randomUUID } from 'crypto';
-import type { CombatSession, Subject, Difficulty } from '../types/index.js';
-import type { QuestionEngine } from './QuestionEngine.js';
+import type { CombatSession } from '../types/index.js';
 import type { PlayerManager } from './PlayerManager.js';
-import { ANSWER_TIME_LIMIT_SECONDS } from './QuestionEngine.js';
 
-/** Base damage dealt when a player answers correctly. */
+/** Base damage dealt to the defender when the attacker answers correctly. */
 const BASE_CORRECT_DAMAGE = 25;
-/** Base damage taken when a player answers incorrectly. */
+/** Base damage taken by the attacker when they answer incorrectly. */
 const BASE_WRONG_DAMAGE = 15;
 /** XP awarded to the winner of a combat. */
 const COMBAT_WIN_XP = 50;
 
-export interface CombatEndResult {
-  winnerId: string;
-  xpGained: number;
-  attackerHp: number;
-  defenderHp: number;
-}
-
-export interface AnswerResult {
-  correct: boolean;
+export interface CombatTurnResult {
   damage: number;
-  explanation: string;
-  attackerHp: number;
-  defenderHp: number;
-  combatEnd?: CombatEndResult;
-  nextSessionQuestion?: ReturnType<QuestionEngine['getClientQuestion']>;
+  newAttackerHp: number;
+  newDefenderHp: number;
+  combatOver: boolean;
+  /** Socket ID of the winner — present only when combatOver is true. */
+  winner?: string;
+  xpGained: number;
 }
 
 export class CombatManager {
   /** sessionId → CombatSession */
   private sessions: Map<string, CombatSession> = new Map();
 
-  constructor(
-    private questionEngine: QuestionEngine,
-    private playerManager: PlayerManager,
-  ) {}
+  constructor(private playerManager: PlayerManager) {}
+
+  // -------------------------------------------------------------------------
+  // Damage helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Calculate damage for this turn.
+   *  - Correct answer → attacker deals damage to the defender.
+   *  - Incorrect answer → attacker takes backfire damage.
+   */
+  calculateDamage(isCorrect: boolean): number {
+    return isCorrect ? BASE_CORRECT_DAMAGE : BASE_WRONG_DAMAGE;
+  }
 
   // -------------------------------------------------------------------------
   // Session lifecycle
@@ -56,35 +60,21 @@ export class CombatManager {
 
   /**
    * Start a new combat session between two participants.
-   * Returns the session and the first client-safe question.
+   * Returns the session, or null if the attacker is unknown.
    */
-  startCombat(
-    attackerId: string,
-    defenderId: string,
-    subject: Subject = 'math',
-    difficulty: Difficulty = 'easy',
-  ): {
-    session: CombatSession;
-    clientQuestion: ReturnType<QuestionEngine['getClientQuestion']>;
-  } | null {
+  startCombat(attackerId: string, defenderId: string): CombatSession | null {
     const attacker = this.playerManager.getPlayer(attackerId);
     if (!attacker) return null;
 
-    // For NPC defenders we use a fixed HP pool; for player defenders we read theirs.
     const defenderPlayer = this.playerManager.getPlayer(defenderId);
     const defenderHp = defenderPlayer ? defenderPlayer.hp : 100;
     const defenderMaxHp = defenderPlayer ? defenderPlayer.maxHp : 100;
-
-    const firstQuestion = this.questionEngine.getQuestion(subject, difficulty);
-    if (!firstQuestion) return null;
 
     const sessionId = randomUUID();
     const session: CombatSession = {
       sessionId,
       attackerId,
       defenderId,
-      currentQuestion: firstQuestion,
-      questionStartedAt: Date.now(),
       turn: 'player',
       isActive: true,
       attackerHp: attacker.hp,
@@ -94,133 +84,100 @@ export class CombatManager {
     };
 
     this.sessions.set(sessionId, session);
+    return session;
+  }
+
+  // -------------------------------------------------------------------------
+  // Turn processing
+  // -------------------------------------------------------------------------
+
+  /**
+   * Process a combat turn given a pre-validated answer result.
+   *
+   * The caller (socket handler) is responsible for:
+   *  1. Fetching the current question via QuestionEngine.
+   *  2. Validating the player's answer via QuestionEngine.validateAnswer().
+   *  3. Passing the boolean result and the explanation here does NOT happen —
+   *     the handler holds those; this method only receives the boolean.
+   *
+   * Anti-cheat checks:
+   *  - Session must exist and be active.
+   *  - actingPlayerId must be the registered attacker.
+   */
+  processTurn(
+    sessionId: string,
+    actingPlayerId: string,
+    answerCorrect: boolean,
+  ): CombatTurnResult | { error: string } {
+    const session = this.sessions.get(sessionId);
+    if (!session) return { error: 'Combat session not found.' };
+    if (!session.isActive) return { error: 'Combat session is already over.' };
+    if (session.attackerId !== actingPlayerId) return { error: 'It is not your turn.' };
+
+    const damage = this.calculateDamage(answerCorrect);
+
+    if (answerCorrect) {
+      session.defenderHp = Math.max(0, session.defenderHp - damage);
+      const defenderPlayer = this.playerManager.getPlayer(session.defenderId);
+      if (defenderPlayer) this.playerManager.applyDamage(session.defenderId, damage);
+    } else {
+      session.attackerHp = Math.max(0, session.attackerHp - damage);
+      this.playerManager.applyDamage(session.attackerId, damage);
+    }
+
+    // Check for combat end
+    if (session.defenderHp <= 0 || session.attackerHp <= 0) {
+      session.isActive = false;
+      const winner = session.defenderHp <= 0 ? session.attackerId : session.defenderId;
+      const xpGained = winner === session.attackerId ? COMBAT_WIN_XP : 0;
+      if (xpGained > 0) {
+        this.playerManager.addXp(session.attackerId, xpGained);
+      }
+      return {
+        damage,
+        newAttackerHp: session.attackerHp,
+        newDefenderHp: session.defenderHp,
+        combatOver: true,
+        winner,
+        xpGained,
+      };
+    }
 
     return {
-      session,
-      clientQuestion: this.questionEngine.getClientQuestion(firstQuestion),
+      damage,
+      newAttackerHp: session.attackerHp,
+      newDefenderHp: session.defenderHp,
+      combatOver: false,
+      xpGained: 0,
     };
   }
 
   // -------------------------------------------------------------------------
-  // Answer processing
+  // Lookups
   // -------------------------------------------------------------------------
 
-  /**
-   * Process a player's answer for the given session.
-   *
-   * Anti-cheat checks:
-   *  1. Session must exist and be active.
-   *  2. The submitting socket must be the attacker for this session.
-   *  3. The time limit must not have expired.
-   */
-  submitAnswer(
-    sessionId: string,
-    socketId: string,
-    answerIndex: number,
-    subject: Subject = 'math',
-    difficulty: Difficulty = 'easy',
-  ): AnswerResult | { error: string } {
-    const session = this.sessions.get(sessionId);
-    if (!session) return { error: 'Combat session not found.' };
-    if (!session.isActive) return { error: 'Combat session is already over.' };
-    if (session.attackerId !== socketId) return { error: 'It is not your turn.' };
-    if (!session.currentQuestion) return { error: 'No active question for this session.' };
+  getCombatSession(sessionId: string): CombatSession | undefined {
+    return this.sessions.get(sessionId);
+  }
 
-    // ── Time-limit enforcement ────────────────────────────────────────────
-    const elapsed = (Date.now() - session.questionStartedAt) / 1000;
-    const timedOut = elapsed > ANSWER_TIME_LIMIT_SECONDS;
-
-    const validationResult = timedOut
-      ? { correct: false, explanation: 'Time ran out! Try to answer faster next time.' }
-      : this.questionEngine.validateAnswer(session.currentQuestion.id, answerIndex);
-
-    if (!validationResult) return { error: 'Question validation failed.' };
-
-    const { correct, explanation } = validationResult;
-
-    // ── Damage calculation ────────────────────────────────────────────────
-    let damage = 0;
-    if (correct) {
-      damage = BASE_CORRECT_DAMAGE;
-      session.defenderHp = Math.max(0, session.defenderHp - damage);
-    } else {
-      damage = BASE_WRONG_DAMAGE;
-      session.attackerHp = Math.max(0, session.attackerHp - damage);
-    }
-
-    // Sync HP back to PlayerManager for persistence
-    if (correct) {
-      const defenderPlayer = this.playerManager.getPlayer(session.defenderId);
-      if (defenderPlayer) this.playerManager.applyDamage(session.defenderId, damage);
-    } else {
-      this.playerManager.applyDamage(session.attackerId, damage);
-    }
-
-    // ── Check for combat end ──────────────────────────────────────────────
-    if (session.defenderHp <= 0 || session.attackerHp <= 0) {
-      session.isActive = false;
-
-      const winnerId =
-        session.defenderHp <= 0 ? session.attackerId : session.defenderId;
-
-      const xpGained = winnerId === session.attackerId ? COMBAT_WIN_XP : 0;
-      if (xpGained > 0) {
-        this.playerManager.addXp(session.attackerId, xpGained);
-      }
-
-      return {
-        correct,
-        damage,
-        explanation,
-        attackerHp: session.attackerHp,
-        defenderHp: session.defenderHp,
-        combatEnd: {
-          winnerId,
-          xpGained,
-          attackerHp: session.attackerHp,
-          defenderHp: session.defenderHp,
-        },
-      };
-    }
-
-    // ── Prepare next question ─────────────────────────────────────────────
-    const nextQuestion = this.questionEngine.getQuestion(subject, difficulty);
-    if (!nextQuestion) {
-      // No more questions — end combat (attacker wins by default)
-      session.isActive = false;
-      return {
-        correct,
-        damage,
-        explanation,
-        attackerHp: session.attackerHp,
-        defenderHp: session.defenderHp,
-        combatEnd: {
-          winnerId: session.attackerId,
-          xpGained: COMBAT_WIN_XP,
-          attackerHp: session.attackerHp,
-          defenderHp: session.defenderHp,
-        },
-      };
-    }
-
-    session.currentQuestion = nextQuestion;
-    session.questionStartedAt = Date.now();
-
-    return {
-      correct,
-      damage,
-      explanation,
-      attackerHp: session.attackerHp,
-      defenderHp: session.defenderHp,
-      nextSessionQuestion: this.questionEngine.getClientQuestion(nextQuestion),
-    };
+  /** Alias kept so existing callers (handlers, GameManager) need no update. */
+  getSession(sessionId: string): CombatSession | undefined {
+    return this.getCombatSession(sessionId);
   }
 
   // -------------------------------------------------------------------------
   // Cleanup
   // -------------------------------------------------------------------------
 
-  /** End any active sessions for a disconnecting player. */
+  endCombat(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.isActive = false;
+      this.sessions.delete(sessionId);
+    }
+  }
+
+  /** End any active sessions for a disconnecting player. Returns ended session IDs. */
   endSessionsForPlayer(socketId: string): string[] {
     const ended: string[] = [];
     for (const [id, session] of this.sessions) {
@@ -233,9 +190,5 @@ export class CombatManager {
       }
     }
     return ended;
-  }
-
-  getSession(sessionId: string): CombatSession | undefined {
-    return this.sessions.get(sessionId);
   }
 }

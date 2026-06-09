@@ -9,7 +9,9 @@
  * Security rules enforced here:
  *  - Correct answer indices are NEVER included in any outgoing event.
  *  - Chat messages are sanitised (HTML stripped) and rate-limited (1/s).
- *  - Answer time limits are enforced inside CombatManager.
+ *  - Answer time limits are enforced inside the respective managers.
+ *  - Combat and learning flows are completely separate: combat events go to
+ *    CombatManager; learning events go to LearningSessionManager.
  */
 
 import type { Server, Socket } from 'socket.io';
@@ -24,13 +26,20 @@ import type {
   InventoryUnequipPayload,
   EquipmentSlotKey,
   ChestTransferPayload,
+  LearningStartPayload,
+  LearningAnswerPayload,
+  LearningEndPayload,
+  Subject,
+  Difficulty,
 } from '../types/index.js';
-
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
 const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
   'mainHand', 'offHand', 'helm', 'earring',
   'ring1', 'ring2', 'belt', 'shoes', 'gloves', 'necklace',
 ]);
+
+const VALID_SUBJECTS: ReadonlySet<Subject> = new Set(['math', 'science', 'history', 'language']);
+const VALID_DIFFICULTIES: ReadonlySet<Difficulty> = new Set(['easy', 'medium', 'hard']);
 
 /** Maximum chat message length (characters). */
 const MAX_CHAT_LENGTH = 200;
@@ -64,7 +73,14 @@ function isSafeNumber(v: unknown, min: number, max: number): boolean {
 // ---------------------------------------------------------------------------
 
 export function registerHandlers(io: Server, socket: Socket, game: GameManager): void {
-  const { playerManager, combatManager, inventoryManager, chestManager } = game;
+  const {
+    playerManager,
+    questionEngine,
+    combatManager,
+    learningSessionManager,
+    inventoryManager,
+    chestManager,
+  } = game;
 
   // ── player:join ──────────────────────────────────────────────────────────
   socket.on('player:join', (payload: PlayerJoinPayload) => {
@@ -144,23 +160,25 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
     }
 
     // Determine subject/difficulty from player level
-    const difficulty = player.level <= 2 ? 'easy' : player.level <= 5 ? 'medium' : 'hard';
+    const difficulty: Difficulty = player.level <= 2 ? 'easy' : player.level <= 5 ? 'medium' : 'hard';
     const subjects = ['math', 'science', 'history', 'language'] as const;
-    const subject = subjects[Math.floor(Math.random() * subjects.length)];
+    const subject: Subject = subjects[Math.floor(Math.random() * subjects.length)];
 
-    const result = combatManager.startCombat(
-      socket.id,
-      payload.targetId,
-      subject,
-      difficulty,
-    );
-
-    if (!result) {
+    // CombatManager creates the session; QuestionEngine fetches the first question.
+    const session = combatManager.startCombat(socket.id, payload.targetId);
+    if (!session) {
       socket.emit('error', { message: 'Could not start combat session.' });
       return;
     }
 
-    const { session, clientQuestion } = result;
+    const firstQuestion = questionEngine.getQuestion(subject, difficulty);
+    if (!firstQuestion) {
+      combatManager.endCombat(session.sessionId);
+      socket.emit('error', { message: 'No questions available for this combat.' });
+      return;
+    }
+
+    const clientQuestion = questionEngine.getClientQuestion(firstQuestion);
 
     // Send the session ID and first question (NO correct answer) to the attacker
     socket.emit('combat:started', {
@@ -177,6 +195,7 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
   socket.on('combat:answer', (payload: CombatAnswerPayload) => {
     if (
       typeof payload?.sessionId !== 'string' ||
+      typeof payload?.questionId !== 'string' ||
       !isSafeNumber(payload?.answerIndex, 0, 3)
     ) {
       socket.emit('error', { message: 'Invalid answer payload.' });
@@ -189,16 +208,84 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
       return;
     }
 
-    const difficulty = player.level <= 2 ? 'easy' : player.level <= 5 ? 'medium' : 'hard';
-    const subjects = ['math', 'science', 'history', 'language'] as const;
-    const subject = subjects[Math.floor(Math.random() * subjects.length)];
+    // ── Step 1: Validate the answer via QuestionEngine (time-limit enforced here) ──
+    const session = combatManager.getSession(payload.sessionId);
+    if (!session) {
+      socket.emit('error', { message: 'Combat session not found.' });
+      return;
+    }
 
-    const result = combatManager.submitAnswer(
-      payload.sessionId,
+    const validation = questionEngine.validateAnswer(payload.questionId, payload.answerIndex);
+    if (!validation) {
+      socket.emit('error', { message: 'Question not found or validation failed.' });
+      return;
+    }
+
+    const { correct, explanation } = validation;
+
+    // ── Step 2: Advance combat state with the validated result ──────────────
+    const turnResult = combatManager.processTurn(payload.sessionId, socket.id, correct);
+    if ('error' in turnResult) {
+      socket.emit('error', { message: turnResult.error });
+      return;
+    }
+
+    const { damage, newAttackerHp, newDefenderHp, combatOver, winner, xpGained } = turnResult;
+
+    // ── Step 3: Fetch next question for the attacker (if combat continues) ──
+    let nextClientQuestion: ReturnType<typeof questionEngine.getClientQuestion> | undefined;
+    if (!combatOver) {
+      const difficulty: Difficulty = player.level <= 2 ? 'easy' : player.level <= 5 ? 'medium' : 'hard';
+      const subjects = ['math', 'science', 'history', 'language'] as const;
+      const subject: Subject = subjects[Math.floor(Math.random() * subjects.length)];
+      const nextQ = questionEngine.getQuestion(subject, difficulty);
+      if (nextQ) nextClientQuestion = questionEngine.getClientQuestion(nextQ);
+    }
+
+    const responsePayload = {
+      correct,
+      damage,
+      explanation,
+      updatedHp: { attackerHp: newAttackerHp, defenderHp: newDefenderHp },
+      ...(combatOver
+        ? { combatEnd: { winnerId: winner!, xpGained } }
+        : {}),
+      ...(nextClientQuestion ? { nextQuestion: nextClientQuestion } : {}),
+    };
+
+    socket.emit('combat:result', responsePayload);
+
+    // If a second player was involved, notify them too
+    if (session.defenderId !== socket.id) {
+      const defenderSocket = io.sockets.sockets.get(session.defenderId);
+      if (defenderSocket) {
+        defenderSocket.emit('combat:result', responsePayload);
+      }
+    }
+  });
+
+  // ── learning:start ───────────────────────────────────────────────────────
+  socket.on('learning:start', (payload: LearningStartPayload) => {
+    if (
+      typeof payload?.subject !== 'string' ||
+      !VALID_SUBJECTS.has(payload.subject as Subject) ||
+      typeof payload?.difficulty !== 'string' ||
+      !VALID_DIFFICULTIES.has(payload.difficulty as Difficulty)
+    ) {
+      socket.emit('error', { message: 'Invalid learning start payload. Provide a valid subject and difficulty.' });
+      return;
+    }
+
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before starting a learning session.' });
+      return;
+    }
+
+    const result = learningSessionManager.startSession(
       socket.id,
-      payload.answerIndex,
-      subject,
-      difficulty,
+      payload.subject as Subject,
+      payload.difficulty as Difficulty,
     );
 
     if ('error' in result) {
@@ -206,38 +293,78 @@ export function registerHandlers(io: Server, socket: Socket, game: GameManager):
       return;
     }
 
-    const {
-      correct,
-      damage,
-      explanation,
-      attackerHp,
-      defenderHp,
-      combatEnd,
-      nextSessionQuestion,
-    } = result;
+    const { session, firstQuestion } = result;
 
-    const responsePayload = {
-      correct,
-      damage,
-      explanation,
-      updatedHp: { attackerHp, defenderHp },
-      ...(combatEnd ? { combatEnd } : {}),
-      ...(nextSessionQuestion ? { nextQuestion: nextSessionQuestion } : {}),
-    };
+    socket.emit('learning:session_started', {
+      sessionId: session.sessionId,
+      firstQuestion,
+    });
 
-    socket.emit('combat:result', responsePayload);
+    console.log(
+      `[learning] ${socket.id} started session ${session.sessionId} (${payload.subject}/${payload.difficulty})`,
+    );
+  });
 
-    // If a second player was involved, notify them too
-    const session = combatManager.getSession(payload.sessionId);
-    if (session && session.defenderId !== socket.id) {
-      const defenderSocket = io.sockets.sockets.get(session.defenderId);
-      if (defenderSocket) {
-        defenderSocket.emit('combat:result', {
-          ...responsePayload,
-          // Flip perspective for the defender (their HP is "attacker" from defender's POV)
-        });
-      }
+  // ── learning:answer ──────────────────────────────────────────────────────
+  socket.on('learning:answer', (payload: LearningAnswerPayload) => {
+    if (
+      typeof payload?.sessionId !== 'string' ||
+      typeof payload?.questionId !== 'string' ||
+      !isSafeNumber(payload?.answerIndex, 0, 3)
+    ) {
+      socket.emit('error', { message: 'Invalid learning answer payload.' });
+      return;
     }
+
+    const result = learningSessionManager.submitAnswer(
+      payload.sessionId,
+      socket.id,
+      payload.questionId,
+      payload.answerIndex,
+    );
+
+    if ('error' in result) {
+      socket.emit('error', { message: result.error });
+      return;
+    }
+
+    const { correct, attemptsLeft, explanation, xpEarned, sessionComplete, perfectScore, nextQuestion } = result;
+
+    socket.emit('learning:answer_result', {
+      correct,
+      attemptsLeft,
+      explanation,
+      xpEarned,
+      sessionComplete,
+      perfectScore,
+      nextQuestion,
+    });
+
+    // Award a Knowledge Shard for a perfect score
+    if (perfectScore) {
+      inventoryManager.addShard(socket.id);
+      const inventory = inventoryManager.getInventory(socket.id);
+      if (inventory) {
+        socket.emit('inventory:updated', inventory);
+      }
+      console.log(`[learning] ${socket.id} achieved perfect score — shard awarded`);
+    }
+  });
+
+  // ── learning:end ─────────────────────────────────────────────────────────
+  socket.on('learning:end', (payload: LearningEndPayload) => {
+    if (typeof payload?.sessionId !== 'string') {
+      socket.emit('error', { message: 'Invalid learning end payload.' });
+      return;
+    }
+
+    const session = learningSessionManager.getSession(payload.sessionId);
+    if (!session || session.playerId !== socket.id) {
+      socket.emit('error', { message: 'Learning session not found or not owned by you.' });
+      return;
+    }
+
+    learningSessionManager.endSession(payload.sessionId);
   });
 
   // ── chat:message ─────────────────────────────────────────────────────────

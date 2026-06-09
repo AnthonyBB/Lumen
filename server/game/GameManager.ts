@@ -10,6 +10,7 @@ import type { Zone, PublicPlayer } from '../types/index.js';
 import { PlayerManager } from './PlayerManager.js';
 import { QuestionEngine } from './QuestionEngine.js';
 import { CombatManager } from './CombatManager.js';
+import { LearningSessionManager } from './LearningSessionManager.js';
 import { InventoryManager } from './InventoryManager.js';
 import { ChestManager } from './ChestManager.js';
 
@@ -20,6 +21,7 @@ export class GameManager {
   public readonly playerManager: PlayerManager;
   public readonly questionEngine: QuestionEngine;
   public readonly combatManager: CombatManager;
+  public readonly learningSessionManager: LearningSessionManager;
   public readonly inventoryManager: InventoryManager;
   public readonly chestManager: ChestManager;
 
@@ -29,7 +31,8 @@ export class GameManager {
   constructor() {
     this.playerManager = new PlayerManager();
     this.questionEngine = new QuestionEngine();
-    this.combatManager = new CombatManager(this.questionEngine, this.playerManager);
+    this.combatManager = new CombatManager(this.playerManager);
+    this.learningSessionManager = new LearningSessionManager(this.questionEngine, this.playerManager);
     this.inventoryManager = new InventoryManager();
     this.chestManager = new ChestManager(this.inventoryManager);
 
@@ -86,6 +89,9 @@ export class GameManager {
 
     // Clean up any active combat sessions
     this.combatManager.endSessionsForPlayer(socketId);
+
+    // Clean up any active learning sessions
+    this.learningSessionManager.endPlayerSession(socketId);
 
     // Release inventory memory
     this.inventoryManager.deleteInventory(socketId);

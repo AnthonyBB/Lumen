@@ -69,23 +69,63 @@ export interface ClientQuestion {
 }
 
 // ---------------------------------------------------------------------------
-// Combat
+// Combat — combat-only sessions.  For learning sessions, see LearningSession.
 // ---------------------------------------------------------------------------
 
 export type CombatTurn = 'player' | 'enemy';
 
+/**
+ * Combat-only session. For learning sessions, see LearningSession.
+ *
+ * Note: question tracking was removed from CombatSession in the refactor.
+ * The socket handler fetches and validates questions via QuestionEngine
+ * independently, then passes only the boolean result to CombatManager.processTurn().
+ */
 export interface CombatSession {
   sessionId: string;
   attackerId: string;   // socket ID of the player
   defenderId: string;   // could be an NPC id or another player's socket ID
-  currentQuestion: Question | null;
-  questionStartedAt: number; // unix ms — for enforcing time limits
   turn: CombatTurn;
   isActive: boolean;
   attackerHp: number;
   defenderHp: number;
   attackerMaxHp: number;
   defenderMaxHp: number;
+}
+
+// ---------------------------------------------------------------------------
+// Learning — classroom/education sessions.  No combat concepts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-question result recorded server-side during a learning session.
+ * Never contains correctIndex — only the boolean outcome.
+ */
+export interface LearningQuestionResult {
+  questionId: string;
+  correct: boolean;
+  attempts: number;   // how many attempts the player used (1–3)
+}
+
+/**
+ * Active learning session managed by LearningSessionManager.
+ * Completely separate from CombatSession — no attacker/defender, no HP.
+ */
+export interface LearningSession {
+  sessionId: string;
+  playerId: string;           // socket.id
+  subject: Subject;
+  difficulty: Difficulty;
+  /** Full server-side questions (with correctIndex) — never sent to client. */
+  questions: Question[];
+  currentIndex: number;
+  attemptsLeft: number;       // attempts remaining for current question (starts at 3)
+  correctCount: number;
+  xpEarned: number;
+  results: LearningQuestionResult[];
+  startedAt: number;          // unix ms
+  timeoutHandle?: ReturnType<typeof setTimeout>;
+  isComplete: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,11 +157,30 @@ export interface CombatStartPayload {
 
 export interface CombatAnswerPayload {
   sessionId: string;
+  /** The question ID being answered — validated server-side against the session. */
+  questionId: string;
   answerIndex: number;
 }
 
 export interface ChatMessagePayload {
   message: string;
+}
+
+// ── Learning event payloads (Client → Server) ──────────────────────────────
+
+export interface LearningStartPayload {
+  subject: Subject;
+  difficulty: Difficulty;
+}
+
+export interface LearningAnswerPayload {
+  sessionId: string;
+  questionId: string;
+  answerIndex: number;
+}
+
+export interface LearningEndPayload {
+  sessionId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +214,29 @@ export interface CombatResultPayload {
     xpGained: number;
   };
 }
+
+// ── Learning event payloads (Server → Client) ──────────────────────────────
+
+/** Sent after a learning session is successfully started. */
+export interface LearningSessionStartedPayload {
+  sessionId: string;
+  /** First question — correctIndex intentionally omitted. */
+  firstQuestion: ClientQuestion;
+}
+
+/** Sent after each answer submission. */
+export interface LearningAnswerResultPayload {
+  correct: boolean;
+  attemptsLeft: number;
+  explanation: string;
+  xpEarned: number;
+  sessionComplete: boolean;
+  perfectScore: boolean;
+  /** Next question to present — correctIndex intentionally omitted. Present unless session is complete. */
+  nextQuestion?: ClientQuestion;
+}
+
+// ---------------------------------------------------------------------------
 
 export interface ZonePlayersPayload {
   players: PublicPlayer[];

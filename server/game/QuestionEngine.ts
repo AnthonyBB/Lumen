@@ -1,3 +1,5 @@
+// Shared question bank used by both LearningSessionManager and CombatManager (for combat questions).
+
 /**
  * QuestionEngine — manages the question bank and answer validation.
  *

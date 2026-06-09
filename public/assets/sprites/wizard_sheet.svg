@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="48" viewBox="0 0 192 48"
+     shape-rendering="crispEdges" image-rendering="pixelated">
+
+  <!-- ═══════════════════════════════════════════════════════
+       FRAME 0 (x=0)  Idle facing right
+  ════════════════════════════════════════════════════════ -->
+  <g transform="translate(0,0)">
+    <!-- Staff (right side) -->
+    <rect x="26" y="8"  width="3" height="33" fill="#92400e"/>
+    <!-- Orb glow -->
+    <rect x="23" y="4"  width="9" height="9"  fill="#a5f3fc"/>
+    <!-- Orb core -->
+    <rect x="24" y="5"  width="7" height="7"  fill="#67e8f9"/>
+    <!-- Robe body -->
+    <rect x="8"  y="22" width="18" height="20" fill="#5b21b6"/>
+    <!-- Robe left shadow -->
+    <rect x="8"  y="22" width="4"  height="20" fill="#3b0764"/>
+    <!-- Robe hem shadow -->
+    <rect x="8"  y="38" width="18" height="4"  fill="#3b0764"/>
+    <!-- Belt -->
+    <rect x="8"  y="33" width="18" height="3"  fill="#fbbf24"/>
+    <!-- Head skin -->
+    <rect x="10" y="12" width="12" height="10" fill="#fde68a"/>
+    <rect x="9"  y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="22" y="14" width="2"  height="5"  fill="#fde68a"/>
+    <!-- Eyes -->
+    <rect x="12" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="18" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <!-- Hat brim -->
+    <rect x="7"  y="11" width="18" height="3"  fill="#312e81"/>
+    <!-- Hat cone (stacked rows) -->
+    <rect x="9"  y="9"  width="14" height="2"  fill="#1e1b4b"/>
+    <rect x="11" y="7"  width="10" height="2"  fill="#1e1b4b"/>
+    <rect x="13" y="5"  width="6"  height="2"  fill="#1e1b4b"/>
+    <rect x="14" y="3"  width="4"  height="2"  fill="#1e1b4b"/>
+    <rect x="15" y="1"  width="2"  height="2"  fill="#1e1b4b"/>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════
+       FRAME 1 (x=32)  Walk right A — left hem down, staff tilted
+  ════════════════════════════════════════════════════════ -->
+  <g transform="translate(32,0)">
+    <rect x="27" y="7"  width="3" height="34" fill="#92400e"/>
+    <rect x="23" y="3"  width="9" height="9"  fill="#a5f3fc"/>
+    <rect x="24" y="4"  width="7" height="7"  fill="#67e8f9"/>
+    <rect x="8"  y="22" width="18" height="20" fill="#5b21b6"/>
+    <rect x="8"  y="22" width="4"  height="20" fill="#3b0764"/>
+    <!-- Hem: left raised 2px -->
+    <rect x="8"  y="40" width="9"  height="2"  fill="#3b0764"/>
+    <rect x="17" y="38" width="9"  height="4"  fill="#3b0764"/>
+    <rect x="8"  y="33" width="18" height="3"  fill="#fbbf24"/>
+    <rect x="10" y="12" width="12" height="10" fill="#fde68a"/>
+    <rect x="9"  y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="22" y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="12" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="18" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="7"  y="11" width="18" height="3"  fill="#312e81"/>
+    <rect x="9"  y="9"  width="14" height="2"  fill="#1e1b4b"/>
+    <rect x="11" y="7"  width="10" height="2"  fill="#1e1b4b"/>
+    <rect x="13" y="5"  width="6"  height="2"  fill="#1e1b4b"/>
+    <rect x="14" y="3"  width="4"  height="2"  fill="#1e1b4b"/>
+    <rect x="15" y="1"  width="2"  height="2"  fill="#1e1b4b"/>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════
+       FRAME 2 (x=64)  Walk right B — right hem down, staff other tilt
+  ════════════════════════════════════════════════════════ -->
+  <g transform="translate(64,0)">
+    <rect x="25" y="9"  width="3" height="32" fill="#92400e"/>
+    <rect x="22" y="5"  width="9" height="9"  fill="#a5f3fc"/>
+    <rect x="23" y="6"  width="7" height="7"  fill="#67e8f9"/>
+    <rect x="8"  y="22" width="18" height="20" fill="#5b21b6"/>
+    <rect x="8"  y="22" width="4"  height="20" fill="#3b0764"/>
+    <!-- Hem: right raised 2px -->
+    <rect x="8"  y="38" width="9"  height="4"  fill="#3b0764"/>
+    <rect x="17" y="40" width="9"  height="2"  fill="#3b0764"/>
+    <rect x="8"  y="33" width="18" height="3"  fill="#fbbf24"/>
+    <rect x="10" y="12" width="12" height="10" fill="#fde68a"/>
+    <rect x="9"  y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="22" y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="12" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="18" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="7"  y="11" width="18" height="3"  fill="#312e81"/>
+    <rect x="9"  y="9"  width="14" height="2"  fill="#1e1b4b"/>
+    <rect x="11" y="7"  width="10" height="2"  fill="#1e1b4b"/>
+    <rect x="13" y="5"  width="6"  height="2"  fill="#1e1b4b"/>
+    <rect x="14" y="3"  width="4"  height="2"  fill="#1e1b4b"/>
+    <rect x="15" y="1"  width="2"  height="2"  fill="#1e1b4b"/>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════
+       FRAME 3 (x=96)  Idle facing left — staff on left
+  ════════════════════════════════════════════════════════ -->
+  <g transform="translate(96,0)">
+    <!-- Staff (left side) -->
+    <rect x="3"  y="8"  width="3" height="33" fill="#92400e"/>
+    <rect x="0"  y="4"  width="9" height="9"  fill="#a5f3fc"/>
+    <rect x="1"  y="5"  width="7" height="7"  fill="#67e8f9"/>
+    <!-- Robe body -->
+    <rect x="6"  y="22" width="18" height="20" fill="#5b21b6"/>
+    <!-- Robe right shadow (mirrored) -->
+    <rect x="20" y="22" width="4"  height="20" fill="#3b0764"/>
+    <rect x="6"  y="38" width="18" height="4"  fill="#3b0764"/>
+    <rect x="6"  y="33" width="18" height="3"  fill="#fbbf24"/>
+    <rect x="10" y="12" width="12" height="10" fill="#fde68a"/>
+    <rect x="8"  y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="22" y="14" width="2"  height="5"  fill="#fde68a"/>
+    <!-- Eyes mirrored -->
+    <rect x="10" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="18" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="7"  y="11" width="18" height="3"  fill="#312e81"/>
+    <rect x="9"  y="9"  width="14" height="2"  fill="#1e1b4b"/>
+    <rect x="11" y="7"  width="10" height="2"  fill="#1e1b4b"/>
+    <rect x="13" y="5"  width="6"  height="2"  fill="#1e1b4b"/>
+    <rect x="14" y="3"  width="4"  height="2"  fill="#1e1b4b"/>
+    <rect x="15" y="1"  width="2"  height="2"  fill="#1e1b4b"/>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════
+       FRAME 4 (x=128)  Walk left A
+  ════════════════════════════════════════════════════════ -->
+  <g transform="translate(128,0)">
+    <rect x="2"  y="7"  width="3" height="34" fill="#92400e"/>
+    <rect x="0"  y="3"  width="9" height="9"  fill="#a5f3fc"/>
+    <rect x="1"  y="4"  width="7" height="7"  fill="#67e8f9"/>
+    <rect x="6"  y="22" width="18" height="20" fill="#5b21b6"/>
+    <rect x="20" y="22" width="4"  height="20" fill="#3b0764"/>
+    <!-- Hem: right raised 2px -->
+    <rect x="6"  y="38" width="9"  height="4"  fill="#3b0764"/>
+    <rect x="15" y="40" width="9"  height="2"  fill="#3b0764"/>
+    <rect x="6"  y="33" width="18" height="3"  fill="#fbbf24"/>
+    <rect x="10" y="12" width="12" height="10" fill="#fde68a"/>
+    <rect x="8"  y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="22" y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="10" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="18" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="7"  y="11" width="18" height="3"  fill="#312e81"/>
+    <rect x="9"  y="9"  width="14" height="2"  fill="#1e1b4b"/>
+    <rect x="11" y="7"  width="10" height="2"  fill="#1e1b4b"/>
+    <rect x="13" y="5"  width="6"  height="2"  fill="#1e1b4b"/>
+    <rect x="14" y="3"  width="4"  height="2"  fill="#1e1b4b"/>
+    <rect x="15" y="1"  width="2"  height="2"  fill="#1e1b4b"/>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════
+       FRAME 5 (x=160)  Walk left B
+  ════════════════════════════════════════════════════════ -->
+  <g transform="translate(160,0)">
+    <rect x="4"  y="9"  width="3" height="32" fill="#92400e"/>
+    <rect x="1"  y="5"  width="9" height="9"  fill="#a5f3fc"/>
+    <rect x="2"  y="6"  width="7" height="7"  fill="#67e8f9"/>
+    <rect x="6"  y="22" width="18" height="20" fill="#5b21b6"/>
+    <rect x="20" y="22" width="4"  height="20" fill="#3b0764"/>
+    <!-- Hem: left raised 2px -->
+    <rect x="6"  y="40" width="9"  height="2"  fill="#3b0764"/>
+    <rect x="15" y="38" width="9"  height="4"  fill="#3b0764"/>
+    <rect x="6"  y="33" width="18" height="3"  fill="#fbbf24"/>
+    <rect x="10" y="12" width="12" height="10" fill="#fde68a"/>
+    <rect x="8"  y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="22" y="14" width="2"  height="5"  fill="#fde68a"/>
+    <rect x="10" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="18" y="15" width="2" height="2" fill="#1e1b4b"/>
+    <rect x="7"  y="11" width="18" height="3"  fill="#312e81"/>
+    <rect x="9"  y="9"  width="14" height="2"  fill="#1e1b4b"/>
+    <rect x="11" y="7"  width="10" height="2"  fill="#1e1b4b"/>
+    <rect x="13" y="5"  width="6"  height="2"  fill="#1e1b4b"/>
+    <rect x="14" y="3"  width="4"  height="2"  fill="#1e1b4b"/>
+    <rect x="15" y="1"  width="2"  height="2"  fill="#1e1b4b"/>
+  </g>
+
+</svg>

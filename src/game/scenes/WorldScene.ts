@@ -29,15 +29,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   create() {
-    // Background ground tiles
+    // Background ground tiles (SVG grass tile has built-in detail)
     this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 'ground').setOrigin(0, 0)
-
-    // Scatter some grass detail tiles
-    for (let i = 0; i < 300; i++) {
-      const gx = Phaser.Math.Between(0, WORLD_WIDTH - TILE_SIZE)
-      const gy = Phaser.Math.Between(0, WORLD_HEIGHT - TILE_SIZE)
-      this.add.image(gx, gy, 'grass_detail').setOrigin(0, 0).setAlpha(0.7)
-    }
 
     // Path tiles — cross through center
     const centerX = WORLD_WIDTH / 2
@@ -74,9 +67,9 @@ export class WorldScene extends Phaser.Scene {
 
     // Buildings — grouped close together near world center
     const buildingDefs = [
-      { label: 'Learning Center', x: 1050, y: 1100, w: 200, h: 140 },
-      { label: 'Combat Training', x: 1510, y: 1100, w: 200, h: 140 },
-      { label: 'Market',          x: 1280, y: 1420, w: 180, h: 130 },
+      { label: 'Learning Center', x: 1050, y: 1100, w: 220, h: 260 },
+      { label: 'Combat Training', x: 1510, y: 1100, w: 220, h: 260 },
+      { label: 'Market',          x: 1280, y: 1420, w: 200, h: 240 },
     ]
 
     for (const def of buildingDefs) {

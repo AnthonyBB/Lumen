@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="240" viewBox="0 0 200 240"
+     shape-rendering="crispEdges" image-rendering="pixelated">
+
+  <!-- Ground shadow -->
+  <ellipse cx="100" cy="234" rx="86" ry="8" fill="#000000" fill-opacity="0.16"/>
+
+  <!-- ── Warm tan stone walls ── -->
+  <rect x="16" y="80" width="168" height="154" fill="#a89070"/>
+  <!-- Grout lines -->
+  <rect x="16" y="100" width="168" height="2" fill="#7a6a52"/>
+  <rect x="16" y="120" width="168" height="2" fill="#7a6a52"/>
+  <rect x="16" y="140" width="168" height="2" fill="#7a6a52"/>
+  <rect x="16" y="160" width="168" height="2" fill="#7a6a52"/>
+  <rect x="16" y="180" width="168" height="2" fill="#7a6a52"/>
+  <rect x="16" y="200" width="168" height="2" fill="#7a6a52"/>
+  <rect x="16" y="220" width="168" height="2" fill="#7a6a52"/>
+  <!-- Vertical joints alternating -->
+  <rect x="56"  y="80"  width="2" height="20" fill="#7a6a52"/>
+  <rect x="100" y="80"  width="2" height="20" fill="#7a6a52"/>
+  <rect x="144" y="80"  width="2" height="20" fill="#7a6a52"/>
+  <rect x="34"  y="100" width="2" height="20" fill="#7a6a52"/>
+  <rect x="78"  y="100" width="2" height="20" fill="#7a6a52"/>
+  <rect x="122" y="100" width="2" height="20" fill="#7a6a52"/>
+  <rect x="166" y="100" width="2" height="20" fill="#7a6a52"/>
+  <rect x="56"  y="120" width="2" height="20" fill="#7a6a52"/>
+  <rect x="100" y="120" width="2" height="20" fill="#7a6a52"/>
+  <rect x="144" y="120" width="2" height="20" fill="#7a6a52"/>
+  <rect x="34"  y="140" width="2" height="20" fill="#7a6a52"/>
+  <rect x="78"  y="140" width="2" height="20" fill="#7a6a52"/>
+  <rect x="122" y="140" width="2" height="20" fill="#7a6a52"/>
+  <rect x="166" y="140" width="2" height="20" fill="#7a6a52"/>
+  <rect x="56"  y="160" width="2" height="20" fill="#7a6a52"/>
+  <rect x="100" y="160" width="2" height="20" fill="#7a6a52"/>
+  <rect x="144" y="160" width="2" height="20" fill="#7a6a52"/>
+  <rect x="34"  y="180" width="2" height="20" fill="#7a6a52"/>
+  <rect x="78"  y="180" width="2" height="20" fill="#7a6a52"/>
+  <rect x="122" y="180" width="2" height="20" fill="#7a6a52"/>
+  <rect x="166" y="180" width="2" height="20" fill="#7a6a52"/>
+  <rect x="56"  y="200" width="2" height="20" fill="#7a6a52"/>
+  <rect x="100" y="200" width="2" height="20" fill="#7a6a52"/>
+  <rect x="144" y="200" width="2" height="20" fill="#7a6a52"/>
+  <rect x="34"  y="220" width="2" height="14" fill="#7a6a52"/>
+  <rect x="78"  y="220" width="2" height="14" fill="#7a6a52"/>
+  <rect x="122" y="220" width="2" height="14" fill="#7a6a52"/>
+  <rect x="166" y="220" width="2" height="14" fill="#7a6a52"/>
+
+  <!-- ── Thatched roof ── -->
+  <!-- Main roof shape — triangle approximation -->
+  <polygon points="100,10 8,80 192,80" fill="#78350f"/>
+  <!-- Thatch texture lines -->
+  <polygon points="100,10 46,60 54,60"  fill="#92400e"/>
+  <polygon points="100,10 62,70 70,70"  fill="#92400e"/>
+  <polygon points="100,10 78,76 86,76"  fill="#92400e"/>
+  <polygon points="100,10 154,60 146,60" fill="#92400e"/>
+  <polygon points="100,10 138,70 130,70" fill="#92400e"/>
+  <polygon points="100,10 122,76 114,76" fill="#92400e"/>
+  <!-- Roof ridge highlight -->
+  <polygon points="100,10 96,30 104,30"  fill="#92400e"/>
+
+  <!-- ── Colorful awning ── -->
+  <!-- Awning bracket + canopy (alternating red/cream stripes) -->
+  <rect x="16" y="80" width="168" height="20" fill="#dc2626"/>
+  <rect x="16" y="80"  width="28" height="20" fill="#f5f5f4"/>
+  <rect x="72" y="80"  width="28" height="20" fill="#f5f5f4"/>
+  <rect x="128" y="80" width="28" height="20" fill="#f5f5f4"/>
+  <!-- Awning fringe bottom -->
+  <rect x="16" y="98" width="168" height="4"  fill="#dc2626"/>
+
+  <!-- ── Open arch entrance ── -->
+  <rect x="74" y="158" width="52" height="80" fill="#1c1917"/>
+  <!-- Arch top -->
+  <rect x="78" y="148" width="44" height="14" fill="#1c1917"/>
+  <rect x="84" y="142" width="32" height="8"  fill="#1c1917"/>
+  <rect x="92" y="138" width="16" height="6"  fill="#1c1917"/>
+
+  <!-- ── Hanging sign with gold coin ── -->
+  <!-- Sign board -->
+  <rect x="72" y="104" width="56" height="28" fill="#4a3018"/>
+  <rect x="73" y="105" width="54" height="26" fill="#6b4a28"/>
+  <!-- Coin -->
+  <rect x="92" y="108" width="16" height="16" fill="#fbbf24"/>
+  <rect x="90" y="110" width="20" height="12" fill="#fbbf24"/>
+  <rect x="94" y="106" width="12" height="20" fill="#fbbf24"/>
+  <!-- Coin highlight -->
+  <rect x="94" y="108" width="4" height="4" fill="#fde68a"/>
+  <!-- Coin inner ring -->
+  <rect x="95" y="112" width="10" height="6" fill="#d97706"/>
+  <rect x="93" y="113" width="14" height="4" fill="#d97706"/>
+
+  <!-- ── Window boxes with green details ── -->
+  <!-- Left window box -->
+  <rect x="22" y="108" width="34" height="30" fill="#1c1917"/>
+  <rect x="24" y="110" width="30" height="26" fill="#a89070" fill-opacity="0.4"/>
+  <!-- Plants -->
+  <rect x="24" y="110" width="30" height="10" fill="#16a34a"/>
+  <rect x="22" y="108" width="34" height="4" fill="#4a3018"/>
+  <!-- Window pane -->
+  <rect x="36" y="110" width="2" height="26" fill="#4a3018"/>
+  <rect x="24" y="121" width="30" height="2" fill="#4a3018"/>
+
+  <!-- Right window box -->
+  <rect x="144" y="108" width="34" height="30" fill="#1c1917"/>
+  <rect x="146" y="110" width="30" height="26" fill="#a89070" fill-opacity="0.4"/>
+  <rect x="146" y="110" width="30" height="10" fill="#16a34a"/>
+  <rect x="144" y="108" width="34" height="4" fill="#4a3018"/>
+  <rect x="158" y="110" width="2" height="26" fill="#4a3018"/>
+  <rect x="146" y="121" width="30" height="2" fill="#4a3018"/>
+
+</svg>

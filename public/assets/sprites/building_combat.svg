@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="260" viewBox="0 0 220 260"
+     shape-rendering="crispEdges" image-rendering="pixelated">
+
+  <!-- Ground shadow -->
+  <ellipse cx="110" cy="254" rx="95" ry="8" fill="#000000" fill-opacity="0.22"/>
+
+  <!-- ── Stone walls (darker) ── -->
+  <rect x="20" y="80" width="180" height="174" fill="#6b6470"/>
+  <!-- Grout lines -->
+  <rect x="20" y="100" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="120" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="140" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="160" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="180" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="200" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="220" width="180" height="2" fill="#4a4350"/>
+  <rect x="20" y="240" width="180" height="2" fill="#4a4350"/>
+  <!-- Vertical joints alternating -->
+  <rect x="60"  y="80"  width="2" height="20" fill="#4a4350"/>
+  <rect x="110" y="80"  width="2" height="20" fill="#4a4350"/>
+  <rect x="160" y="80"  width="2" height="20" fill="#4a4350"/>
+  <rect x="35"  y="100" width="2" height="20" fill="#4a4350"/>
+  <rect x="85"  y="100" width="2" height="20" fill="#4a4350"/>
+  <rect x="135" y="100" width="2" height="20" fill="#4a4350"/>
+  <rect x="185" y="100" width="2" height="20" fill="#4a4350"/>
+  <rect x="60"  y="120" width="2" height="20" fill="#4a4350"/>
+  <rect x="110" y="120" width="2" height="20" fill="#4a4350"/>
+  <rect x="160" y="120" width="2" height="20" fill="#4a4350"/>
+  <rect x="35"  y="140" width="2" height="20" fill="#4a4350"/>
+  <rect x="85"  y="140" width="2" height="20" fill="#4a4350"/>
+  <rect x="135" y="140" width="2" height="20" fill="#4a4350"/>
+  <rect x="185" y="140" width="2" height="20" fill="#4a4350"/>
+  <rect x="60"  y="160" width="2" height="20" fill="#4a4350"/>
+  <rect x="110" y="160" width="2" height="20" fill="#4a4350"/>
+  <rect x="160" y="160" width="2" height="20" fill="#4a4350"/>
+  <rect x="35"  y="180" width="2" height="20" fill="#4a4350"/>
+  <rect x="85"  y="180" width="2" height="20" fill="#4a4350"/>
+  <rect x="135" y="180" width="2" height="20" fill="#4a4350"/>
+  <rect x="185" y="180" width="2" height="20" fill="#4a4350"/>
+  <rect x="60"  y="200" width="2" height="20" fill="#4a4350"/>
+  <rect x="110" y="200" width="2" height="20" fill="#4a4350"/>
+  <rect x="160" y="200" width="2" height="20" fill="#4a4350"/>
+  <rect x="35"  y="220" width="2" height="20" fill="#4a4350"/>
+  <rect x="85"  y="220" width="2" height="20" fill="#4a4350"/>
+  <rect x="135" y="220" width="2" height="20" fill="#4a4350"/>
+  <rect x="185" y="220" width="2" height="20" fill="#4a4350"/>
+  <rect x="60"  y="240" width="2" height="14" fill="#4a4350"/>
+  <rect x="110" y="240" width="2" height="14" fill="#4a4350"/>
+  <rect x="160" y="240" width="2" height="14" fill="#4a4350"/>
+
+  <!-- ── Crenellations along rooftop ── -->
+  <rect x="20"  y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="38"  y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="56"  y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="74"  y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="92"  y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="110" y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="128" y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="146" y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="164" y="70" width="14" height="12" fill="#6b6470"/>
+  <rect x="182" y="70" width="14" height="12" fill="#6b6470"/>
+
+  <!-- ── Blood-red roof over main body ── -->
+  <rect x="20" y="78" width="180" height="4" fill="#991b1b"/>
+
+  <!-- ── Barred windows ── -->
+  <!-- Left window -->
+  <rect x="42" y="102" width="36" height="44" fill="#1c1917"/>
+  <!-- Orange glow -->
+  <rect x="44" y="104" width="32" height="40" fill="#f97316" fill-opacity="0.7"/>
+  <!-- Bars -->
+  <rect x="51" y="102" width="2" height="44" fill="#374151"/>
+  <rect x="59" y="102" width="2" height="44" fill="#374151"/>
+  <rect x="67" y="102" width="2" height="44" fill="#374151"/>
+  <rect x="42" y="118" width="36" height="2"  fill="#374151"/>
+  <rect x="42" y="130" width="36" height="2"  fill="#374151"/>
+
+  <!-- Right window -->
+  <rect x="142" y="102" width="36" height="44" fill="#1c1917"/>
+  <rect x="144" y="104" width="32" height="40" fill="#f97316" fill-opacity="0.7"/>
+  <rect x="151" y="102" width="2" height="44" fill="#374151"/>
+  <rect x="159" y="102" width="2" height="44" fill="#374151"/>
+  <rect x="167" y="102" width="2" height="44" fill="#374151"/>
+  <rect x="142" y="118" width="36" height="2"  fill="#374151"/>
+  <rect x="142" y="130" width="36" height="2"  fill="#374151"/>
+
+  <!-- ── Iron-bound door ── -->
+  <rect x="84" y="174" width="52" height="82" fill="#1c1917"/>
+  <!-- Door iron bands -->
+  <rect x="84" y="194" width="52" height="4" fill="#374151"/>
+  <rect x="84" y="214" width="52" height="4" fill="#374151"/>
+  <rect x="84" y="234" width="52" height="4" fill="#374151"/>
+  <!-- Crossed swords decoration -->
+  <!-- Sword 1 (diagonal /) -->
+  <rect x="96"  y="178" width="4" height="28" fill="#9ca3af" transform="rotate(-30 98 192)"/>
+  <!-- Sword 2 (diagonal \) -->
+  <rect x="116" y="178" width="4" height="28" fill="#9ca3af" transform="rotate(30 118 192)"/>
+  <!-- Simplified crossed swords as two rectangles -->
+  <rect x="99"  y="178" width="3"  height="20" fill="#9ca3af"/>
+  <rect x="118" y="178" width="3"  height="20" fill="#9ca3af"/>
+  <rect x="92"  y="193" width="36" height="3"  fill="#9ca3af"/>
+
+  <!-- ── Torch brackets ── -->
+  <!-- Left torch -->
+  <rect x="62" y="172" width="4" height="12" fill="#6b6470"/>
+  <rect x="60" y="162" width="8" height="12" fill="#4a4350"/>
+  <rect x="62" y="154" width="4" height="10" fill="#fbbf24"/>
+  <rect x="60" y="152" width="8"  height="4" fill="#fbbf24" fill-opacity="0.6"/>
+  <!-- Right torch -->
+  <rect x="154" y="172" width="4" height="12" fill="#6b6470"/>
+  <rect x="152" y="162" width="8" height="12" fill="#4a4350"/>
+  <rect x="154" y="154" width="4" height="10" fill="#fbbf24"/>
+  <rect x="152" y="152" width="8"  height="4" fill="#fbbf24" fill-opacity="0.6"/>
+
+</svg>

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm create *)",
+      "Bash(npx --yes create-vite@5 LumenGame --template react-ts)"
+    ]
+  }
+}

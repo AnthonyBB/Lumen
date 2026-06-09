@@ -69,7 +69,7 @@ export class UIScene extends Phaser.Scene {
       color: '#ffffff',
     }).setOrigin(0.5, 0)
 
-    // Bottom-center: movement hint
+    // Bottom-center: movement hint + equipment shortcut
     this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 22, 'Arrow keys or WASD to move', {
       fontSize: '13px',
       fontFamily: 'Arial, sans-serif',
@@ -77,6 +77,21 @@ export class UIScene extends Phaser.Scene {
       backgroundColor: '#00000066',
       padding: { x: 10, y: 4 },
     }).setOrigin(0.5, 1)
+
+    // Bottom-right: Equipment shortcut hint
+    const eqBg = this.add.graphics()
+    eqBg.fillStyle(0x000000, 0.5)
+    eqBg.fillRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 60, 148, 50, 8)
+    eqBg.lineStyle(1, 0xffd700, 0.4)
+    eqBg.strokeRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 60, 148, 50, 8)
+
+    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 54, '[I]  Equipment', {
+      fontSize: '11px', fontFamily: 'Arial', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5, 0)
+
+    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 36, 'Open gear screen', {
+      fontSize: '10px', fontFamily: 'Arial', color: '#888888',
+    }).setOrigin(0.5, 0)
 
     // ── Inventory bar (bottom-left) ───────────────────────────────────────────
     const invBg = this.add.graphics()

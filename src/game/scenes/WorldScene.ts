@@ -15,8 +15,9 @@ export class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
   private wasd!: { W: Phaser.Input.Keyboard.Key; A: Phaser.Input.Keyboard.Key; S: Phaser.Input.Keyboard.Key; D: Phaser.Input.Keyboard.Key }
   private buildings: BuildingEntry[] = []
-  private eKey!: Phaser.Input.Keyboard.Key
+  private eKey!:   Phaser.Input.Keyboard.Key
   private escKey!: Phaser.Input.Keyboard.Key
+  private iKey!:   Phaser.Input.Keyboard.Key
   private promptText!: Phaser.GameObjects.Text
   private popup!: Phaser.GameObjects.Container
   private popupOpen = false
@@ -105,8 +106,9 @@ export class WorldScene extends Phaser.Scene {
       S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
       D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
     }
-    this.eKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E)
+    this.eKey   = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E)
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
+    this.iKey   = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.I)
 
     // Proximity prompt text (camera-fixed via setScrollFactor)
     this.promptText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 100, 'Press E to enter', {
@@ -248,6 +250,13 @@ export class WorldScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.eKey) || Phaser.Input.Keyboard.JustDown(this.escKey)) {
         this.closePopup()
       }
+    }
+
+    // I key — open Equipment screen (only when world is active and popup closed)
+    if (!this.popupOpen && Phaser.Input.Keyboard.JustDown(this.iKey)) {
+      this.player.setVelocity(0, 0)
+      this.scene.pause()
+      this.scene.launch('EquipmentScene')
     }
   }
 }

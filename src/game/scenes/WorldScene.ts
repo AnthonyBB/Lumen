@@ -231,6 +231,12 @@ export class WorldScene extends Phaser.Scene {
     if (nearBuilding && !this.popupOpen) {
       this.promptText.setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        if (nearBuilding.label === 'Learning Center') {
+          // Launch the full classroom scene
+          this.scene.stop('UIScene')
+          this.scene.start('ClassroomScene')
+          return
+        }
         this.openPopup(nearBuilding.label)
       }
     } else {

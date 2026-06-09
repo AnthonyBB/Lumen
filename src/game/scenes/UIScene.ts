@@ -78,6 +78,32 @@ export class UIScene extends Phaser.Scene {
       padding: { x: 10, y: 4 },
     }).setOrigin(0.5, 1)
 
+    // ── Inventory bar (bottom-left) ───────────────────────────────────────────
+    const invBg = this.add.graphics()
+    invBg.fillStyle(0x000000, 0.5)
+    invBg.fillRoundedRect(6, GAME_HEIGHT - 60, 180, 50, 8)
+    invBg.lineStyle(1, 0xffd700, 0.5)
+    invBg.strokeRoundedRect(6, GAME_HEIGHT - 60, 180, 50, 8)
+
+    this.add.text(14, GAME_HEIGHT - 54, '🔮  Shards of Knowledge', {
+      fontSize: '11px', fontFamily: 'Arial', color: '#88eeff', fontStyle: 'bold',
+    }).setOrigin(0, 0)
+
+    // Shard count — updates from registry
+    const shardCount = this.add.text(14, GAME_HEIGHT - 36, 'x 0', {
+      fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0, 0)
+
+    // Poll registry once per second for updates
+    this.time.addEvent({
+      delay: 500,
+      loop: true,
+      callback: () => {
+        const n = (this.registry.get('shards') as number) || 0
+        shardCount.setText(`x ${n}`)
+      },
+    })
+
     // Vignette overlay at screen edges
     const vignette = this.add.graphics()
     vignette.setDepth(200)

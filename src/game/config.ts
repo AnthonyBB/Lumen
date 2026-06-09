@@ -2,6 +2,7 @@ import Phaser from 'phaser'
 import { BootScene } from './scenes/BootScene'
 import { WorldScene } from './scenes/WorldScene'
 import { UIScene } from './scenes/UIScene'
+import { ClassroomScene } from './scenes/ClassroomScene'
 import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
@@ -18,7 +19,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
       debug: false,
     },
   },
-  scene: [BootScene, WorldScene, UIScene],
+  scene: [BootScene, WorldScene, UIScene, ClassroomScene],
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

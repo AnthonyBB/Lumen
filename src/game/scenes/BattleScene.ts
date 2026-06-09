@@ -1,23 +1,26 @@
 /**
- * BattleScene — turn-based combat that launches over BiomeScene.
+ * BattleScene — skill-based turn-by-turn combat overlay.
  *
  * Flow:
- *  1. BiomeScene calls scene.launch('BattleScene', data) then scene.pause().
- *  2. Player answers questions to damage the current target mob.
- *  3. Wrong answers cost the player HP (mob counter-attacks).
- *  4. When all mobs are defeated → victory; player HP ≤ 0 → defeat.
- *  5. BattleScene calls biomeScene.onBattleResult(result), scene.stop(),
- *     scene.resume('BiomeScene').
+ *  1. BiomeScene launches this scene on top of itself then pauses.
+ *  2. Player selects a skill from the bottom panel.
+ *     - Heal: fires immediately with no target needed.
+ *     - Damage skills: mobs become clickable; player clicks a target.
+ *  3. Skill animation plays, damage / heal applied.
+ *  4. Remaining mobs counter-attack the player (sequential, small delays).
+ *  5. Repeat until all mobs dead (victory) or player HP ≤ 0 (defeat).
+ *  6. BattleScene calls biomeScene.onBattleResult(), then stops itself and
+ *     resumes BiomeScene.
  */
 
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
-import type { Question, Subject } from '../../engine/types'
-import { QUESTIONS_BY_SUBJECT } from '../../engine/questions'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import { PLAYER_SKILLS } from '../data/skills'
+import type { Skill } from '../data/skills'
 import type { BiomeScene } from './BiomeScene'
 
-// ── Public types (imported by BiomeScene) ──────────────────────────────────
+// ── Public types (used by BiomeScene) ─────────────────────────────────────
 
 export interface MobDef {
   name: string
@@ -28,9 +31,8 @@ export interface MobDef {
 export interface BattleSceneData {
   biome: string
   difficulty: 'easy' | 'medium' | 'hard'
-  subject: Subject
   mobs: MobDef[]
-  encounterIndex: number    // 0-based index of this encounter in the biome run
+  encounterIndex: number
   totalEncounters: number
   playerHp: number
   playerMaxHp: number
@@ -42,147 +44,128 @@ export interface BattleResult {
   xpGained: number
 }
 
-// ── Combat constants ────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────
 
-const CORRECT_DAMAGE = 25          // damage per correct answer (all difficulties)
-const MOB_DAMAGE: Record<string, number> = { easy: 8,  medium: 14, hard: 22 }
-const XP_PER_MOB:  Record<string, number> = { easy: 15, medium: 25, hard: 40 }
+const MOB_DAMAGE: Record<string, number> = { easy: 8, medium: 15, hard: 24 }
+const XP_PER_MOB:  Record<string, number> = { easy: 18, medium: 30, hard: 50 }
 
-// Biome → body color for mob sprites
 const MOB_COLOR: Record<string, number> = {
   'Desert':              0xd4903a,
-  'Pine Forest':         0x5a6a7a,
-  'Deciduous Forest':    0x7a4a20,
+  'Pine Forest':         0x5a7a50,
+  'Deciduous Forest':    0x7a5a30,
   'Swamp':               0x3a6a38,
-  'Snow':                0xddeeff,
-  'Grassland':           0x7a5a40,
-  'Tropical Rainforest': 0x2a2a40,
-  'Ocean':               0x5a7a8a,
+  'Snow':                0xaaccee,
+  'Grassland':           0x7a8a40,
+  'Tropical Rainforest': 0x3a5a2a,
+  'Ocean':               0x4a6a8a,
 }
 
-// ── Layout ─────────────────────────────────────────────────────────────────
+// Layout zones
+const HEADER_H      = 48
+const ENEMY_BOTTOM  = 325
+const LOG_TOP       = ENEMY_BOTTOM
+const LOG_BOTTOM    = LOG_TOP + 52
+const SKILL_TOP     = LOG_BOTTOM
+const SKILL_BTN_H   = 92
+const PLAYER_PANEL_Y = SKILL_TOP + SKILL_BTN_H + 16
 
-const MOB_AREA_BOTTOM = 255
-const STATUS_TOP      = MOB_AREA_BOTTOM
-const STATUS_BOTTOM   = 310
-const Q_CENTER_Y      = 385
-const BTN_ROW1_Y      = 480
-const BTN_ROW2_Y      = 578
-const BTN_W           = 570
-const BTN_H           = 82
-const BTN_LEFT_X      = 320
-const BTN_RIGHT_X     = 960
-const FEEDBACK_Y      = 672
-const LETTERS         = ['A', 'B', 'C', 'D']
+// ── Types ─────────────────────────────────────────────────────────────────
 
-// ── Active mob state ────────────────────────────────────────────────────────
+type BattlePhase =
+  | 'player_turn'    // waiting for skill selection
+  | 'target_select'  // skill chosen, waiting for mob click
+  | 'animating'      // skill firing / damage numbers showing
+  | 'enemy_turn'     // mobs counter-attacking
+  | 'victory'
+  | 'defeat'
 
 interface ActiveMob extends MobDef {
   hp: number
   alive: boolean
-  displayX: number
-  displayY: number
+  px: number   // screen position
+  py: number
+  gfx: Phaser.GameObjects.Graphics | null
+  nameText: Phaser.GameObjects.Text | null
+  hpBarGfx: Phaser.GameObjects.Graphics | null
 }
 
-// ── BattleScene ─────────────────────────────────────────────────────────────
+// ── BattleScene ────────────────────────────────────────────────────────────
 
 export class BattleScene extends Phaser.Scene {
   private battleData!: BattleSceneData
   private mobs: ActiveMob[] = []
-  private targetIdx = 0               // index of current target in this.mobs
+  private phase: BattlePhase = 'player_turn'
+  private selectedSkill: Skill | null = null
   private playerHp = 100
   private playerMaxHp = 100
   private xpGained = 0
-  private questionPool: Question[] = []
-  private usedIds = new Set<string>()
-  private currentQ!: Question
-  private locked = false
 
-  // ── Live GameObjects ──────────────────────────────────────────────────────
-  private mobGfxLayer: Phaser.GameObjects.GameObject[] = []
+  // ── HUD refs ─────────────────────────────────────────────────────────────
   private playerHpGfx!: Phaser.GameObjects.Graphics
   private playerHpText!: Phaser.GameObjects.Text
-  private questionText!: Phaser.GameObjects.Text
-  private feedbackText!: Phaser.GameObjects.Text
-  private btnContainers: Phaser.GameObjects.Container[] = []
-  private numKeys!: Phaser.Input.Keyboard.Key[]
+  private logText!: Phaser.GameObjects.Text
+  private skillButtons: Phaser.GameObjects.Container[] = []
+  private skillBtnGfx: Phaser.GameObjects.Graphics[] = []
+  private dmgLabels: Phaser.GameObjects.Text[] = []
 
   constructor() { super({ key: 'BattleScene' }) }
 
   init(data: BattleSceneData) {
-    this.battleData = data
-    this.playerHp = data.playerHp
+    this.battleData  = data
+    this.playerHp    = data.playerHp
     this.playerMaxHp = data.playerMaxHp
-    this.xpGained = 0
-    this.locked = false
-    this.usedIds = new Set()
-    this.mobs = []
-    this.targetIdx = 0
+    this.xpGained    = 0
+    this.phase       = 'player_turn'
+    this.selectedSkill = null
+    this.mobs        = []
+    this.skillButtons = []
+    this.skillBtnGfx  = []
+    this.dmgLabels    = []
   }
 
   create() {
-    // Build question pool for this battle's subject + difficulty
-    const pool = QUESTIONS_BY_SUBJECT[this.battleData.subject]
-      .filter(q => q.difficulty === this.battleData.difficulty)
-    // Fallback: all subjects at this difficulty
-    this.questionPool = pool.length > 0
-      ? Phaser.Utils.Array.Shuffle([...pool]) as Question[]
-      : Phaser.Utils.Array.Shuffle(
-          Object.values(QUESTIONS_BY_SUBJECT).flat()
-            .filter(q => q.difficulty === this.battleData.difficulty)
-        ) as Question[]
-
-    // Assign display positions to mobs, then build ActiveMob array
-    this.assignMobPositions()
-
-    // Draw static UI
+    this.buildMobs()
     this.drawBackground()
-    this.drawMobs()
-    this.drawStatusBar()
-    this.drawQuestionArea()
-
-    // Keyboard shortcuts
-    this.numKeys = [
-      this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ONE),
-      this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
-      this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.THREE),
-      this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR),
-    ]
-
-    this.nextQuestion()
+    this.placeMobs()
+    this.buildLogBar()
+    this.buildSkillPanel()
+    this.buildPlayerPanel()
+    this.setLog('Choose a skill, then select a target.')
   }
 
-  // ── Mob position assignment ─────────────────────────────────────────────
+  // ── Mob setup ─────────────────────────────────────────────────────────────
 
-  private assignMobPositions() {
-    const total = this.battleData.mobs.length
-    const row1 = Math.min(5, total)
-    const row2 = total - row1
+  private buildMobs() {
+    const total  = this.battleData.mobs.length
+    const perRow = Math.min(5, total)
+    const rows   = total <= 5 ? 1 : 2
 
-    const ROW1_Y = row2 > 0 ? 118 : 160
-    const ROW2_Y = 218
-    const spacing = (n: number) => Math.min(140, (GAME_WIDTH - 120) / Math.max(n, 1))
-
-    const place = (count: number, y: number, offset: number): { x: number; y: number }[] => {
-      const sp = spacing(count)
-      const startX = GAME_WIDTH / 2 - ((count - 1) * sp) / 2
-      return Array.from({ length: count }, (_, i) => ({
-        x: startX + i * sp + offset,
-        y,
-      }))
-    }
-
-    const positions = [
-      ...place(row1, ROW1_Y, 0),
-      ...place(row2, ROW2_Y, 0),
+    const ROW_Y = [
+      rows === 1 ? (HEADER_H + ENEMY_BOTTOM) / 2 - 10 : HEADER_H + 90,
+      HEADER_H + 200,
     ]
+
+    const rowCounts = rows === 1
+      ? [total]
+      : [perRow, total - perRow]
+
+    let idx = 0
+    const positions: { x: number; y: number }[] = []
+    rowCounts.forEach((count, r) => {
+      const spacing = Math.min(160, (GAME_WIDTH - 100) / Math.max(count, 1))
+      const startX = GAME_WIDTH / 2 - ((count - 1) * spacing) / 2
+      for (let c = 0; c < count; c++) {
+        positions[idx++] = { x: startX + c * spacing, y: ROW_Y[r] }
+      }
+    })
 
     this.mobs = this.battleData.mobs.map((def, i) => ({
       ...def,
       hp: def.maxHp,
       alive: true,
-      displayX: positions[i]?.x ?? GAME_WIDTH / 2,
-      displayY: positions[i]?.y ?? 160,
+      px: positions[i]?.x ?? GAME_WIDTH / 2,
+      py: positions[i]?.y ?? 160,
+      gfx: null, nameText: null, hpBarGfx: null,
     }))
   }
 
@@ -192,320 +175,497 @@ export class BattleScene extends Phaser.Scene {
     const bg = this.add.graphics().setDepth(0)
 
     // Dark battle overlay
-    bg.fillStyle(0x080818, 0.95)
+    bg.fillStyle(0x07060f, 1)
     bg.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
 
-    // Mob area tint
-    bg.fillStyle(0x1a0a0a, 1)
-    bg.fillRect(0, 0, GAME_WIDTH, MOB_AREA_BOTTOM)
+    // Enemy arena
+    bg.fillStyle(0x110c18, 1)
+    bg.fillRect(0, HEADER_H, GAME_WIDTH, ENEMY_BOTTOM - HEADER_H)
 
-    // Status bar
-    bg.fillStyle(0x100808, 1)
-    bg.fillRect(0, STATUS_TOP, GAME_WIDTH, STATUS_BOTTOM - STATUS_TOP)
+    // Log strip
+    bg.fillStyle(0x0a0814, 1)
+    bg.fillRect(0, LOG_TOP, GAME_WIDTH, LOG_BOTTOM - LOG_TOP)
 
-    // Dividers
-    bg.lineStyle(1, 0x443322, 1)
-    bg.lineBetween(0, MOB_AREA_BOTTOM, GAME_WIDTH, MOB_AREA_BOTTOM)
-    bg.lineStyle(1, 0x443322, 1)
-    bg.lineBetween(0, STATUS_BOTTOM, GAME_WIDTH, STATUS_BOTTOM)
+    // Skill strip
+    bg.fillStyle(0x0d0b1a, 1)
+    bg.fillRect(0, SKILL_TOP, GAME_WIDTH, SKILL_BTN_H + 8)
+
+    // Player panel
+    bg.fillStyle(0x080710, 1)
+    bg.fillRect(0, PLAYER_PANEL_Y, GAME_WIDTH, GAME_HEIGHT - PLAYER_PANEL_Y)
+
+    // Separator lines
+    bg.lineStyle(1, 0x332244, 1)
+    bg.lineBetween(0, HEADER_H, GAME_WIDTH, HEADER_H)
+    bg.lineBetween(0, ENEMY_BOTTOM, GAME_WIDTH, ENEMY_BOTTOM)
+    bg.lineBetween(0, LOG_BOTTOM, GAME_WIDTH, LOG_BOTTOM)
+    bg.lineBetween(0, PLAYER_PANEL_Y, GAME_WIDTH, PLAYER_PANEL_Y)
 
     // Header
-    const { biome, difficulty, encounterIndex, totalEncounters } = this.battleData
-    const diffColors: Record<string, string> = { easy: '#44cc44', medium: '#ffcc00', hard: '#ff5544' }
-    this.add.text(GAME_WIDTH / 2, 8, '⚔  BATTLE  ⚔', {
-      fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ff5544', fontStyle: 'bold',
-    }).setOrigin(0.5, 0).setDepth(1)
-    this.add.text(GAME_WIDTH / 2, 26, `${biome}  ·  Encounter ${encounterIndex + 1} of ${totalEncounters}`, {
-      fontSize: '11px', fontFamily: 'Arial', color: '#888888',
-    }).setOrigin(0.5, 0).setDepth(1)
-    this.add.text(GAME_WIDTH - 12, 17, difficulty.toUpperCase(), {
-      fontSize: '11px', fontFamily: 'Arial', color: diffColors[difficulty],
-      backgroundColor: '#00000088', padding: { x: 5, y: 2 },
-    }).setOrigin(1, 0.5).setDepth(1)
-
-    // Question section header
-    this.add.text(12, STATUS_BOTTOM + 6, 'Answer the question to strike:', {
-      fontSize: '11px', fontFamily: 'Arial', color: '#666666',
-    }).setOrigin(0, 0).setDepth(1)
-  }
-
-  // ── Mob display ─────────────────────────────────────────────────────────
-
-  private drawMobs() {
-    this.mobGfxLayer.forEach(o => (o as Phaser.GameObjects.GameObject).destroy())
-    this.mobGfxLayer = []
-
-    const color = MOB_COLOR[this.battleData.biome] ?? 0x888888
-
-    this.mobs.forEach((mob, i) => {
-      const { displayX: mx, displayY: my, alive, hp, maxHp } = mob
-      const isTarget = alive && i === this.targetIdx
-
-      const g = this.add.graphics().setDepth(5)
-      this.mobGfxLayer.push(g)
-
-      const alpha = alive ? 1 : 0.25
-      const c = alive ? color : 0x555555
-
-      // Target glow
-      if (isTarget) {
-        g.fillStyle(0xff4444, 0.18)
-        g.fillCircle(mx, my - 4, 38)
-        g.lineStyle(2, 0xff4444, 0.7)
-        g.strokeCircle(mx, my - 4, 38)
-      }
-
-      // Body
-      g.fillStyle(c, alpha)
-      g.fillEllipse(mx, my + 8, 38, 28)
-      // Head
-      g.fillCircle(mx, my - 10, 16)
-
-      if (alive) {
-        // Eyes
-        g.fillStyle(0xffffff, 1)
-        g.fillCircle(mx - 5, my - 12, 4)
-        g.fillCircle(mx + 5, my - 12, 4)
-        g.fillStyle(0x111111, 1)
-        g.fillCircle(mx - 5, my - 12, 2)
-        g.fillCircle(mx + 5, my - 12, 2)
-        // Menace marks (biome style)
-        g.lineStyle(1, Phaser.Display.Color.IntegerToColor(c).darken(30).color, 0.7)
-        g.lineBetween(mx - 10, my - 5, mx + 10, my - 5)
-      } else {
-        // Dead: X eyes
-        g.lineStyle(2, 0x888888, 0.7)
-        g.lineBetween(mx - 7, my - 15, mx - 2, my - 10)
-        g.lineBetween(mx - 2, my - 15, mx - 7, my - 10)
-        g.lineBetween(mx + 2, my - 15, mx + 7, my - 10)
-        g.lineBetween(mx + 7, my - 15, mx + 2, my - 10)
-      }
-
-      // HP bar (only alive mobs)
-      if (alive) {
-        const barW = 52
-        const barY = my + 24
-        g.fillStyle(0x333333, 1)
-        g.fillRect(mx - barW / 2, barY, barW, 5)
-        const pct = Math.max(0, hp / maxHp)
-        const hpColor = pct > 0.5 ? 0x44cc44 : pct > 0.25 ? 0xffcc00 : 0xff4444
-        g.fillStyle(hpColor, 1)
-        g.fillRect(mx - barW / 2, barY, Math.round(barW * pct), 5)
-      }
-
-      // Name + level label
-      const label = this.add.text(mx, my - 30, `${mob.name}\nLv.${mob.level}`, {
-        fontSize: '9px', fontFamily: 'Arial', color: alive ? '#cccccc' : '#555555',
-        align: 'center',
-      }).setOrigin(0.5, 1).setDepth(6)
-      this.mobGfxLayer.push(label)
-    })
-
-    // Mob count summary
-    const alive = this.mobs.filter(m => m.alive).length
-    const summary = this.add.text(GAME_WIDTH - 10, MOB_AREA_BOTTOM - 6,
-      `${alive} remaining`, {
-        fontSize: '10px', fontFamily: 'Arial', color: '#666666',
-      }).setOrigin(1, 1).setDepth(6)
-    this.mobGfxLayer.push(summary)
-  }
-
-  // ── Status bar ────────────────────────────────────────────────────────────
-
-  private drawStatusBar() {
-    this.playerHpGfx = this.add.graphics().setDepth(5)
-    this.playerHpText = this.add.text(12, STATUS_TOP + 14, '', {
-      fontSize: '11px', fontFamily: 'Arial', color: '#ffffff',
-    }).setOrigin(0, 0.5).setDepth(6)
-    this.refreshStatusBar()
-  }
-
-  private refreshStatusBar() {
-    this.playerHpGfx.clear()
-    const pct = Math.max(0, this.playerHp / this.playerMaxHp)
-    const barW = GAME_WIDTH - 24
-    const barY = STATUS_TOP + 8
-    this.playerHpGfx.fillStyle(0x333333, 1)
-    this.playerHpGfx.fillRect(12, barY, barW, 18)
-    const hpColor = pct > 0.5 ? 0x44cc44 : pct > 0.25 ? 0xffcc00 : 0xff4444
-    this.playerHpGfx.fillStyle(hpColor, 1)
-    this.playerHpGfx.fillRect(12, barY, Math.round(barW * pct), 18)
-    this.playerHpText.setText(`❤  ${this.playerHp} / ${this.playerMaxHp}  HP`)
-  }
-
-  // ── Question area ─────────────────────────────────────────────────────────
-
-  private drawQuestionArea() {
-    this.questionText = this.add.text(GAME_WIDTH / 2, Q_CENTER_Y, '', {
-      fontSize: '19px', fontFamily: 'Georgia, serif', color: '#ffffff',
-      align: 'center', wordWrap: { width: GAME_WIDTH - 80 },
-    }).setOrigin(0.5, 0.5).setDepth(5)
-
-    this.feedbackText = this.add.text(GAME_WIDTH / 2, FEEDBACK_Y, '', {
-      fontSize: '16px', fontFamily: 'Georgia, serif', color: '#44ff88', fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5).setDepth(6)
-
-    // Answer buttons
-    this.btnContainers.forEach(b => b.destroy())
-    this.btnContainers = []
-
-    const positions = [
-      { x: BTN_LEFT_X,  y: BTN_ROW1_Y },
-      { x: BTN_RIGHT_X, y: BTN_ROW1_Y },
-      { x: BTN_LEFT_X,  y: BTN_ROW2_Y },
-      { x: BTN_RIGHT_X, y: BTN_ROW2_Y },
-    ]
-
-    positions.forEach(({ x, y }, i) => {
-      const c = this.makeAnswerButton(x, y, i)
-      this.btnContainers.push(c)
-    })
-  }
-
-  private makeAnswerButton(x: number, y: number, idx: number): Phaser.GameObjects.Container {
-    const btn = this.add.container(x, y).setDepth(5)
-
-    const bg = this.add.graphics()
-    const draw = (fill: number) => {
-      bg.clear()
-      bg.fillStyle(fill, 1)
-      bg.fillRoundedRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H, 10)
-      bg.lineStyle(2, 0x4444aa, 0.6)
-      bg.strokeRoundedRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H, 10)
+    const { biome, encounterIndex, totalEncounters, difficulty } = this.battleData
+    const diffColor: Record<string, string> = {
+      easy: '#44cc44', medium: '#ffcc00', hard: '#ff5544',
     }
-    draw(0x181430)
 
-    const letterLabel = this.add.text(-BTN_W / 2 + 12, -BTN_H / 2 + 6,
-      `[${idx + 1}]`, { fontSize: '11px', fontFamily: 'Arial', color: '#555555' }
-    ).setOrigin(0, 0)
+    this.add.text(GAME_WIDTH / 2, HEADER_H / 2, '⚔  BATTLE  ⚔', {
+      fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ff5544', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5).setDepth(2)
 
-    const answerLabel = this.add.text(0, 0, '', {
-      fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ffffff',
-      wordWrap: { width: BTN_W - 40 }, align: 'center',
-    }).setOrigin(0.5, 0.5).setName('label')
+    this.add.text(12, HEADER_H / 2, `${biome}  ·  Encounter ${encounterIndex + 1}/${totalEncounters}`, {
+      fontSize: '12px', fontFamily: 'Arial', color: '#888888',
+    }).setOrigin(0, 0.5).setDepth(2)
 
-    const hit = this.add.rectangle(0, 0, BTN_W, BTN_H, 0, 0)
-      .setInteractive({ useHandCursor: true })
-    hit.on('pointerover',  () => { if (!this.locked) draw(0x282450) })
-    hit.on('pointerout',   () => { if (!this.locked) draw(0x181430) })
-    hit.on('pointerdown',  () => { if (!this.locked) this.handleAnswer(idx) })
+    this.add.text(GAME_WIDTH - 12, HEADER_H / 2, difficulty.toUpperCase(), {
+      fontSize: '11px', fontFamily: 'Arial', color: diffColor[difficulty],
+      backgroundColor: '#00000088', padding: { x: 5, y: 2 },
+    }).setOrigin(1, 0.5).setDepth(2)
 
-    btn.add([bg, letterLabel, answerLabel, hit])
+    // Subtle arena grid
+    const grid = this.add.graphics().setDepth(1).setAlpha(0.06)
+    grid.lineStyle(1, 0x6644aa, 1)
+    for (let x = 0; x < GAME_WIDTH; x += 64) {
+      grid.lineBetween(x, HEADER_H, x, ENEMY_BOTTOM)
+    }
+    for (let y = HEADER_H; y < ENEMY_BOTTOM; y += 48) {
+      grid.lineBetween(0, y, GAME_WIDTH, y)
+    }
+  }
+
+  // ── Mob drawing ───────────────────────────────────────────────────────────
+
+  private placeMobs() {
+    this.mobs.forEach((mob, i) => this.renderMob(mob, i))
+    this.refreshMobCount()
+  }
+
+  private renderMob(mob: ActiveMob, idx: number) {
+    mob.gfx?.destroy()
+    mob.nameText?.destroy()
+    mob.hpBarGfx?.destroy()
+
+    const { px, py, alive } = mob
+    const bodyColor = alive
+      ? (MOB_COLOR[this.battleData.biome] ?? 0x8888aa)
+      : 0x333333
+    const alpha = alive ? 1 : 0.3
+
+    const g = this.add.graphics().setDepth(5).setAlpha(alpha)
+    mob.gfx = g
+
+    // Shadow
+    g.fillStyle(0x000000, 0.4)
+    g.fillEllipse(px + 3, py + 28, 52, 12)
+
+    // Body
+    g.fillStyle(bodyColor, 1)
+    g.fillEllipse(px, py + 12, 44, 34)
+
+    // Head
+    g.fillStyle(bodyColor, 1)
+    g.fillCircle(px, py - 12, 20)
+
+    // Eye whites
+    if (alive) {
+      g.fillStyle(0xffffff, 1)
+      g.fillCircle(px - 7, py - 14, 5)
+      g.fillCircle(px + 7, py - 14, 5)
+      g.fillStyle(0x110011, 1)
+      g.fillCircle(px - 7, py - 14, 2)
+      g.fillCircle(px + 7, py - 14, 2)
+      // Brow
+      g.lineStyle(2, Phaser.Display.Color.IntegerToColor(bodyColor).darken(40).color, 1)
+      g.lineBetween(px - 10, py - 20, px - 4, py - 22)
+      g.lineBetween(px + 4, py - 22, px + 10, py - 20)
+    } else {
+      // X eyes
+      g.lineStyle(2, 0x666666, 0.9)
+      g.lineBetween(px - 11, py - 18, px - 4, py - 10)
+      g.lineBetween(px - 4, py - 18, px - 11, py - 10)
+      g.lineBetween(px + 4, py - 18, px + 11, py - 10)
+      g.lineBetween(px + 11, py - 18, px + 4, py - 10)
+    }
+
+    // HP bar
+    const hpGfx = this.add.graphics().setDepth(5)
+    mob.hpBarGfx = hpGfx
+    if (alive) {
+      const bw = 60, bh = 7, bx = px - bw / 2, by = py + 32
+      hpGfx.fillStyle(0x222222, 1)
+      hpGfx.fillRoundedRect(bx, by, bw, bh, 2)
+      const pct = Math.max(0, mob.hp / mob.maxHp)
+      const col = pct > 0.5 ? 0x44cc44 : pct > 0.25 ? 0xffcc00 : 0xff4444
+      hpGfx.fillStyle(col, 1)
+      hpGfx.fillRoundedRect(bx, by, Math.round(bw * pct), bh, 2)
+      hpGfx.lineStyle(1, 0x000000, 0.5)
+      hpGfx.strokeRoundedRect(bx, by, bw, bh, 2)
+    }
+
+    // Label
+    const nameText = this.add.text(
+      px, py + 46,
+      alive ? `${mob.name}\nLv.${mob.level}  HP:${mob.hp}/${mob.maxHp}` : `${mob.name}\n💀 Defeated`,
+      {
+        fontSize: '10px', fontFamily: 'Arial',
+        color: alive ? '#cccccc' : '#555555',
+        align: 'center', lineSpacing: 2,
+      }
+    ).setOrigin(0.5, 0).setDepth(6)
+    mob.nameText = nameText
+
+    // Invisible hit zone when alive and in target_select phase
+    if (alive) {
+      const hit = this.add.rectangle(px, py, 60, 80, 0, 0)
+        .setDepth(7)
+        .setInteractive({ useHandCursor: true })
+        .setName(`mob_${idx}`)
+      hit.on('pointerover', () => {
+        if (this.phase === 'target_select') {
+          g.setAlpha(0.75)
+        }
+      })
+      hit.on('pointerout', () => {
+        if (alive) g.setAlpha(1)
+      })
+      hit.on('pointerdown', () => {
+        if (this.phase === 'target_select') this.fireSkilOnMob(idx)
+      })
+      mob.gfx?.setData('hit', hit)
+    }
+  }
+
+  private refreshMobCount() {
+    // Clear old count label if present
+    this.children.list
+      .filter(c => c.getData && c.getData('isMobCount'))
+      .forEach(c => c.destroy())
+
+    const alive = this.mobs.filter(m => m.alive).length
+    const t = this.add.text(GAME_WIDTH - 10, ENEMY_BOTTOM - 6, `${alive} remaining`, {
+      fontSize: '10px', fontFamily: 'Arial', color: '#666666',
+    }).setOrigin(1, 1).setDepth(6)
+    t.setData('isMobCount', true)
+  }
+
+  // ── Log bar ───────────────────────────────────────────────────────────────
+
+  private buildLogBar() {
+    this.logText = this.add.text(GAME_WIDTH / 2, LOG_TOP + (LOG_BOTTOM - LOG_TOP) / 2, '', {
+      fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ccbbff',
+      align: 'center', wordWrap: { width: GAME_WIDTH - 40 },
+    }).setOrigin(0.5, 0.5).setDepth(5)
+  }
+
+  private setLog(msg: string, color = '#ccbbff') {
+    this.logText.setText(msg).setColor(color)
+  }
+
+  // ── Skill panel ───────────────────────────────────────────────────────────
+
+  private buildSkillPanel() {
+    const n     = PLAYER_SKILLS.length
+    const btnW  = Math.min(220, (GAME_WIDTH - 40) / n - 8)
+    const gap   = ((GAME_WIDTH - 40) - n * btnW) / (n - 1)
+    const startX = 20 + btnW / 2
+    const btnY  = SKILL_TOP + SKILL_BTN_H / 2 + 4
+
+    PLAYER_SKILLS.forEach((skill, i) => {
+      const cx = startX + i * (btnW + gap)
+      const c = this.makeSkillButton(skill, cx, btnY, btnW, SKILL_BTN_H - 4, i)
+      this.skillButtons.push(c)
+    })
+  }
+
+  private makeSkillButton(
+    skill: Skill, cx: number, cy: number,
+    bw: number, bh: number, idx: number,
+  ): Phaser.GameObjects.Container {
+    const btn = this.add.container(cx, cy).setDepth(6)
+
+    const fillIdle   = 0x1a1530
+    const fillHover  = 0x2a2548
+    const fillActive = 0x3a3060
+
+    const g = this.add.graphics()
+    this.skillBtnGfx.push(g)
+    const draw = (fill: number, accent: number) => {
+      g.clear()
+      g.fillStyle(fill, 1)
+      g.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 8)
+      g.lineStyle(2, accent, 0.8)
+      g.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 8)
+      // Bottom accent line
+      g.lineStyle(3, accent, 0.5)
+      g.lineBetween(-bw / 2 + 10, bh / 2, bw / 2 - 10, bh / 2)
+    }
+    draw(fillIdle, skill.color)
+
+    const icon = this.add.text(0, -12, skill.icon, { fontSize: '20px' }).setOrigin(0.5, 0.5)
+    const name = this.add.text(0, 8, skill.name, {
+      fontSize: '11px', fontFamily: 'Arial', color: '#dddddd', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5)
+    const desc = this.add.text(0, 22, `${skill.damageMin}–${skill.damageMax} ${skill.isHeal ? 'HP' : 'dmg'}`, {
+      fontSize: '9px', fontFamily: 'Arial',
+      color: Phaser.Display.Color.IntegerToColor(skill.color).lighten(20).rgba,
+    }).setOrigin(0.5, 0.5)
+
+    const hit = this.add.rectangle(0, 0, bw, bh, 0, 0).setInteractive({ useHandCursor: true })
+    hit.on('pointerover', () => {
+      if (this.phase === 'player_turn' || this.phase === 'target_select') draw(fillHover, skill.color)
+    })
+    hit.on('pointerout', () => {
+      const isSelected = this.selectedSkill?.id === skill.id
+      draw(isSelected ? fillActive : fillIdle, skill.color)
+    })
+    hit.on('pointerdown', () => {
+      if (this.phase !== 'player_turn' && this.phase !== 'target_select') return
+      this.onSkillSelected(skill, idx, draw, fillActive, fillIdle, g, bw, bh)
+    })
+
+    btn.add([g, icon, name, desc, hit])
     return btn
   }
 
-  // ── Question cycling ──────────────────────────────────────────────────────
+  private onSkillSelected(
+    skill: Skill, _idx: number,
+    draw: (f: number, a: number) => void,
+    fillActive: number, _fillIdle: number,
+    _g: Phaser.GameObjects.Graphics,
+    _bw: number, _bh: number,
+  ) {
+    // Reset all button backgrounds to idle (re-build is handled via resetSkillButtons on next turn)
+    this.skillBtnGfx.forEach(bg => bg.clear())
+    // Highlight selected button
+    draw(fillActive, skill.color)
 
-  private nextQuestion() {
-    this.locked = false
-    this.feedbackText.setText('')
+    this.selectedSkill = skill
 
-    // Pick a fresh question from the pool (reshuffle when exhausted)
-    let q = this.questionPool.find(q => !this.usedIds.has(q.id))
-    if (!q) {
-      this.usedIds.clear()
-      this.questionPool = Phaser.Utils.Array.Shuffle([...this.questionPool]) as Question[]
-      q = this.questionPool[0]
+    if (skill.isHeal) {
+      // Heal fires immediately
+      this.phase = 'animating'
+      this.castHeal(skill)
+    } else {
+      this.phase = 'target_select'
+      this.setLog(`${skill.icon}  ${skill.name} selected — click an enemy to attack!`, '#ffdd88')
+      this.highlightAliveMobs(true)
     }
-    this.currentQ = q
-    this.usedIds.add(q.id)
+  }
 
-    // Populate question text
-    this.questionText.setText(q.question)
-
-    // Populate answer buttons
-    q.answers.forEach((ans, i) => {
-      const lbl = this.btnContainers[i].getByName('label') as Phaser.GameObjects.Text
-      lbl.setText(`${LETTERS[i]}.  ${ans}`)
+  private highlightAliveMobs(on: boolean) {
+    this.mobs.forEach(mob => {
+      if (!mob.alive) return
+      if (on) {
+        mob.gfx?.setAlpha(0.85)
+        this.tweens.add({
+          targets: mob.gfx,
+          alpha: { from: 0.7, to: 1 },
+          duration: 500, yoyo: true, repeat: -1,
+          ease: 'Sine.easeInOut',
+        })
+      } else {
+        if (mob.gfx) this.tweens.killTweensOf(mob.gfx)
+        mob.gfx?.setAlpha(1)
+      }
     })
   }
 
-  // ── Answer handling ───────────────────────────────────────────────────────
+  // ── Combat actions ────────────────────────────────────────────────────────
 
-  private handleAnswer(idx: number) {
-    if (this.locked) return
-    this.locked = true
+  private fireSkilOnMob(mobIdx: number) {
+    if (this.phase !== 'target_select' || !this.selectedSkill) return
+    this.phase = 'animating'
 
-    const correct = idx === this.currentQ.correctIndex
+    this.highlightAliveMobs(false)
 
-    if (correct) {
-      // Damage current target
-      const target = this.mobs[this.targetIdx]
-      target.hp = Math.max(0, target.hp - CORRECT_DAMAGE)
+    const skill  = this.selectedSkill
+    const mob    = this.mobs[mobIdx]
+    const dmg    = Phaser.Math.Between(skill.damageMin, skill.damageMax)
 
-      if (target.hp <= 0) {
-        target.alive = false
-        this.xpGained += XP_PER_MOB[this.battleData.difficulty]
+    this.selectedSkill = null
+    this.resetSkillButtons()
 
-        // Advance to next alive mob
-        const next = this.mobs.findIndex((m, i) => i > this.targetIdx && m.alive)
-        if (next !== -1) {
-          this.targetIdx = next
-        } else {
-          const any = this.mobs.findIndex(m => m.alive)
-          if (any === -1) {
-            // All dead — victory!
-            this.drawMobs()
-            this.feedbackText.setColor('#ffd700').setText('✓  All enemies defeated!')
-            this.time.delayedCall(1200, () => this.endBattle(true))
-            return
-          }
-          this.targetIdx = any
-        }
-        this.feedbackText.setColor('#44ff88')
-          .setText(`✓  Correct!  Enemy defeated!  +${XP_PER_MOB[this.battleData.difficulty]} XP`)
-      } else {
-        this.feedbackText.setColor('#44ff88')
-          .setText(`✓  Correct!  -${CORRECT_DAMAGE} HP to enemy!`)
-      }
+    // Flash mob
+    this.cameras.main.shake(180, 0.006)
+    this.cameras.main.flash(120, ...Phaser.Display.Color.IntegerToColor(skill.color).gl.slice(0, 3) as [number, number, number])
+
+    mob.hp = Math.max(0, mob.hp - dmg)
+
+    // Floating damage number
+    this.spawnDmgLabel(mob.px, mob.py - 20, `-${dmg}`, skill.color)
+
+    if (mob.hp <= 0) {
+      mob.alive = false
+      this.xpGained += XP_PER_MOB[this.battleData.difficulty]
+      this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg}!  Enemy defeated! (+${XP_PER_MOB[this.battleData.difficulty]} XP)`, '#44ff88')
     } else {
-      // Mobs attack player
-      const dmg = MOB_DAMAGE[this.battleData.difficulty]
-      this.playerHp = Math.max(0, this.playerHp - dmg)
-      this.refreshStatusBar()
-
-      if (this.playerHp <= 0) {
-        this.feedbackText.setColor('#ff5544').setText('✗  Wrong!  You were defeated...')
-        this.time.delayedCall(1400, () => this.endBattle(false))
-        return
-      }
-      this.feedbackText.setColor('#ff6644')
-        .setText(`✗  Wrong!  Enemies attack for ${dmg} damage!`)
+      this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg} damage!`, '#44ffcc')
     }
 
-    // Refresh mob display and continue
-    this.drawMobs()
-    this.time.delayedCall(1100, () => this.nextQuestion())
+    // Redraw mob
+    this.renderMob(mob, mobIdx)
+    this.refreshMobCount()
+
+    // After brief pause → check victory or enemy turn
+    this.time.delayedCall(900, () => {
+      const anyAlive = this.mobs.some(m => m.alive)
+      if (!anyAlive) {
+        this.doVictory()
+      } else {
+        this.doEnemyTurn()
+      }
+    })
   }
 
-  // ── End battle ────────────────────────────────────────────────────────────
+  private castHeal(skill: Skill) {
+    const amount = Phaser.Math.Between(skill.damageMin, skill.damageMax)
+    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + amount)
+    this.refreshPlayerPanel()
+    this.cameras.main.flash(300, 0, 1, 0.3)
 
-  private endBattle(victory: boolean) {
-    // Award XP on server if victory
-    if (victory && this.xpGained > 0) {
+    this.setLog(`${skill.icon}  ${skill.name} restored ${amount} HP!`, '#44ff88')
+    this.selectedSkill = null
+    this.resetSkillButtons()
+
+    this.time.delayedCall(900, () => this.doEnemyTurn())
+  }
+
+  private doEnemyTurn() {
+    this.phase = 'enemy_turn'
+    const alive = this.mobs.filter(m => m.alive)
+    if (alive.length === 0) { this.doVictory(); return }
+
+    const baseDmg = MOB_DAMAGE[this.battleData.difficulty]
+    let delay = 0
+
+    alive.forEach((mob, _i) => {
+      this.time.delayedCall(delay, () => {
+        const dmg = Math.max(1, Phaser.Math.Between(
+          Math.floor(baseDmg * 0.7),
+          Math.ceil(baseDmg * 1.3),
+        ))
+        this.playerHp = Math.max(0, this.playerHp - dmg)
+        this.refreshPlayerPanel()
+        this.cameras.main.shake(80, 0.003)
+        this.setLog(`${mob.name} attacks for ${dmg} damage!`, '#ff8888')
+
+        if (this.playerHp <= 0) {
+          this.time.delayedCall(700, () => this.doDefeat())
+        }
+      })
+      delay += 600
+    })
+
+    // After all mobs attacked: back to player turn
+    this.time.delayedCall(delay + 400, () => {
+      if (this.phase !== 'enemy_turn') return   // already ended
+      if (this.playerHp <= 0) return            // defeat already triggered
+      this.phase = 'player_turn'
+      this.setLog('Your turn — choose a skill!')
+    })
+  }
+
+  // ── Button state helpers ──────────────────────────────────────────────────
+
+  private resetSkillButtons() {
+    // Redraw all skill buttons to idle state
+    // (full reset by destroying + rebuilding panel)
+    this.skillButtons.forEach(b => b.destroy())
+    this.skillBtnGfx = []
+    this.skillButtons = []
+    this.buildSkillPanel()
+  }
+
+  // ── Player panel ──────────────────────────────────────────────────────────
+
+  private buildPlayerPanel() {
+    const panelH = GAME_HEIGHT - PLAYER_PANEL_Y
+
+    // Title
+    this.add.text(12, PLAYER_PANEL_Y + 10, 'YOUR CHARACTER', {
+      fontSize: '10px', fontFamily: 'Arial', color: '#666666', fontStyle: 'bold', letterSpacing: 2,
+    }).setOrigin(0, 0).setDepth(5)
+
+    // HP label
+    this.add.text(12, PLAYER_PANEL_Y + 26, 'HP', {
+      fontSize: '13px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
+    }).setOrigin(0, 0).setDepth(5)
+
+    this.playerHpGfx  = this.add.graphics().setDepth(5)
+    this.playerHpText = this.add.text(GAME_WIDTH / 2, PLAYER_PANEL_Y + 58, '', {
+      fontSize: '13px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5).setDepth(6)
+
+    // Skill tip
+    this.add.text(GAME_WIDTH / 2, PLAYER_PANEL_Y + panelH - 10, 'Choose a skill above, then click an enemy', {
+      fontSize: '11px', fontFamily: 'Arial', color: '#444455',
+    }).setOrigin(0.5, 1).setDepth(5)
+
+    this.refreshPlayerPanel()
+  }
+
+  private refreshPlayerPanel() {
+    this.playerHpGfx.clear()
+    const pct  = Math.max(0, this.playerHp / this.playerMaxHp)
+    const bx   = 36, by = PLAYER_PANEL_Y + 28, bw = GAME_WIDTH - 48, bh = 22
+    this.playerHpGfx.fillStyle(0x222233, 1)
+    this.playerHpGfx.fillRoundedRect(bx, by, bw, bh, 5)
+    const col = pct > 0.5 ? 0x44cc44 : pct > 0.25 ? 0xffcc00 : 0xff4444
+    this.playerHpGfx.fillStyle(col, 1)
+    this.playerHpGfx.fillRoundedRect(bx, by, Math.round(bw * pct), bh, 5)
+    this.playerHpGfx.lineStyle(1, 0x000000, 0.4)
+    this.playerHpGfx.strokeRoundedRect(bx, by, bw, bh, 5)
+    this.playerHpText.setText(`${this.playerHp} / ${this.playerMaxHp}  HP`)
+  }
+
+  // ── Floating damage labels ─────────────────────────────────────────────────
+
+  private spawnDmgLabel(x: number, y: number, text: string, color: number) {
+    const hex = Phaser.Display.Color.IntegerToColor(color).rgba
+    const lbl = this.add.text(x, y, text, {
+      fontSize: '22px', fontFamily: 'Georgia, serif',
+      color: hex, fontStyle: 'bold',
+      stroke: '#000000', strokeThickness: 3,
+    }).setOrigin(0.5, 0.5).setDepth(20)
+    this.dmgLabels.push(lbl)
+    this.tweens.add({
+      targets: lbl,
+      y: y - 60, alpha: 0,
+      duration: 900, ease: 'Sine.easeOut',
+      onComplete: () => { lbl.destroy(); this.dmgLabels = this.dmgLabels.filter(l => l !== lbl) },
+    })
+  }
+
+  // ── End states ────────────────────────────────────────────────────────────
+
+  private doVictory() {
+    this.phase = 'victory'
+
+    // Award XP
+    if (this.xpGained > 0) {
       const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
       socket?.emit('player:award_xp', { xp: Math.min(this.xpGained, 500), awardShard: false })
     }
 
-    const result: BattleResult = {
-      victory,
-      playerHp: this.playerHp,
-      xpGained: this.xpGained,
-    }
+    this.cameras.main.flash(600, 1, 0.84, 0)
+    this.setLog(`⚔  All enemies defeated!  +${this.xpGained} XP earned!`, '#ffd700')
 
+    this.time.delayedCall(1400, () => {
+      this.endBattle({ victory: true, playerHp: this.playerHp, xpGained: this.xpGained })
+    })
+  }
+
+  private doDefeat() {
+    this.phase = 'defeat'
+    this.cameras.main.flash(600, 0.8, 0, 0)
+    this.setLog('💀  You have been defeated...', '#ff4444')
+    this.time.delayedCall(1600, () => {
+      this.endBattle({ victory: false, playerHp: 0, xpGained: this.xpGained })
+    })
+  }
+
+  private endBattle(result: BattleResult) {
     const biomeScene = this.scene.get('BiomeScene') as BiomeScene
     biomeScene.onBattleResult(result)
     this.scene.stop()
     this.scene.resume('BiomeScene')
-  }
-
-  // ── Update ────────────────────────────────────────────────────────────────
-
-  update() {
-    if (!this.locked) {
-      this.numKeys.forEach((key, i) => {
-        if (Phaser.Input.Keyboard.JustDown(key)) this.handleAnswer(i)
-      })
-    }
   }
 }

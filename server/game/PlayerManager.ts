@@ -1,0 +1,177 @@
+/**
+ * PlayerManager — tracks all connected players by socket ID.
+ *
+ * Security notes:
+ *  - The server is the sole source of truth for level, xp, hp, and maxHp.
+ *  - Clients never send these values; only the username is accepted at join time.
+ *  - Duplicate username detection prevents impersonation within a session.
+ */
+
+import type { Player, PublicPlayer } from '../types/index.js';
+
+/** Starting stats for a brand-new player joining the server. */
+const INITIAL_STATS = {
+  level: 1,
+  xp: 0,
+  hp: 100,
+  maxHp: 100,
+  zone: 'town',
+  position: { x: 400, y: 300 },
+};
+
+export class PlayerManager {
+  /** socketId → Player */
+  private players: Map<string, Player> = new Map();
+
+  /** Lower-cased username → socketId (for duplicate detection). */
+  private usernameLookup: Map<string, string> = new Map();
+
+  // -------------------------------------------------------------------------
+  // Registration / removal
+  // -------------------------------------------------------------------------
+
+  /**
+   * Register a new player.  Returns `null` and a reason string if the username
+   * is already taken or invalid.
+   */
+  addPlayer(
+    socketId: string,
+    username: string,
+  ): { player: Player; error: null } | { player: null; error: string } {
+    const trimmed = username.trim();
+
+    if (!trimmed || trimmed.length < 2 || trimmed.length > 20) {
+      return { player: null, error: 'Username must be 2–20 characters.' };
+    }
+
+    // Allow only letters, numbers, underscores, and hyphens (child-safe)
+    if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+      return {
+        player: null,
+        error: 'Username may only contain letters, numbers, _ and -.',
+      };
+    }
+
+    const key = trimmed.toLowerCase();
+    if (this.usernameLookup.has(key)) {
+      return { player: null, error: 'That username is already taken.' };
+    }
+
+    const player: Player = {
+      id: socketId,
+      username: trimmed,
+      ...INITIAL_STATS,
+      position: { ...INITIAL_STATS.position },
+      lastMessageAt: 0,
+    };
+
+    this.players.set(socketId, player);
+    this.usernameLookup.set(key, socketId);
+
+    return { player, error: null };
+  }
+
+  /** Remove a player when they disconnect. */
+  removePlayer(socketId: string): Player | undefined {
+    const player = this.players.get(socketId);
+    if (player) {
+      this.usernameLookup.delete(player.username.toLowerCase());
+      this.players.delete(socketId);
+    }
+    return player;
+  }
+
+  // -------------------------------------------------------------------------
+  // Lookups
+  // -------------------------------------------------------------------------
+
+  getPlayer(socketId: string): Player | undefined {
+    return this.players.get(socketId);
+  }
+
+  getAllPlayers(): Player[] {
+    return Array.from(this.players.values());
+  }
+
+  getPlayersInZone(zone: string): Player[] {
+    return this.getAllPlayers().filter((p) => p.zone === zone);
+  }
+
+  // -------------------------------------------------------------------------
+  // Mutations (server-authoritative)
+  // -------------------------------------------------------------------------
+
+  /** Update a player's position and zone after server validates the move. */
+  updatePosition(socketId: string, x: number, y: number, zone: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+
+    player.position.x = x;
+    player.position.y = y;
+    player.zone = zone;
+    return true;
+  }
+
+  /** Apply XP gain, calculating level-ups server-side. */
+  addXp(socketId: string, amount: number): { newXp: number; newLevel: number; leveledUp: boolean } {
+    const player = this.players.get(socketId);
+    if (!player) return { newXp: 0, newLevel: 1, leveledUp: false };
+
+    player.xp += amount;
+
+    const oldLevel = player.level;
+    // Simple level formula: level = floor(xp / 100) + 1, capped at 50
+    player.level = Math.min(50, Math.floor(player.xp / 100) + 1);
+
+    if (player.level > oldLevel) {
+      // Restore full HP on level-up and increase max HP
+      player.maxHp = 100 + (player.level - 1) * 20;
+      player.hp = player.maxHp;
+    }
+
+    return {
+      newXp: player.xp,
+      newLevel: player.level,
+      leveledUp: player.level > oldLevel,
+    };
+  }
+
+  /** Apply damage to a player's HP (server-side only). */
+  applyDamage(socketId: string, amount: number): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    player.hp = Math.max(0, player.hp - amount);
+    return player.hp;
+  }
+
+  /** Restore HP to a player (server-side only). */
+  restoreHp(socketId: string, amount: number): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    player.hp = Math.min(player.maxHp, player.hp + amount);
+    return player.hp;
+  }
+
+  /** Record the timestamp of the last chat message for rate-limiting. */
+  updateLastMessageAt(socketId: string, ts: number): void {
+    const player = this.players.get(socketId);
+    if (player) player.lastMessageAt = ts;
+  }
+
+  // -------------------------------------------------------------------------
+  // Serialisation helpers
+  // -------------------------------------------------------------------------
+
+  /** Convert internal player to the safe public representation. */
+  toPublic(player: Player): PublicPlayer {
+    return {
+      id: player.id,
+      username: player.username,
+      level: player.level,
+      hp: player.hp,
+      maxHp: player.maxHp,
+      zone: player.zone,
+      position: { ...player.position },
+    };
+  }
+}

@@ -102,7 +102,12 @@ export function registerHandlers(
     // creating the in-memory player record.
     // Uses the username as the stable userId for DB lookups.
     const userId = payload.username;
-    await inventoryManager.loadInventory(userId);
+    // Pass socket.id so the in-memory record is keyed by socket ID — all
+    // subsequent handler calls use socket.id for lookups and addShard() will
+    // find the correct inventory.  The userId→socketId mapping is recorded
+    // inside loadInventory so persistInventory() still writes to the correct
+    // MongoDB document (keyed by username).
+    await inventoryManager.loadInventory(userId, socket.id);
     await chestManager.loadChest(userId);
     const savedProgress = await playerManager.loadProgress(userId);
 

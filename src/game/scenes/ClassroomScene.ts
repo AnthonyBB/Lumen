@@ -682,7 +682,7 @@ export class ClassroomScene extends Phaser.Scene {
 
     // Shard award
     if (perfect) {
-      const sy = H / 2 - 136
+      const sy = H / 2 - 140
       // Glowing orb
       const orb = this.add.graphics()
       orb.fillStyle(0x0044aa, 0.28); orb.fillCircle(0, sy, 32)
@@ -692,11 +692,12 @@ export class ClassroomScene extends Phaser.Scene {
       this.resultsPanel.add(orb)
       this.tweens.add({ targets: orb, scaleX: 1.18, scaleY: 1.18, duration: 750, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' })
 
-      this.resultsPanel.add(this.add.text(0, sy + 42, '🔮  Shard of Knowledge Awarded!', {
+      this.resultsPanel.add(this.add.text(0, sy + 46, '🔮  Shard of Knowledge Awarded!', {
         fontSize: '20px', fontFamily: 'Georgia, serif', color: '#88eeff', fontStyle: 'bold',
       }).setOrigin(0.5, 0.5))
-      this.resultsPanel.add(this.add.text(0, sy + 68, 'Added to your inventory', {
-        fontSize: '13px', fontFamily: 'Arial', color: '#888888',
+      this.resultsPanel.add(this.add.text(0, sy + 76, 'Added to your inventory', {
+        fontSize: '13px', fontFamily: 'Arial', color: '#aaaaaa',
+        backgroundColor: '#ffffff11', padding: { x: 10, y: 4 },
       }).setOrigin(0.5, 0.5))
 
     }

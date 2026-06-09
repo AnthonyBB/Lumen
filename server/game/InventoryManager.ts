@@ -23,6 +23,12 @@ export class InventoryManager {
   /** socketId / playerId → PlayerInventory */
   private inventories: Map<string, PlayerInventory> = new Map();
 
+  /**
+   * Maps socketId → username so persistInventory() can always write to the
+   * correct MongoDB document (keyed by username, not ephemeral socket IDs).
+   */
+  private socketToUser: Map<string, string> = new Map();
+
   // -------------------------------------------------------------------------
   // Persistence helpers
   // -------------------------------------------------------------------------
@@ -30,6 +36,9 @@ export class InventoryManager {
   /**
    * Persist the in-memory inventory for `playerId` to MongoDB.
    * Fire-and-forget — never awaited by callers.
+   *
+   * Always writes using the stable username (not the ephemeral socket ID) so
+   * the record survives disconnects and reconnects.
    */
   private persistInventory(playerId: string): void {
     if (!isDbConnected()) return;
@@ -37,8 +46,12 @@ export class InventoryManager {
     const inv = this.inventories.get(playerId);
     if (!inv) return;
 
+    // Resolve the stable username; fall back to playerId if not mapped (e.g.
+    // tests or legacy callers that pass a username directly).
+    const dbUserId = this.socketToUser.get(playerId) ?? playerId;
+
     PlayerInventoryModel.findOneAndUpdate(
-      { userId: playerId },
+      { userId: dbUserId },
       {
         items:     inv.items,
         equipment: inv.equipment,
@@ -56,23 +69,35 @@ export class InventoryManager {
    * If no record exists the map is left unchanged (createInventory handles
    * the initial write).
    *
+   * @param userId   The stable username used as the MongoDB document key.
+   * @param socketId When provided, the loaded inventory is stored under this
+   *                 key (the socket ID) so all subsequent in-memory lookups by
+   *                 socket ID work correctly.  The userId→socketId mapping is
+   *                 also recorded so persistInventory() can always write to the
+   *                 correct document.
+   *
    * Call this when a player connects / logs in.
    */
-  async loadInventory(userId: string): Promise<void> {
+  async loadInventory(userId: string, socketId?: string): Promise<void> {
     if (!isDbConnected()) return;
 
     try {
       const doc = await PlayerInventoryModel.findOne({ userId }).lean().exec();
       if (!doc) return;
 
+      const storeKey = socketId ?? userId;
+
       const inventory: PlayerInventory = {
-        playerId:  userId,
+        playerId:  storeKey,
         items:     (doc.items as InventoryItem[]) ?? [],
         equipment: (doc.equipment as PlayerInventory['equipment']) ?? {},
         gold:      (doc.gold as number) ?? 0,
       };
 
-      this.inventories.set(userId, inventory);
+      this.inventories.set(storeKey, inventory);
+
+      // Record the stable username so persistence always uses the right key
+      if (socketId) this.socketToUser.set(socketId, userId);
     } catch (err) {
       console.error('[DB] loadInventory failed:', err);
     }
@@ -111,6 +136,7 @@ export class InventoryManager {
   /** Remove inventory when a player disconnects. */
   deleteInventory(playerId: string): void {
     this.inventories.delete(playerId);
+    this.socketToUser.delete(playerId);
   }
 
   // -------------------------------------------------------------------------

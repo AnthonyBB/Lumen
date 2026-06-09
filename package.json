@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "server:dev": "tsx watch server/index.ts",
+    "server:dev": "npx tsx watch server/index.ts",
     "server:build": "tsc --project server/tsconfig.json"
   },
   "dependencies": {
@@ -28,7 +28,7 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-    "tsx": "^4.19.2",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.2",
     "vite": "^5.4.19"
   }

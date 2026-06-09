@@ -2,6 +2,14 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
 
 export type AgeGroup = 'child' | 'teen' | 'adult'
 
+/**
+ * User-chosen content mode.
+ * 'child'      — suitable for ages 7-12: safe questions, no mature themes
+ * 'adolescent' — suitable for ages 13+: full question library
+ * null         — not yet selected; game will prompt on first entry
+ */
+export type ContentMode = 'child' | 'adolescent' | null
+
 export interface IUser extends Document {
   username: string
   email: string
@@ -11,12 +19,32 @@ export interface IUser extends Document {
   emailVerifyExpires: Date | null
   dateOfBirth: Date
   ageGroup: AgeGroup
+  /** User-chosen content preference (overrides computed ageGroup for question filtering). */
+  contentMode: ContentMode
   createdAt: Date
   lastLogin: Date
 }
 
 export interface IUserModel extends Model<IUser> {
   computeAgeGroup(dob: Date): AgeGroup
+}
+
+/**
+ * Plain function — compute ageGroup from date of birth.
+ * child  = 7–12   (registration blocked under 7 in auth routes)
+ * teen   = 13–17
+ * adult  = 18+
+ */
+export function computeAgeGroup(dob: Date): AgeGroup {
+  const now = new Date()
+  let age = now.getFullYear() - dob.getFullYear()
+  const monthDiff = now.getMonth() - dob.getMonth()
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) {
+    age--
+  }
+  if (age >= 18) return 'adult'
+  if (age >= 13) return 'teen'
+  return 'child'
 }
 
 const UserSchema = new Schema<IUser>(
@@ -61,6 +89,11 @@ const UserSchema = new Schema<IUser>(
       enum: ['child', 'teen', 'adult'],
       required: true,
     },
+    contentMode: {
+      type: String,
+      enum: ['child', 'adolescent', null],
+      default: null,
+    },
     lastLogin: {
       type: Date,
       default: Date.now,
@@ -69,41 +102,26 @@ const UserSchema = new Schema<IUser>(
   { timestamps: true },
 )
 
-/**
- * Compute ageGroup from a date of birth.
- * child  = 7–12
- * teen   = 13–17
- * adult  = 18+
- * Under 7 = registration blocked upstream; we return 'child' as a fallback.
- */
-UserSchema.statics.computeAgeGroup = function (dob: Date): AgeGroup {
-  const now = new Date()
-  let age = now.getFullYear() - dob.getFullYear()
-  const monthDiff = now.getMonth() - dob.getMonth()
-  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) {
-    age--
-  }
-  if (age >= 18) return 'adult'
-  if (age >= 13) return 'teen'
-  return 'child'
-}
-
-/** Pre-save: derive ageGroup from dateOfBirth. */
+/** Pre-save: derive ageGroup directly from the standalone computeAgeGroup function. */
 UserSchema.pre('save', function (next) {
   if (this.isModified('dateOfBirth') || this.isNew) {
-    const UserModel = this.constructor as IUserModel
-    this.ageGroup = UserModel.computeAgeGroup(this.dateOfBirth)
+    this.ageGroup = computeAgeGroup(this.dateOfBirth)
   }
   next()
 })
 
-// Never return passwordHash in JSON responses
+// Expose as a static too, for any callers that use User.computeAgeGroup()
+UserSchema.statics.computeAgeGroup = computeAgeGroup
+
+// Never return sensitive fields in JSON responses
 UserSchema.set('toJSON', {
   transform: (_doc, ret) => {
-    delete ret.passwordHash
-    delete ret.emailVerifyToken
-    delete ret.emailVerifyExpires
-    return ret
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = ret as any
+    r.passwordHash = undefined
+    r.emailVerifyToken = undefined
+    r.emailVerifyExpires = undefined
+    return r
   },
 })
 

@@ -72,38 +72,69 @@ export class WorldScene extends Phaser.Scene {
   ]
   private nearBiomeGate: BiomeGate | null = null
 
+  // Spawn position — set via init() when returning from a biome, otherwise world centre
+  private spawnX = WORLD_WIDTH / 2
+  private spawnY = WORLD_HEIGHT / 2
+
   constructor() {
     super({ key: 'WorldScene' })
   }
 
+  init(data?: { spawnX?: number; spawnY?: number }) {
+    this.spawnX = data?.spawnX ?? WORLD_WIDTH / 2
+    this.spawnY = data?.spawnY ?? WORLD_HEIGHT / 2
+  }
+
   create() {
     // ── Ground ───────────────────────────────────────────────────────────────
-    const ground = this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 'ground').setOrigin(0, 0)
+    // Uses a single grass tile extracted from tileset_ground.png (col 1, row 4).
+    // setTileScale(4,4) makes each repeat 128 game-px wide (~10 tiles visible
+    // across the 1280-wide viewport) for a pleasingly chunky pixel-art look.
+    const ground = this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 'ground', 'grass_fill').setOrigin(0, 0)
     ground.setTileScale(4, 4)
 
-    // ── Path (cobblestone road) ───────────────────────────────────────────────
+    // ── Path (road) ───────────────────────────────────────────────────────────
     const centerX = WORLD_WIDTH / 2
     const centerY = WORLD_HEIGHT / 2
     const pathHalfW = 3  // tiles either side
     const pathHalfH = 3
 
-    // Horizontal path — extends full world width (covers Desert at x=320 and Ocean at x=2240)
-    for (let tx = 0; tx < WORLD_WIDTH / TILE_SIZE; tx++) {
-      for (let ty = -pathHalfH; ty <= pathHalfH; ty++) {
+    // ── Horizontal winding path (Desert ↔ Ocean) ──────────────────────────────
+    // Each 32×32 tileSprite uses a road tile from tileset_road.png at 1:1 so
+    // the full tile pattern is visible without cropping or setTileScale distortion.
+    {
+      const rand = this.rng(42)
+      const totalTiles = WORLD_WIDTH / TILE_SIZE           // 80 tiles
+      const offsets = this.buildWindingOffsets(totalTiles, 4, 8, rand)
+      // Pin the centre segment (tiles 36–44, ±4 tiles around x=1280) to offset 0
+      // so the path runs straight through the town square
+      for (let i = 36; i <= 44; i++) offsets[i] = 0
+
+      for (let tx = 0; tx < totalTiles; tx++) {
         const px = tx * TILE_SIZE
-        const py = centerY + ty * TILE_SIZE
-        const p = this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path').setOrigin(0, 0)
-        p.setTileScale(4, 4)
+        const baseY = centerY + offsets[tx] * TILE_SIZE
+        for (let ty = -pathHalfH; ty <= pathHalfH; ty++) {
+          const py = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, baseY + ty * TILE_SIZE))
+          this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path', 'road_fill').setOrigin(0, 0)
+        }
       }
     }
 
-    // Vertical path — extends full world height (covers Snow at y=320 and Swamp at y=2240)
-    for (let ty = 0; ty < WORLD_HEIGHT / TILE_SIZE; ty++) {
-      for (let tx = -pathHalfW; tx <= pathHalfW; tx++) {
-        const px = centerX + tx * TILE_SIZE
+    // ── Vertical winding path (Snow ↔ Swamp) ─────────────────────────────────
+    {
+      const rand = this.rng(137)
+      const totalTiles = WORLD_HEIGHT / TILE_SIZE
+      const offsets = this.buildWindingOffsets(totalTiles, 4, 8, rand)
+      // Pin the centre segment (tiles 36–44) to 0 so the path runs straight through town
+      for (let i = 36; i <= 44; i++) offsets[i] = 0
+
+      for (let ty = 0; ty < totalTiles; ty++) {
         const py = ty * TILE_SIZE
-        const p = this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path').setOrigin(0, 0)
-        p.setTileScale(4, 4)
+        const baseX = centerX + offsets[ty] * TILE_SIZE
+        for (let tx = -pathHalfW; tx <= pathHalfW; tx++) {
+          const px = Math.max(0, Math.min(WORLD_WIDTH - TILE_SIZE, baseX + tx * TILE_SIZE))
+          this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path', 'road_fill').setOrigin(0, 0)
+        }
       }
     }
 
@@ -135,7 +166,7 @@ export class WorldScene extends Phaser.Scene {
     const buildingDefs = [
       { label: 'Learning Center', x: 1050, y: 1100, w: 192, h: 192 },
       { label: 'Combat Training', x: 1510, y: 1100, w: 252, h: 180 },
-      { label: 'Market',          x: 1280, y: 1420, w: 220, h: 157 },
+      { label: 'Market',          x: 1050, y: 1420, w: 220, h: 157 },
       { label: 'Combat Strategy', x: 1510, y: 1420, w: 196, h: 196 },
     ]
 
@@ -185,7 +216,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // ── Player ────────────────────────────────────────────────────────────────
-    this.player = new Player(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
+    this.player = new Player(this, this.spawnX, this.spawnY)
 
     for (const entry of this.buildings) {
       this.physics.add.collider(this.player, entry.building.collider)
@@ -233,24 +264,73 @@ export class WorldScene extends Phaser.Scene {
     this.scene.launch('UIScene')
   }
 
-  /** Draw a diagonal path (3 tiles wide) stepping from (fromX,fromY) to (toX,toY) */
+  /** Draw a winding diagonal path (3 tiles wide) stepping from (fromX,fromY) to (toX,toY) */
   private drawDiagonalPath(fromX: number, fromY: number, toX: number, toY: number) {
     const dx = toX > fromX ? 1 : -1
     const dy = toY > fromY ? 1 : -1
     const steps = Math.abs(toX - fromX) / TILE_SIZE
 
+    // Seed from the start corner so each branch has unique wandering
+    const rand = this.rng(fromX ^ (fromY << 8))
+    const offsets = this.buildWindingOffsets(steps + 1, 3, 4, rand)
+
     for (let s = 0; s <= steps; s++) {
       const cx = fromX + s * dx * TILE_SIZE
       const cy = fromY + s * dy * TILE_SIZE
-      // Draw 3 tiles in the perpendicular diagonal direction
+      const perp = offsets[s]  // perpendicular wander in tile units
+
       for (let t = -1; t <= 1; t++) {
-        // Offset perpendicular to the diagonal direction
-        const ox = cx + t * dy * TILE_SIZE  // use dy as perpendicular x component
-        const oy = cy + t * dx * TILE_SIZE  // use dx as perpendicular y component (negated effectively)
-        const p = this.add.tileSprite(ox - TILE_SIZE / 2, oy - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE, 'path').setOrigin(0, 0)
-        p.setTileScale(4, 4)
+        // Perpendicular direction: rotate (dx,dy) by 90° → (-dy, dx)
+        const ox = cx + (t + perp) * (-dy) * TILE_SIZE
+        const oy = cy + (t + perp) * ( dx) * TILE_SIZE
+        const clampedOx = Math.max(0, Math.min(WORLD_WIDTH  - TILE_SIZE, ox - TILE_SIZE / 2))
+        const clampedOy = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, oy - TILE_SIZE / 2))
+        this.add.tileSprite(clampedOx, clampedOy, TILE_SIZE, TILE_SIZE, 'path', 'road_fill').setOrigin(0, 0)
       }
     }
+  }
+
+  /** Tiny seeded RNG (LCG) — returns a function that yields values in [0, 1). */
+  private rng(seed: number): () => number {
+    let s = seed >>> 0
+    return () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      s = (((s * 1664525 + 1013904223) | 0) >>> 0)
+      return s / 0x100000000
+    }
+  }
+
+  /**
+   * Returns an array of tile-unit offsets (one per tile along the path axis).
+   * Offsets start and end at 0, stay within [-maxOff, +maxOff], and change
+   * smoothly (cosine-interpolated between waypoints spaced waypointEvery tiles).
+   */
+  private buildWindingOffsets(
+    totalTiles: number,
+    maxOff: number,
+    waypointEvery: number,
+    rand: () => number,
+  ): number[] {
+    // Place waypoints; first and last are pinned to 0
+    const numWP = Math.ceil(totalTiles / waypointEvery) + 1
+    const wp: number[] = [0]
+    for (let i = 1; i < numWP - 1; i++) {
+      const prev = wp[i - 1]
+      const step = (rand() - 0.5) * maxOff * 1.5
+      wp.push(Math.round(Math.max(-maxOff, Math.min(maxOff, prev + step))))
+    }
+    wp.push(0)
+
+    // Cosine-interpolate to per-tile resolution
+    const offsets: number[] = []
+    for (let t = 0; t < totalTiles; t++) {
+      const pos = (t / (totalTiles - 1)) * (numWP - 1)
+      const i   = Math.min(Math.floor(pos), numWP - 2)
+      const mu  = pos - i
+      const cos = (1 - Math.cos(mu * Math.PI)) / 2  // smooth step
+      offsets.push(Math.round(wp[i] * (1 - cos) + wp[i + 1] * cos))
+    }
+    return offsets
   }
 
   /** Draw a biome entrance gate at world position (x,y) */
@@ -386,11 +466,11 @@ export class WorldScene extends Phaser.Scene {
 
     const panelW = 420
     const panelH = 280
-    const cx = GAME_WIDTH / 2
-    const cy = GAME_HEIGHT / 2
+    const cam = this.cameras.main
+    const cx = cam.scrollX + GAME_WIDTH / 2
+    const cy = cam.scrollY + GAME_HEIGHT / 2
 
     const container = this.add.container(cx, cy)
-    container.setScrollFactor(0)
     container.setDepth(200)
 
     // Background panel
@@ -512,7 +592,13 @@ export class WorldScene extends Phaser.Scene {
     hitZone.on('pointerdown', () => {
       this.closeBiomeMenu()
       this.scene.stop('UIScene')
-      this.scene.start('BiomeScene', { biome: biomeName, difficulty, location: locationName })
+      this.scene.start('BiomeScene', {
+        biome: biomeName,
+        difficulty,
+        location: locationName,
+        returnX: this.player.x,
+        returnY: this.player.y,
+      })
     })
     container.add(hitZone)
   }

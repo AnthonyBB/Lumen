@@ -98,11 +98,13 @@ export function registerHandlers(
       return;
     }
 
-    // Load persisted inventory and chest from MongoDB before creating new ones.
+    // Load persisted inventory, chest, and XP progress from MongoDB before
+    // creating the in-memory player record.
     // Uses the username as the stable userId for DB lookups.
     const userId = payload.username;
     await inventoryManager.loadInventory(userId);
     await chestManager.loadChest(userId);
+    const savedProgress = await playerManager.loadProgress(userId);
 
     const result = game.playerJoin(socket.id, payload.username);
 
@@ -112,6 +114,9 @@ export function registerHandlers(
     }
 
     const { player, zonePlayers } = result;
+
+    // Restore persisted XP / level now that the player record exists
+    playerManager.applyProgress(socket.id, savedProgress.xp, savedProgress.level);
 
     // Join the Socket.io room for this zone
     socket.join(player.zone);
@@ -279,6 +284,50 @@ export function registerHandlers(
     }
   });
 
+  // ── player:award_xp ─────────────────────────────────────────────────────
+  //
+  // Emitted by ClassroomScene after a learning session completes.
+  // The client reports how much XP was earned and whether a perfect score
+  // warrants a Shard of Knowledge.  The server caps the XP to a safe
+  // maximum (5 questions × 35 XP = 175) to prevent inflated payloads.
+  socket.on('player:award_xp', async (payload: { xp: unknown; awardShard: unknown }) => {
+    if (!isSafeNumber(payload?.xp, 0, 175) || typeof payload?.awardShard !== 'boolean') {
+      socket.emit('error', { message: 'Invalid award_xp payload.' });
+      return;
+    }
+
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before earning XP.' });
+      return;
+    }
+
+    const xpAmount = Math.floor(payload.xp as number); // ensure integer
+    const { newXp, newLevel, leveledUp } = playerManager.addXp(socket.id, xpAmount);
+    playerManager.persistProgress(socket.id);
+
+    if (payload.awardShard) {
+      inventoryManager.addShard(socket.id);
+      const inventory = inventoryManager.getInventory(socket.id);
+      if (inventory) {
+        socket.emit('inventory:updated', inventory);
+      }
+      console.log(`[award_xp] ${player.username} awarded a Shard of Knowledge`);
+    }
+
+    socket.emit('player:xp_updated', {
+      newXp,
+      newLevel,
+      leveledUp,
+      xpAwarded: xpAmount,
+    });
+
+    console.log(
+      `[award_xp] ${player.username} +${xpAmount} XP → ${newXp} XP (Lv ${newLevel})` +
+      (leveledUp ? ' *** LEVEL UP ***' : ''),
+    );
+  });
+
   // ── learning:start ───────────────────────────────────────────────────────
   socket.on('learning:start', (payload: LearningStartPayload) => {
     if (
@@ -291,10 +340,12 @@ export function registerHandlers(
       return;
     }
 
-    // Age-gating: child accounts may only access easy/medium difficulty
-    const ageGroup = (socket.data.ageGroup as string) ?? 'child';
-    if (ageGroup === 'child' && payload.difficulty === 'hard') {
-      socket.emit('error', { message: 'Hard difficulty is not available for your age group.' });
+    // Content-mode gating: child mode (user-chosen or defaulting from ageGroup)
+    // may only access easy/medium difficulty questions.
+    const contentMode = (socket.data.contentMode as string | null) ??
+      ((socket.data.ageGroup as string) === 'child' ? 'child' : 'adolescent');
+    if (contentMode === 'child' && payload.difficulty === 'hard') {
+      socket.emit('error', { message: 'Hard difficulty requires Adolescent+ content mode.' });
       return;
     }
 

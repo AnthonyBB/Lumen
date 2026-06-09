@@ -38,9 +38,19 @@ const app = express()
 app.use(
   cors({
     origin: CLIENT_ORIGIN,
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
   }),
 )
+
+// Explicitly handle preflight OPTIONS requests for all routes
+app.options('*', cors({
+  origin: CLIENT_ORIGIN,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}))
 
 app.use(express.json())
 
@@ -95,6 +105,7 @@ io.use((socket, next) => {
     socket.data.userId = payload.userId
     socket.data.username = payload.username
     socket.data.ageGroup = payload.ageGroup
+    socket.data.contentMode = payload.contentMode ?? null
     socket.data.authenticated = true
     return next()
   } catch {

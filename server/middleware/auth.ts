@@ -5,6 +5,8 @@ export interface JwtPayload {
   userId: string
   username: string
   ageGroup: 'child' | 'teen' | 'adult'
+  /** User-chosen content mode; null means not yet selected. */
+  contentMode: 'child' | 'adolescent' | null
 }
 
 declare global {

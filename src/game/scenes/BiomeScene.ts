@@ -6,6 +6,9 @@ interface BiomeSceneData {
   biome: string
   difficulty: 'easy' | 'medium' | 'hard'
   location: string
+  /** World position the player was standing at when they entered — used to respawn on exit. */
+  returnX?: number
+  returnY?: number
 }
 
 export class BiomeScene extends Phaser.Scene {
@@ -1017,7 +1020,10 @@ export class BiomeScene extends Phaser.Scene {
     this.player.update(this.cursors, this.wasd)
 
     if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-      this.scene.start('WorldScene')
+      this.scene.start('WorldScene', {
+        spawnX: this.biomeData.returnX,
+        spawnY: this.biomeData.returnY,
+      })
       this.scene.launch('UIScene')
     }
   }

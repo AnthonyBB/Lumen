@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT, PLAYER_SPEED } from '../constants'
 import type { Subject, Difficulty, Question } from '../../engine/types'
 import { QUESTIONS_BY_SUBJECT } from '../../engine/questions'
@@ -314,12 +315,19 @@ export class ClassroomScene extends Phaser.Scene {
   // ─── PLAYER ────────────────────────────────────────────────────────────────
 
   private createPlayer() {
-    this.player = this.physics.add.sprite(640, 650, 'player')
-    this.player.setScale(2).setDepth(10).setCollideWorldBounds(true)
+    // Use the idle spritesheet as the base texture (same key loaded in BootScene).
+    // The walk / idle animations are registered globally by Player.ts when the
+    // player enters WorldScene, so they are available here too.
+    this.player = this.physics.add.sprite(640, 650, 'character_idle')
+    this.player.setScale(1.5).setDepth(10).setCollideWorldBounds(true)
     const body = this.player.body as Phaser.Physics.Arcade.Body
-    body.setSize(18, 28)
-    body.setOffset(7, 18)
+    body.setSize(24, 20)
+    body.setOffset(8, 28)
     this.physics.world.setBounds(44, 286, GAME_WIDTH - 88, GAME_HEIGHT - 290)
+
+    // Start with a forward-facing idle (animations may not be registered yet if
+    // the scene is entered directly; guard before playing)
+    if (this.anims.exists('idle_down')) this.player.play('idle_down')
   }
 
   private setupInput() {
@@ -691,8 +699,28 @@ export class ClassroomScene extends Phaser.Scene {
         fontSize: '13px', fontFamily: 'Arial', color: '#888888',
       }).setOrigin(0.5, 0.5))
 
-      // Add to inventory via registry
-      this.registry.set('shards', ((this.registry.get('shards') as number) || 0) + 1)
+    }
+
+    // Persist XP (and shard if perfect) to MongoDB via the server.
+    // The socket is attached to window by GamePage.tsx as __lumenSocket.
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    if (socket?.connected) {
+      socket.emit('player:award_xp', { xp: this.xpEarned, awardShard: perfect })
+
+      // Update the Phaser registry when the server confirms the new XP/level
+      socket.once('player:xp_updated', (data: { newXp: number; newLevel: number; leveledUp: boolean }) => {
+        this.registry.set('xp', data.newXp)
+        this.registry.set('level', data.newLevel)
+        if (data.leveledUp) {
+          console.log(`[ClassroomScene] Level up! Now level ${data.newLevel}`)
+        }
+      })
+    } else {
+      // Fallback: update registry locally if the socket is not available
+      this.registry.set('xp', ((this.registry.get('xp') as number) || 0) + this.xpEarned)
+      if (perfect) {
+        this.registry.set('shards', ((this.registry.get('shards') as number) || 0) + 1)
+      }
     }
 
     // Return button
@@ -719,8 +747,21 @@ export class ClassroomScene extends Phaser.Scene {
       if (this.cursors.down.isDown  || this.wasd.S.isDown) vy++
       if (vx !== 0 && vy !== 0) { vx *= 0.707; vy *= 0.707 }
       this.player.setVelocity(vx * PLAYER_SPEED, vy * PLAYER_SPEED)
-      if (vx < 0) this.player.setFlipX(true)
-      else if (vx > 0) this.player.setFlipX(false)
+
+      // Play directional walk / idle animations (registered globally by Player.ts)
+      if (this.anims.exists('walk_down')) {
+        if (vx !== 0 || vy !== 0) {
+          let dir: string
+          if (Math.abs(vy) >= Math.abs(vx)) dir = vy > 0 ? 'down' : 'up'
+          else                               dir = vx > 0 ? 'right' : 'left'
+          const key = `walk_${dir}`
+          if (this.player.anims.currentAnim?.key !== key) this.player.play(key)
+        } else {
+          const lastDir = (this.player.anims.currentAnim?.key ?? 'walk_down').replace('walk_', '').replace('idle_', '')
+          const key = `idle_${lastDir}`
+          if (this.player.anims.currentAnim?.key !== key) this.player.play(key)
+        }
+      }
 
       // ESC → world
       if (Phaser.Input.Keyboard.JustDown(this.escKey)) { this.returnToWorld(); return }

@@ -9,7 +9,7 @@
  *  updatedAt    — last write timestamp
  */
 
-import { Schema, model, models, type Model, type Document } from 'mongoose';
+import mongoose, { Schema, model, type Model, type Document } from 'mongoose';
 import { inventoryItemSchema } from './InventoryItemSchema.js';
 
 interface PlayerInventoryDoc extends Document {
@@ -49,5 +49,5 @@ const playerInventorySchema = new Schema(
 
 // Re-use existing compiled model if it exists (important for hot-reload / tsx watch)
 export const PlayerInventoryModel: Model<PlayerInventoryDoc> =
-  (models['PlayerInventory'] as Model<PlayerInventoryDoc>) ??
+  (mongoose.models['PlayerInventory'] as Model<PlayerInventoryDoc>) ??
   model<PlayerInventoryDoc>('PlayerInventory', playerInventorySchema);

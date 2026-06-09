@@ -6,3 +6,6 @@ export type { IPlayerInventory } from './PlayerInventory.js'
 
 export { ChestStorage } from './ChestStorage.js'
 export type { IChestStorage } from './ChestStorage.js'
+
+export { PlayerProgress } from './PlayerProgressModel.js'
+export type { IPlayerProgress } from './PlayerProgressModel.js'

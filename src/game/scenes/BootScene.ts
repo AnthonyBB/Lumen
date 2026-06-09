@@ -7,7 +7,11 @@ export class BootScene extends Phaser.Scene {
 
   preload() {
     // ── PLAYER spritesheets (160x192, 4 cols x 4 rows = 40x48 per frame) ───────
-    // Row 0 = down, Row 1 = left, Row 2 = right, Row 3 = up
+    // Both spritesheets share the same row layout (confirmed):
+    //   Row 0 (frames  0– 3) → facing LEFT
+    //   Row 1 (frames  4– 7) → facing RIGHT
+    //   Row 2 (frames  8–11) → facing UP   (back to viewer)
+    //   Row 3 (frames 12–15) → facing DOWN (front, toward viewer)
     this.load.spritesheet('character_walk', '/assets/sprites/character_walk.png', {
       frameWidth: 40,
       frameHeight: 48,
@@ -66,9 +70,16 @@ export class BootScene extends Phaser.Scene {
     sg.lineBetween(0, 16, 32, 16)
     sg.generateTexture('stone', 32, 32)
     sg.destroy()
+
   }
 
   create() {
+    // Extract single grass tile from the ground tileset (col 1, row 4 = pixel 32,128)
+    this.textures.get('ground').add('grass_fill', 0, 32, 128, 32, 32)
+
+    // Extract single path tile from the road tileset (col 1, row 1 = pixel 32,32)
+    this.textures.get('path').add('road_fill', 0, 32, 32, 32, 32)
+
     this.scene.start('WorldScene')
   }
 }

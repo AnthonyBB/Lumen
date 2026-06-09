@@ -2,9 +2,9 @@ import { Router, type Request, type Response } from 'express'
 import bcrypt from 'bcryptjs'
 import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
-import { User } from '../db/models/User.js'
+import { User, computeAgeGroup } from '../db/models/User.js'
 import { isDbConnected } from '../db/connection.js'
-import { signToken } from '../middleware/auth.js'
+import { signToken, requireAuth } from '../middleware/auth.js'
 import { sendVerificationEmail } from '../utils/email.js'
 
 const router = Router()
@@ -115,9 +115,17 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     emailVerifyToken,
     emailVerifyExpires,
     dateOfBirth: dob,
+    ageGroup: computeAgeGroup(dob),  // set explicitly — don't rely on pre-save hook
   })
 
-  await user.save()
+  try {
+    await user.save()
+  } catch (err: unknown) {
+    console.error('[Auth] Register save error:', err)
+    const msg = err instanceof Error ? err.message : 'Failed to create account.'
+    res.status(500).json({ error: msg })
+    return
+  }
 
   // Send verification email (non-blocking — don't fail registration if email fails)
   try {
@@ -164,12 +172,18 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   }
 
   user.lastLogin = new Date()
-  await user.save()
+  try {
+    await user.save()
+  } catch (err) {
+    console.error('[Auth] Login save error:', err)
+    // Non-fatal — lastLogin update failed but we can still issue the token
+  }
 
   const token = signToken({
     userId: user._id.toString(),
     username: user.username,
     ageGroup: user.ageGroup,
+    contentMode: user.contentMode ?? null,
   })
 
   res.json({
@@ -177,6 +191,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
     user: {
       username: user.username,
       ageGroup: user.ageGroup,
+      contentMode: user.contentMode ?? null,
     },
   })
 })
@@ -247,6 +262,58 @@ router.post('/resend-verification', authLimiter, async (req: Request, res: Respo
   }
 
   res.json(genericResponse)
+})
+
+// ---------------------------------------------------------------------------
+// PUT /api/auth/content-mode  (authenticated)
+// Updates the user's self-selected content mode and issues a fresh JWT.
+// ---------------------------------------------------------------------------
+
+router.put('/content-mode', requireAuth, async (req: Request, res: Response) => {
+  if (dbRequired(res)) return
+
+  const { contentMode } = req.body
+  if (contentMode !== 'child' && contentMode !== 'adolescent') {
+    res.status(400).json({ error: 'contentMode must be "child" or "adolescent".' })
+    return
+  }
+
+  // Children (ageGroup === 'child', age 7-12) may not self-upgrade to adolescent mode
+  // unless a parent/guardian explicitly overrides. Server enforces the minimum.
+  const user = await User.findById(req.user!.userId)
+  if (!user) {
+    res.status(404).json({ error: 'User not found.' })
+    return
+  }
+
+  // Safety gate: if the account's computed ageGroup is 'child', allow only 'child' mode.
+  // They can still choose 'child' explicitly (first-time selection).
+  if (user.ageGroup === 'child' && contentMode === 'adolescent') {
+    res.status(403).json({
+      error: 'Adolescent+ content is not available for accounts registered as under 13.',
+    })
+    return
+  }
+
+  user.contentMode = contentMode
+  await user.save()
+
+  // Issue fresh JWT with updated contentMode
+  const newToken = signToken({
+    userId: user._id.toString(),
+    username: user.username,
+    ageGroup: user.ageGroup,
+    contentMode: user.contentMode,
+  })
+
+  res.json({
+    token: newToken,
+    user: {
+      username: user.username,
+      ageGroup: user.ageGroup,
+      contentMode: user.contentMode,
+    },
+  })
 })
 
 export default router

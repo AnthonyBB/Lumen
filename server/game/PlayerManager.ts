@@ -8,6 +8,7 @@
  */
 
 import type { Player, PublicPlayer } from '../types/index.js';
+import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 
 /** Starting stats for a brand-new player joining the server. */
 const INITIAL_STATS = {
@@ -134,6 +135,56 @@ export class PlayerManager {
       newLevel: player.level,
       leveledUp: player.level > oldLevel,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Progress persistence (MongoDB)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Load saved XP and level from MongoDB for a given userId (= username).
+   * Returns default values if no record exists yet.
+   */
+  async loadProgress(userId: string): Promise<{ xp: number; level: number }> {
+    try {
+      const doc = await PlayerProgress.findOne({ userId }).lean();
+      if (doc) {
+        return { xp: doc.xp, level: doc.level };
+      }
+    } catch (err) {
+      console.error('[PlayerManager] loadProgress error:', err);
+    }
+    return { xp: 0, level: 1 };
+  }
+
+  /**
+   * Apply previously-loaded XP/level to a player who has already been
+   * registered with addPlayer().
+   */
+  applyProgress(socketId: string, xp: number, level: number): void {
+    const player = this.players.get(socketId);
+    if (!player) return;
+    player.xp = Math.max(0, xp);
+    player.level = Math.min(50, Math.max(1, level));
+    player.maxHp = 100 + (player.level - 1) * 20;
+    player.hp = player.maxHp;
+  }
+
+  /**
+   * Fire-and-forget write of the player's current XP/level to MongoDB.
+   * Uses the player's username as the stable userId key.
+   */
+  persistProgress(socketId: string): void {
+    const player = this.players.get(socketId);
+    if (!player) return;
+
+    PlayerProgress.findOneAndUpdate(
+      { userId: player.username },
+      { xp: player.xp, level: player.level },
+      { upsert: true, new: true },
+    ).catch((err) => {
+      console.error('[PlayerManager] persistProgress error:', err);
+    });
   }
 
   /** Apply damage to a player's HP (server-side only). */

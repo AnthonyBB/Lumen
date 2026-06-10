@@ -112,6 +112,9 @@ export class ClassroomScene extends Phaser.Scene {
   private subjectGrades: Record<Subject, number> = { math: 1, science: 1, history: 1, language: 1 }
   private topicPasses: Record<string, number> = {}
 
+  // Topic modal navigation: null = subject-select view; a subject = its topic list.
+  private modalSubject: Subject | null = null
+
   private sessionTopic: GradeTopic | null = null
 
   // Server-driven session state — populated exclusively from server responses.
@@ -484,13 +487,27 @@ export class ClassroomScene extends Phaser.Scene {
 
   // ─── TOPIC MODAL ───────────────────────────────────────────────────────────
   //
-  // Shows all 4 subjects, each with the player's CURRENT grade badge and that
-  // grade's 2 topics with a passes indicator (●●○). Built from server data only.
+  // Two-level navigation, all from server data only:
+  //   1. modalSubject === null → pick one of the 4 subjects (with grade badge)
+  //   2. modalSubject set       → that subject's CURRENT grade topics (●●○)
+
+  /** Open the modal at the top level (subject select). */
+  private openTopicModal() {
+    this.modalSubject = null
+    this.buildTopicModal()
+    this.topicModal.setVisible(true)
+  }
 
   private buildTopicModal() {
+    if (this.modalSubject === null) this.buildSubjectSelect()
+    else this.buildTopicList(this.modalSubject)
+  }
+
+  /** Level 1: choose a subject. */
+  private buildSubjectSelect() {
     this.topicModal.removeAll(true)
 
-    const W = 980, H = 560
+    const W = 820, H = 500
     const bg = this.add.graphics()
     bg.fillStyle(0x0c0c24, 0.98)
     bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
@@ -498,64 +515,98 @@ export class ClassroomScene extends Phaser.Scene {
     bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
     this.topicModal.add(bg)
 
-    this.topicModal.add(this.add.text(0, -H / 2 + 30, 'What would you like to study today?', {
+    this.topicModal.add(this.add.text(0, -H / 2 + 32, 'What would you like to study today?', {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
-    this.topicModal.add(this.add.text(0, -H / 2 + 58, 'Each topic is a 5-question quiz · pass at 4/5 · complete a topic with 3 passes', {
+    this.topicModal.add(this.add.text(0, -H / 2 + 60, 'Choose a subject to see this grade\'s topics', {
       fontSize: '13px', fontFamily: 'Arial', color: '#aaaaaa',
     }).setOrigin(0.5, 0.5))
 
     const div = this.add.graphics()
     div.lineStyle(1, 0xffd700, 0.35)
-    div.lineBetween(-W / 2 + 40, -H / 2 + 78, W / 2 - 40, -H / 2 + 78)
+    div.lineBetween(-W / 2 + 40, -H / 2 + 80, W / 2 - 40, -H / 2 + 80)
     this.topicModal.add(div)
 
-    // 2 × 2 grid of subject columns
-    const colW = 452
+    // 2 × 2 grid of big subject buttons
+    const bw = 360, bh = 96
     const grid = [
-      { x: -colW / 2 - 8, y: -88 }, { x: colW / 2 + 8, y: -88 },
-      { x: -colW / 2 - 8, y: 132 }, { x: colW / 2 + 8, y: 132 },
+      { x: -190, y: -64 }, { x: 190, y: -64 },
+      { x: -190, y: 56 },  { x: 190, y: 56 },
     ]
-
     SUBJECT_CONFIG.forEach((s, i) => {
-      const cx = grid[i].x, cy = grid[i].y
       const grade = this.subjectGrades[s.key] ?? 1
       const mastered = grade >= MASTERED_GRADE
+      const btn = this.makeButton(
+        `${s.icon}  ${s.label}`,
+        mastered ? 'Mastered ✓' : `Grade ${grade}`,
+        bw, bh, s.color, s.hover,
+        () => { this.modalSubject = s.key; this.buildTopicModal() },
+      )
+      btn.setPosition(grid[i].x, grid[i].y)
+      this.topicModal.add(btn)
+    })
 
-      // Subject header
-      const badge = mastered ? 'Mastered ✓' : `Grade ${grade}`
-      this.topicModal.add(this.add.text(cx, cy - 84, `${s.icon}  ${s.label}`, {
-        fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+    const exit = this.makeButton('← Return to World', '', 210, 40, 0x2a2a44, 0x3a3a60, () => this.returnToWorld())
+    exit.setPosition(0, H / 2 - 32)
+    this.topicModal.add(exit)
+  }
+
+  /** Level 2: the chosen subject's current-grade topics. */
+  private buildTopicList(subject: Subject) {
+    this.topicModal.removeAll(true)
+
+    const s = SUBJECT_CONFIG.find(c => c.key === subject)!
+    const grade = this.subjectGrades[subject] ?? 1
+    const mastered = grade >= MASTERED_GRADE
+
+    const W = 720, H = 460
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0c0c24, 0.98)
+    bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
+    bg.lineStyle(2, 0xffd700, 1)
+    bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
+    this.topicModal.add(bg)
+
+    this.topicModal.add(this.add.text(0, -H / 2 + 32, `${s.icon}  ${s.label}`, {
+      fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+    this.topicModal.add(this.add.text(0, -H / 2 + 60,
+      mastered ? 'Mastered ✓' : `Grade ${grade}  ·  each topic is a 5-question quiz, pass at 4/5`, {
+      fontSize: '13px', fontFamily: 'Arial', color: mastered ? '#ffd700' : '#aaaaaa',
+    }).setOrigin(0.5, 0.5))
+
+    // Back button (top-left) → subject select
+    const back = this.makeButton('← Subjects', '', 130, 34, 0x2a2a44, 0x3a3a60,
+      () => { this.modalSubject = null; this.buildTopicModal() })
+    back.setPosition(-W / 2 + 80, -H / 2 + 30)
+    this.topicModal.add(back)
+
+    const div = this.add.graphics()
+    div.lineStyle(1, 0xffd700, 0.35)
+    div.lineBetween(-W / 2 + 40, -H / 2 + 84, W / 2 - 40, -H / 2 + 84)
+    this.topicModal.add(div)
+
+    if (mastered) {
+      this.topicModal.add(this.add.text(0, -10, '🏆  All 12 grades complete!\nYou have mastered this subject.', {
+        fontSize: '17px', fontFamily: 'Georgia, serif', color: '#ffd700', align: 'center', lineSpacing: 8,
       }).setOrigin(0.5, 0.5))
-      this.topicModal.add(this.add.text(cx, cy - 60, badge, {
-        fontSize: '13px', fontFamily: 'Arial',
-        color: mastered ? '#ffd700' : '#88ccff', fontStyle: 'bold',
-      }).setOrigin(0.5, 0.5))
-
-      if (mastered) {
-        this.topicModal.add(this.add.text(cx, cy + 2, 'All grades complete!\nYou have mastered this subject.', {
-          fontSize: '13px', fontFamily: 'Arial', color: '#888888', align: 'center',
-        }).setOrigin(0.5, 0.5))
-        return
-      }
-
-      const topics = TOPICS_BY_SUBJECT_GRADE[s.key]?.[grade] ?? []
+    } else {
+      const topics = TOPICS_BY_SUBJECT_GRADE[subject]?.[grade] ?? []
       topics.forEach((t, ti) => {
         const passes = this.topicPasses[t.id] ?? 0
         const done = passes >= PASSES_TO_COMPLETE
-        const by = cy - 28 + ti * 70
         const btn = this.makeButton(
           `${t.icon}  ${t.name}`,
           `${passesDots(passes)}  ${done ? 'Complete!' : `${passes}/${PASSES_TO_COMPLETE} passes`}`,
-          colW - 24, 60,
+          W - 120, 80,
           done ? 0x1a5a2a : s.color,
           done ? 0x2a7a3a : s.hover,
-          () => { if (this.state === 'teacher_dialog' || this.state === 'topic_select') this.onTopicChosen(t) },
+          () => this.onTopicChosen(t),
         )
-        btn.setPosition(cx, by)
+        btn.setPosition(0, -30 + ti * 104)
         this.topicModal.add(btn)
       })
-    })
+    }
 
     const exit = this.makeButton('← Return to World', '', 210, 40, 0x2a2a44, 0x3a3a60, () => this.returnToWorld())
     exit.setPosition(0, H / 2 - 32)
@@ -962,10 +1013,9 @@ export class ClassroomScene extends Phaser.Scene {
           this.player.setVelocity(0, 0)
           this.state = 'teacher_dialog'
           this.overlay.setVisible(true)
-          // Refresh progression then show the topic picker
+          // Refresh progression then show the subject picker
           this.socket?.emit('shop:get_unlocks')
-          this.buildTopicModal()
-          this.topicModal.setVisible(true)
+          this.openTopicModal()
         }
       } else {
         this.teacherPrompt.setVisible(false)

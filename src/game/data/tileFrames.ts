@@ -18,6 +18,8 @@ export const TT_COLS = 12
 
 const rl = (col: number, row: number) => row * RL_COLS + col
 const tt = (col: number, row: number) => row * TT_COLS + col
+// tiny_dungeon shares tiny_town geometry (12 cols × 11 rows, 16px, no spacing)
+const td = (col: number, row: number) => row * TT_COLS + col
 
 // ── Roguelike: base terrain (each has two speckled variants) ────────────────
 export const RL_WATER       = rl(0, 0)   // (0,0)  light blue water
@@ -86,3 +88,31 @@ export const TT_TREE_ROUND     = tt(5, 0)  // (5,0)  round green tree (single ti
 export const TT_TREE_ORANGE_SM = tt(3, 2)  // (3,2)  small orange tree
 export const TT_TREE_GREEN_SM  = tt(4, 2)  // (4,2)  small green tree
 export const TT_MUSHROOMS      = tt(5, 2)  // (5,2)  red mushrooms
+
+// ── Tiny Dungeon: monsters & creatures ──────────────────────────────────────
+// All nine frames pixel-verified by extracting upscaled tiles from the sheet.
+// Character block layout: row 7 = heroes + chests (mimic at col 8),
+// row 8 = knights/princess + shields/swords, row 9 = monsters then potions,
+// row 10 = monsters then torches/wands.
+
+// Easy tier — small critters
+export const TD_SLIME   = td(0, 9)  // (0,9)  green slime blob
+export const TD_BAT     = td(0, 10) // (0,10) brown bat
+export const TD_SPIDER  = td(2, 10) // (2,10) brown spider
+
+// Medium tier — mid creatures
+export const TD_GHOST   = td(1, 10) // (1,10) white ghost
+export const TD_CRAB    = td(2, 9)  // (2,9)  red crab creature
+export const TD_CRITTER = td(3, 10) // (3,10) shelled brown critter
+
+// Hard tier — tough creatures
+export const TD_CYCLOPS = td(1, 9)  // (1,9)  tan one-eyed brute
+export const TD_HOODED  = td(3, 9)  // (3,9)  hooded red-eyed creature
+export const TD_MIMIC   = td(8, 7)  // (8,7)  mimic chest with teeth
+
+// Difficulty-tier pools used by BattleScene / BiomeScene
+export const TD_MONSTERS: Record<'easy' | 'medium' | 'hard', number[]> = {
+  easy:   [TD_SLIME, TD_BAT, TD_SPIDER],
+  medium: [TD_GHOST, TD_CRAB, TD_CRITTER],
+  hard:   [TD_CYCLOPS, TD_HOODED, TD_MIMIC],
+}

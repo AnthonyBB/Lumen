@@ -18,6 +18,7 @@ import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { PLAYER_SKILLS } from '../data/skills'
 import type { Skill } from '../data/skills'
+import { TD_MONSTERS } from '../data/tileFrames'
 import type { BiomeScene } from './BiomeScene'
 
 // ── Public types (used by BiomeScene) ─────────────────────────────────────
@@ -26,6 +27,9 @@ export interface MobDef {
   name: string
   level: number
   maxHp: number
+  /** Optional tiny_dungeon frame chosen by BiomeScene so the map marker and
+   *  battle enemy show the same creature. Falls back to the difficulty pool. */
+  frame?: number
 }
 
 export interface BattleSceneData {
@@ -49,16 +53,8 @@ export interface BattleResult {
 const MOB_DAMAGE: Record<string, number> = { easy: 8, medium: 15, hard: 24 }
 const XP_PER_MOB:  Record<string, number> = { easy: 18, medium: 30, hard: 50 }
 
-const MOB_COLOR: Record<string, number> = {
-  'Desert':              0xd4903a,
-  'Pine Forest':         0x5a7a50,
-  'Deciduous Forest':    0x7a5a30,
-  'Swamp':               0x3a6a38,
-  'Snow':                0xaaccee,
-  'Grassland':           0x7a8a40,
-  'Tropical Rainforest': 0x3a5a2a,
-  'Ocean':               0x4a6a8a,
-}
+// Sprite scale per difficulty (16px source tile → 64/72/80 px on screen)
+const MOB_SCALE: Record<string, number> = { easy: 4, medium: 4.5, hard: 5 }
 
 // Layout zones
 const HEADER_H      = 48
@@ -84,9 +80,12 @@ interface ActiveMob extends MobDef {
   alive: boolean
   px: number   // screen position
   py: number
-  gfx: Phaser.GameObjects.Graphics | null
+  monsterFrame: number   // resolved tiny_dungeon frame for this mob
+  sprite: Phaser.GameObjects.Sprite | null
+  shadow: Phaser.GameObjects.Ellipse | null
   nameText: Phaser.GameObjects.Text | null
   hpBarGfx: Phaser.GameObjects.Graphics | null
+  hitZone: Phaser.GameObjects.Rectangle | null
 }
 
 // ── BattleScene ────────────────────────────────────────────────────────────
@@ -159,13 +158,17 @@ export class BattleScene extends Phaser.Scene {
       }
     })
 
+    // Deterministic frame per mob: BiomeScene-chosen frame if provided,
+    // otherwise picked from the difficulty tier pool, seeded by mob index.
+    const pool = TD_MONSTERS[this.battleData.difficulty]
     this.mobs = this.battleData.mobs.map((def, i) => ({
       ...def,
       hp: def.maxHp,
       alive: true,
       px: positions[i]?.x ?? GAME_WIDTH / 2,
       py: positions[i]?.y ?? 160,
-      gfx: null, nameText: null, hpBarGfx: null,
+      monsterFrame: def.frame ?? pool[i % pool.length],
+      sprite: null, shadow: null, nameText: null, hpBarGfx: null, hitZone: null,
     }))
   }
 
@@ -239,57 +242,37 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private renderMob(mob: ActiveMob, idx: number) {
-    mob.gfx?.destroy()
+    if (mob.sprite) this.tweens.killTweensOf(mob.sprite)
+    mob.sprite?.destroy()
+    mob.shadow?.destroy()
     mob.nameText?.destroy()
     mob.hpBarGfx?.destroy()
+    mob.hitZone?.destroy()
+    mob.sprite = null; mob.shadow = null; mob.nameText = null
+    mob.hpBarGfx = null; mob.hitZone = null
 
     const { px, py, alive } = mob
-    const bodyColor = alive
-      ? (MOB_COLOR[this.battleData.biome] ?? 0x8888aa)
-      : 0x333333
-    const alpha = alive ? 1 : 0.3
-
-    const g = this.add.graphics().setDepth(5).setAlpha(alpha)
-    mob.gfx = g
+    const scale = MOB_SCALE[this.battleData.difficulty] ?? 4
 
     // Shadow
-    g.fillStyle(0x000000, 0.4)
-    g.fillEllipse(px + 3, py + 28, 52, 12)
+    mob.shadow = this.add.ellipse(px + 3, py + 28, 52, 12, 0x000000, alive ? 0.4 : 0.15)
+      .setDepth(4)
 
-    // Body
-    g.fillStyle(bodyColor, 1)
-    g.fillEllipse(px, py + 12, 44, 34)
-
-    // Head
-    g.fillStyle(bodyColor, 1)
-    g.fillCircle(px, py - 12, 20)
-
-    // Eye whites
-    if (alive) {
-      g.fillStyle(0xffffff, 1)
-      g.fillCircle(px - 7, py - 14, 5)
-      g.fillCircle(px + 7, py - 14, 5)
-      g.fillStyle(0x110011, 1)
-      g.fillCircle(px - 7, py - 14, 2)
-      g.fillCircle(px + 7, py - 14, 2)
-      // Brow
-      g.lineStyle(2, Phaser.Display.Color.IntegerToColor(bodyColor).darken(40).color, 1)
-      g.lineBetween(px - 10, py - 20, px - 4, py - 22)
-      g.lineBetween(px + 4, py - 22, px + 10, py - 20)
-    } else {
-      // X eyes
-      g.lineStyle(2, 0x666666, 0.9)
-      g.lineBetween(px - 11, py - 18, px - 4, py - 10)
-      g.lineBetween(px - 4, py - 18, px - 11, py - 10)
-      g.lineBetween(px + 4, py - 18, px + 11, py - 10)
-      g.lineBetween(px + 11, py - 18, px + 4, py - 10)
+    // Monster sprite (Kenney Tiny Dungeon, frame chosen per difficulty tier)
+    const sprite = this.add.sprite(px, py - 4, 'tiny_dungeon', mob.monsterFrame)
+      .setScale(scale)
+      .setDepth(5)
+    mob.sprite = sprite
+    if (!alive) {
+      // Death state: darkened, faded
+      sprite.setTint(0x444444).setAlpha(0.4)
     }
 
     // HP bar
     const hpGfx = this.add.graphics().setDepth(5)
     mob.hpBarGfx = hpGfx
     if (alive) {
-      const bw = 60, bh = 7, bx = px - bw / 2, by = py + 32
+      const bw = 60, bh = 7, bx = px - bw / 2, by = py + 36
       hpGfx.fillStyle(0x222222, 1)
       hpGfx.fillRoundedRect(bx, by, bw, bh, 2)
       const pct = Math.max(0, mob.hp / mob.maxHp)
@@ -319,17 +302,17 @@ export class BattleScene extends Phaser.Scene {
         .setInteractive({ useHandCursor: true })
         .setName(`mob_${idx}`)
       hit.on('pointerover', () => {
-        if (this.phase === 'target_select') {
-          g.setAlpha(0.75)
+        if (this.phase === 'target_select' && mob.alive) {
+          sprite.setTint(0xff8866)
         }
       })
       hit.on('pointerout', () => {
-        if (alive) g.setAlpha(1)
+        if (mob.alive) sprite.clearTint()
       })
       hit.on('pointerdown', () => {
-        if (this.phase === 'target_select') this.fireSkilOnMob(idx)
+        if (this.phase === 'target_select' && mob.alive) this.fireSkilOnMob(idx)
       })
-      mob.gfx?.setData('hit', hit)
+      mob.hitZone = hit
     }
   }
 
@@ -452,18 +435,17 @@ export class BattleScene extends Phaser.Scene {
 
   private highlightAliveMobs(on: boolean) {
     this.mobs.forEach(mob => {
-      if (!mob.alive) return
+      if (!mob.alive || !mob.sprite) return
       if (on) {
-        mob.gfx?.setAlpha(0.85)
         this.tweens.add({
-          targets: mob.gfx,
+          targets: mob.sprite,
           alpha: { from: 0.7, to: 1 },
           duration: 500, yoyo: true, repeat: -1,
           ease: 'Sine.easeInOut',
         })
       } else {
-        if (mob.gfx) this.tweens.killTweensOf(mob.gfx)
-        mob.gfx?.setAlpha(1)
+        this.tweens.killTweensOf(mob.sprite)
+        mob.sprite.setAlpha(1)
       }
     })
   }

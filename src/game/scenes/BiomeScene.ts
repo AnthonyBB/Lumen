@@ -25,7 +25,7 @@ import {
   RL_TREE_GREEN_TALL, RL_TREE_ORANGE_TALL, RL_TREE_TEAL_TALL,
   RL_PINE_GREEN_TALL, RL_PINE_TEAL_TALL, RL_TREE_BERRY_TALL,
   RL_ROCKS_BROWN, RL_ROCKS_BROWN_MOSS, RL_ROCKS_GRAY, RL_ROCKS_GRAY_MOSS, RL_ROCKS_WATER,
-  TT_MUSHROOMS,
+  TT_MUSHROOMS, TD_MONSTERS,
 } from '../data/tileFrames'
 
 // ── World dimensions ────────────────────────────────────────────────────────
@@ -51,6 +51,7 @@ interface PathNode {
   cleared: boolean
   markerGfx: Phaser.GameObjects.Graphics | null
   markerLabel: Phaser.GameObjects.Text | null
+  markerSprite: Phaser.GameObjects.Sprite | null
 }
 
 type PathState = 'idle' | 'walking' | 'encounter_pause' | 'battling' | 'complete'
@@ -175,21 +176,28 @@ export class BiomeScene extends Phaser.Scene {
     const mobHp  = MOB_HP[difficulty]
     const mobName = MOB_NAMES[biome] ?? 'Enemy'
 
+    const framePool = TD_MONSTERS[difficulty]
+    let encounterNo = 0
+
     this.pathNodes = WP_DEFS.map(wp => {
       const node: PathNode = {
         x: Math.round(wp.fx * WORLD_W),
         y: Math.round(wp.fy * WORLD_H),
         type: wp.type,
         cleared: false,
-        markerGfx: null, markerLabel: null,
+        markerGfx: null, markerLabel: null, markerSprite: null,
       }
       if (wp.type === 'encounter') {
         const count = Phaser.Math.Between(minMobs, maxMobs)
         const level = Phaser.Math.Between(minLv, maxLv)
+        // One creature look per encounter, deterministic per encounter index,
+        // shared with BattleScene via MobDef.frame so map + battle match.
+        const frame = framePool[encounterNo++ % framePool.length]
         node.mobs = Array.from({ length: count }, (_, j) => ({
           name: mobName,
           level: level + Math.floor(j / 2),
           maxHp: mobHp,
+          frame,
         }))
       }
       return node
@@ -226,6 +234,11 @@ export class BiomeScene extends Phaser.Scene {
     const node = this.pathNodes[nodeIdx]
     node.markerGfx?.destroy()
     node.markerLabel?.destroy()
+    if (node.markerSprite) {
+      this.tweens.killTweensOf(node.markerSprite)
+      node.markerSprite.destroy()
+      node.markerSprite = null
+    }
 
     const g = this.add.graphics().setDepth(6)
     node.markerGfx = g
@@ -240,7 +253,18 @@ export class BiomeScene extends Phaser.Scene {
       const count = node.mobs?.length ?? 0
       g.fillStyle(0xaa2222, 0.35).fillCircle(node.x, node.y, 48)
       g.lineStyle(4, 0xff4444, 0.85).strokeCircle(node.x, node.y, 48)
-      g.fillStyle(0xff5544, 0.75).fillCircle(node.x, node.y, 16)
+
+      // Tiny Dungeon monster sprite matching the encounter's creatures,
+      // with a subtle idle bob.
+      const frame = node.mobs?.[0]?.frame ?? TD_MONSTERS[this.biomeData.difficulty][0]
+      node.markerSprite = this.add.sprite(node.x, node.y, 'tiny_dungeon', frame)
+        .setScale(3).setDepth(7)
+      this.tweens.add({
+        targets: node.markerSprite,
+        y: { from: node.y - 3, to: node.y + 3 },
+        duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      })
+
       node.markerLabel = this.add.text(node.x, node.y + 62, `⚔  ${count} Enemies`, {
         fontSize: '16px', fontFamily: 'Arial', color: '#ff8888',
         backgroundColor: '#00000099', padding: { x: 7, y: 4 },

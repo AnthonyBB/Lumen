@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { API_BASE } from '../config'
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -38,7 +39,7 @@ export default function LoginPage() {
   async function handleResendVerification() {
     setResendStatus(null)
     try {
-      const res = await fetch('http://localhost:3001/api/auth/resend-verification', {
+      const res = await fetch(`${API_BASE}/api/auth/resend-verification`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),

@@ -86,66 +86,9 @@ export interface ClientQuestion {
 }
 
 // ---------------------------------------------------------------------------
-// Combat — combat-only sessions.  For learning sessions, see LearningSession.
+// Learning — classroom/education sessions live in LearningSessionManager,
+// which defines its own LearningSession / ClientLearningQuestion types.
 // ---------------------------------------------------------------------------
-
-export type CombatTurn = 'player' | 'enemy';
-
-/**
- * Combat-only session. For learning sessions, see LearningSession.
- *
- * Note: question tracking was removed from CombatSession in the refactor.
- * The socket handler fetches and validates questions via QuestionEngine
- * independently, then passes only the boolean result to CombatManager.processTurn().
- */
-export interface CombatSession {
-  sessionId: string;
-  attackerId: string;   // socket ID of the player
-  defenderId: string;   // could be an NPC id or another player's socket ID
-  turn: CombatTurn;
-  isActive: boolean;
-  attackerHp: number;
-  defenderHp: number;
-  attackerMaxHp: number;
-  defenderMaxHp: number;
-}
-
-// ---------------------------------------------------------------------------
-// Learning — classroom/education sessions.  No combat concepts.
-// ---------------------------------------------------------------------------
-
-/**
- * Per-question result recorded server-side during a learning session.
- * Never contains correctIndex — only the boolean outcome.
- */
-export interface LearningQuestionResult {
-  questionId: string;
-  correct: boolean;
-  attempts: number;   // how many attempts the player used (1–3)
-}
-
-/**
- * Active learning session managed by LearningSessionManager.
- * Completely separate from CombatSession — no attacker/defender, no HP.
- */
-export interface LearningSession {
-  sessionId: string;
-  playerId: string;           // socket.id
-  subject: Subject;
-  difficulty: Difficulty;
-  /** Curriculum subcategory this session targets, if any. */
-  subcategory?: string;
-  /** Full server-side questions (with correctIndex) — never sent to client. */
-  questions: Question[];
-  currentIndex: number;
-  attemptsLeft: number;       // attempts remaining for current question (starts at 3)
-  correctCount: number;
-  xpEarned: number;
-  results: LearningQuestionResult[];
-  startedAt: number;          // unix ms
-  timeoutHandle?: ReturnType<typeof setTimeout>;
-  isComplete: boolean;
-}
 
 // ---------------------------------------------------------------------------
 // Game room / zone
@@ -168,17 +111,6 @@ export interface PlayerMovePayload {
   x: number;
   y: number;
   zone: string;
-}
-
-export interface CombatStartPayload {
-  targetId: string;
-}
-
-export interface CombatAnswerPayload {
-  sessionId: string;
-  /** The question ID being answered — validated server-side against the session. */
-  questionId: string;
-  answerIndex: number;
 }
 
 export interface ChatMessagePayload {
@@ -212,8 +144,9 @@ export interface ShopBuySkillPayload {
 }
 
 /**
- * Payload for `shop:buy_strategy` — accepts either an individual strategy id
- * (2 Combat Shards) or a preset id (8 Combat Shards, unlocks all its strategies).
+ * Payload for `shop:buy_strategy` — an individual strategy id (2 Combat
+ * Shards).  Preset ids are rejected: presets unlock automatically once every
+ * rule in them is owned.
  */
 export interface ShopBuyStrategyPayload {
   strategyId: string;
@@ -241,23 +174,6 @@ export interface PlayerMovedPayload {
   playerId: string;
   x: number;
   y: number;
-}
-
-export interface CombatStartedPayload {
-  sessionId: string;
-  question: ClientQuestion; // correct answer intentionally omitted
-}
-
-export interface CombatResultPayload {
-  correct: boolean;
-  damage: number;
-  explanation: string;
-  updatedHp: { attackerHp: number; defenderHp: number };
-  nextQuestion?: ClientQuestion;
-  combatEnd?: {
-    winnerId: string;
-    xpGained: number;
-  };
 }
 
 // ── Learning event payloads (Server → Client) ──────────────────────────────
@@ -378,15 +294,6 @@ export interface PlayerInventory {
 // ---------------------------------------------------------------------------
 // Socket event payloads — Inventory (Client → Server)
 // ---------------------------------------------------------------------------
-
-export interface InventoryEquipPayload {
-  itemId: string;
-  slot: EquipmentSlotKey;
-}
-
-export interface InventoryUnequipPayload {
-  slot: EquipmentSlotKey;
-}
 
 /**
  * Payload for `equipment:equip` — equips a generated equipment item

@@ -3,8 +3,9 @@
  *
  * Security notes:
  *  - All mutations are initiated server-side or validated here before applying.
- *  - The client only sends itemId + slot; the server confirms ownership and
- *    slot compatibility before touching any state.
+ *  - The client only sends an item instance id; the server confirms ownership
+ *    (and the handler derives the slot from the server catalog) before
+ *    touching any state.
  *  - Item stats never originate from the client.
  *
  * Persistence notes:
@@ -15,7 +16,7 @@
  */
 
 import type { PlayerInventory, InventoryItem, EquipmentSlotKey } from '../types/index.js';
-import { getStarterItems, createItem, getItemSlot } from './ItemDatabase.js';
+import { getStarterItems, createItem } from './ItemDatabase.js';
 import { isDbConnected } from '../db/connection.js';
 import { PlayerInventoryModel } from '../db/models/PlayerInventoryModel.js';
 
@@ -222,48 +223,13 @@ export class InventoryManager {
   // -------------------------------------------------------------------------
 
   /**
-   * Move an item from the player's bag into an equipment slot.
-   *
-   * Validation:
-   *  1. Player and item must exist in server state.
-   *  2. The requested slot must match the item's defined slot in ItemDatabase.
-   *  3. If the slot is already occupied, the equipped item is unequipped first
-   *     (returned to the bag).
-   */
-  equipItem(playerId: string, itemId: string, slot: EquipmentSlotKey): boolean {
-    const inv = this.inventories.get(playerId);
-    if (!inv) return false;
-
-    const itemIdx = inv.items.findIndex((i) => i.id === itemId);
-    if (itemIdx === -1) return false;
-
-    const item = inv.items[itemIdx];
-
-    // Verify the item is allowed in the requested slot
-    const allowedSlot = getItemSlot(item.itemType);
-    if (allowedSlot !== slot) return false;
-
-    // Unequip current occupant back to bag
-    if (inv.equipment[slot]) {
-      inv.items.push(inv.equipment[slot]!);
-    }
-
-    // Move from bag to slot
-    inv.equipment[slot] = item;
-    inv.items.splice(itemIdx, 1);
-
-    this.persistInventory(playerId);
-    return true;
-  }
-
-  /**
    * Equip a *generated* equipment item (see server/game/data/equipmentGen.ts)
    * whose slot and XP requirement have ALREADY been validated by the caller
    * (the `equipment:equip` socket handler) against EQUIPMENT_MAP.
    *
-   * Unlike equipItem(), this does not consult ItemDatabase — generated items
-   * are catalogued in equipmentGen, not ItemDatabase.  Ownership is still
-   * verified here: the item instance must exist in the player's bag.
+   * This does not consult ItemDatabase — generated items are catalogued in
+   * equipmentGen, not ItemDatabase.  Ownership is still verified here: the
+   * item instance must exist in the player's bag.
    */
   equipGeneratedItem(playerId: string, itemId: string, slot: EquipmentSlotKey): boolean {
     const inv = this.inventories.get(playerId);
@@ -281,24 +247,6 @@ export class InventoryManager {
 
     inv.equipment[slot] = item;
     inv.items.splice(itemIdx, 1);
-
-    this.persistInventory(playerId);
-    return true;
-  }
-
-  /**
-   * Move the item in an equipment slot back into the player's bag.
-   * Returns false if the player is unknown or the slot is already empty.
-   */
-  unequipItem(playerId: string, slot: EquipmentSlotKey): boolean {
-    const inv = this.inventories.get(playerId);
-    if (!inv) return false;
-
-    const item = inv.equipment[slot];
-    if (!item) return false;
-
-    inv.items.push(item);
-    delete inv.equipment[slot];
 
     this.persistInventory(playerId);
     return true;

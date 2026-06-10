@@ -178,14 +178,6 @@ export function createItem(itemType: string, quantity = 1): InventoryItem | null
 }
 
 /**
- * Returns the equipment slot this item type fits, or undefined if it is
- * not equippable.
- */
-export function getItemSlot(itemType: string): EquipmentSlotKey | undefined {
-  return ITEM_CATALOGUE[itemType]?.slot;
-}
-
-/**
  * The two items every new player starts with.
  */
 export function getStarterItems(): InventoryItem[] {

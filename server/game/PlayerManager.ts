@@ -96,14 +96,6 @@ export class PlayerManager {
     return this.players.get(socketId);
   }
 
-  getAllPlayers(): Player[] {
-    return Array.from(this.players.values());
-  }
-
-  getPlayersInZone(zone: string): Player[] {
-    return this.getAllPlayers().filter((p) => p.zone === zone);
-  }
-
   // -------------------------------------------------------------------------
   // Mutations (server-authoritative)
   // -------------------------------------------------------------------------
@@ -311,22 +303,6 @@ export class PlayerManager {
     const player = this.players.get(socketId);
     if (!player) return;
     player.strategyLoadout = [...strategyIds];
-  }
-
-  /** Apply damage to a player's HP (server-side only). */
-  applyDamage(socketId: string, amount: number): number {
-    const player = this.players.get(socketId);
-    if (!player) return 0;
-    player.hp = Math.max(0, player.hp - amount);
-    return player.hp;
-  }
-
-  /** Restore HP to a player (server-side only). */
-  restoreHp(socketId: string, amount: number): number {
-    const player = this.players.get(socketId);
-    if (!player) return 0;
-    player.hp = Math.min(player.maxHp, player.hp + amount);
-    return player.hp;
   }
 
   /** Record the timestamp of the last chat message for rate-limiting. */

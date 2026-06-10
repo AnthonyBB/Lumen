@@ -5,6 +5,7 @@ import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
+import { API_BASE } from '../config'
 
 interface GamePageProps {
   token: string | null
@@ -21,7 +22,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   useEffect(() => {
     if (needsContentMode) return // don't connect socket until mode is chosen
 
-    const s = io('http://localhost:3001', {
+    const s = io(API_BASE, {
       auth: token ? { token } : {},
     })
 

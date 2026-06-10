@@ -10,8 +10,6 @@
  *  - Correct answer indices are NEVER included in any outgoing event.
  *  - Chat messages are sanitised (HTML stripped) and rate-limited (1/s).
  *  - Answer time limits are enforced inside the respective managers.
- *  - Combat and learning flows are completely separate: combat events go to
- *    CombatManager; learning events go to LearningSessionManager.
  */
 
 import type { Server, Socket } from 'socket.io';
@@ -19,11 +17,7 @@ import type { GameManager } from '../game/GameManager.js';
 import type {
   PlayerJoinPayload,
   PlayerMovePayload,
-  CombatStartPayload,
-  CombatAnswerPayload,
   ChatMessagePayload,
-  InventoryEquipPayload,
-  InventoryUnequipPayload,
   EquipmentEquipPayload,
   EquipmentSlotKey,
   ChestTransferPayload,
@@ -68,13 +62,6 @@ const STRATEGY_PRICE = 2;
 
 /** Maximum number of rules in a player's ordered strategy loadout. */
 const MAX_LOADOUT_SIZE = 10;
-
-/** All valid equipment slot names — used to reject unknown slot strings from clients. */
-const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
-  'mainHand', 'offHand', 'helm', 'earring',
-  'ring1', 'ring2', 'belt', 'shoes', 'gloves', 'necklace',
-  'chest', 'legs',
-]);
 
 /**
  * Maps a generated-equipment slot (equipmentGen.ts) onto the player's
@@ -131,6 +118,37 @@ export function registerHandlers(
   game: GameManager,
   onlinePlayers: Set<string>,
 ): void {
+  const {
+    playerManager,
+    questionEngine,
+    learningSessionManager,
+    inventoryManager,
+    chestManager,
+  } = game;
+
+  // ── Shared per-socket helpers ─────────────────────────────────────────────
+
+  /**
+   * Look up the joined player for this socket.  When the player has not
+   * joined yet, emits the given error message and returns null so the caller
+   * can bail out.  The validation itself is unchanged — only the boilerplate
+   * lives here.
+   */
+  const requireJoinedPlayer = (notJoinedMessage: string): Player | null => {
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: notJoinedMessage });
+      return null;
+    }
+    return player;
+  };
+
+  /** Push the player's current inventory so HUD counters refresh. */
+  const pushInventoryUpdate = (): void => {
+    const inventory = inventoryManager.getInventory(socket.id);
+    if (inventory) socket.emit('inventory:updated', inventory);
+  };
+
   // ── players:get_online ────────────────────────────────────────────────────
   socket.on('players:get_online', () => {
     socket.emit('players:online', onlinePlayers.size)
@@ -141,18 +159,10 @@ export function registerHandlers(
   // already fired, so it asks for the occupant list once it is ready to
   // render remote players.
   socket.on('zone:get', () => {
-    const player = game.playerManager.getPlayer(socket.id);
+    const player = playerManager.getPlayer(socket.id);
     if (!player) return;
     socket.emit('zone:players', { players: game.getZonePlayers(player.zone) });
   })
-  const {
-    playerManager,
-    questionEngine,
-    combatManager,
-    learningSessionManager,
-    inventoryManager,
-    chestManager,
-  } = game;
 
   // ── player:join ──────────────────────────────────────────────────────────
   socket.on('player:join', async (_payload: PlayerJoinPayload) => {
@@ -244,123 +254,9 @@ export function registerHandlers(
     });
   });
 
-  // ── combat:start ─────────────────────────────────────────────────────────
-  socket.on('combat:start', (payload: CombatStartPayload) => {
-    if (typeof payload?.targetId !== 'string') {
-      socket.emit('error', { message: 'Invalid combat start payload.' });
-      return;
-    }
-
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before starting combat.' });
-      return;
-    }
-
-    // Determine subject/difficulty from player level
-    const difficulty: Difficulty = player.level <= 2 ? 'easy' : player.level <= 5 ? 'medium' : 'hard';
-    const subjects = ['math', 'science', 'history', 'language'] as const;
-    const subject: Subject = subjects[Math.floor(Math.random() * subjects.length)];
-
-    // CombatManager creates the session; QuestionEngine fetches the first question.
-    const session = combatManager.startCombat(socket.id, payload.targetId);
-    if (!session) {
-      socket.emit('error', { message: 'Could not start combat session.' });
-      return;
-    }
-
-    const firstQuestion = questionEngine.getQuestion(subject, difficulty);
-    if (!firstQuestion) {
-      combatManager.endCombat(session.sessionId);
-      socket.emit('error', { message: 'No questions available for this combat.' });
-      return;
-    }
-
-    const clientQuestion = questionEngine.getClientQuestion(firstQuestion);
-
-    // Send the session ID and first question (NO correct answer) to the attacker
-    socket.emit('combat:started', {
-      sessionId: session.sessionId,
-      question: clientQuestion,
-    });
-
-    console.log(
-      `[combat] ${socket.id} started session ${session.sessionId} vs ${payload.targetId}`,
-    );
-  });
-
-  // ── combat:answer ────────────────────────────────────────────────────────
-  socket.on('combat:answer', (payload: CombatAnswerPayload) => {
-    if (
-      typeof payload?.sessionId !== 'string' ||
-      typeof payload?.questionId !== 'string' ||
-      !isSafeNumber(payload?.answerIndex, 0, 3)
-    ) {
-      socket.emit('error', { message: 'Invalid answer payload.' });
-      return;
-    }
-
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'Player not found.' });
-      return;
-    }
-
-    // ── Step 1: Validate the answer via QuestionEngine (time-limit enforced here) ──
-    const session = combatManager.getSession(payload.sessionId);
-    if (!session) {
-      socket.emit('error', { message: 'Combat session not found.' });
-      return;
-    }
-
-    const validation = questionEngine.validateAnswer(payload.questionId, payload.answerIndex);
-    if (!validation) {
-      socket.emit('error', { message: 'Question not found or validation failed.' });
-      return;
-    }
-
-    const { correct, explanation } = validation;
-
-    // ── Step 2: Advance combat state with the validated result ──────────────
-    const turnResult = combatManager.processTurn(payload.sessionId, socket.id, correct);
-    if ('error' in turnResult) {
-      socket.emit('error', { message: turnResult.error });
-      return;
-    }
-
-    const { damage, newAttackerHp, newDefenderHp, combatOver, winner, xpGained } = turnResult;
-
-    // ── Step 3: Fetch next question for the attacker (if combat continues) ──
-    let nextClientQuestion: ReturnType<typeof questionEngine.getClientQuestion> | undefined;
-    if (!combatOver) {
-      const difficulty: Difficulty = player.level <= 2 ? 'easy' : player.level <= 5 ? 'medium' : 'hard';
-      const subjects = ['math', 'science', 'history', 'language'] as const;
-      const subject: Subject = subjects[Math.floor(Math.random() * subjects.length)];
-      const nextQ = questionEngine.getQuestion(subject, difficulty);
-      if (nextQ) nextClientQuestion = questionEngine.getClientQuestion(nextQ);
-    }
-
-    const responsePayload = {
-      correct,
-      damage,
-      explanation,
-      updatedHp: { attackerHp: newAttackerHp, defenderHp: newDefenderHp },
-      ...(combatOver
-        ? { combatEnd: { winnerId: winner!, xpGained } }
-        : {}),
-      ...(nextClientQuestion ? { nextQuestion: nextClientQuestion } : {}),
-    };
-
-    socket.emit('combat:result', responsePayload);
-
-    // If a second player was involved, notify them too
-    if (session.defenderId !== socket.id) {
-      const defenderSocket = io.sockets.sockets.get(session.defenderId);
-      if (defenderSocket) {
-        defenderSocket.emit('combat:result', responsePayload);
-      }
-    }
-  });
+  // NOTE: the old `combat:start` / `combat:answer` handlers were removed.
+  // BattleScene resolves exploration combat client-side and reports only the
+  // XP via `player:award_xp` below; no client emits the combat events anymore.
 
   // ── player:award_xp ─────────────────────────────────────────────────────
   //
@@ -378,11 +274,8 @@ export function registerHandlers(
       return;
     }
 
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before earning XP.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before earning XP.');
+    if (!player) return;
 
     const xpAmount = Math.floor(payload.xp as number); // ensure integer
     const { newXp, newLevel, leveledUp } = playerManager.addXp(socket.id, xpAmount);
@@ -438,11 +331,8 @@ export function registerHandlers(
       return;
     }
 
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before starting a learning session.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before starting a learning session.');
+    if (!player) return;
 
     const result = learningSessionManager.startSession(
       socket.id,
@@ -560,8 +450,7 @@ export function registerHandlers(
 
     // Push the updated inventory whenever shard currency changed
     if (skillShardsAwarded > 0 || combatShardAwarded) {
-      const inventory = inventoryManager.getInventory(socket.id);
-      if (inventory) socket.emit('inventory:updated', inventory);
+      pushInventoryUpdate();
     }
 
     // Let the HUD refresh XP / level after the session wraps up
@@ -601,11 +490,8 @@ export function registerHandlers(
       return;
     }
 
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before chatting.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before chatting.');
+    if (!player) return;
 
     // Rate-limit: 1 message per second per player
     const now = Date.now();
@@ -640,46 +526,9 @@ export function registerHandlers(
     socket.emit('inventory:data', inventory);
   });
 
-  // ── inventory:equip ──────────────────────────────────────────────────────
-  socket.on('inventory:equip', (payload: InventoryEquipPayload) => {
-    if (
-      typeof payload?.itemId !== 'string' ||
-      typeof payload?.slot !== 'string' ||
-      !VALID_SLOTS.has(payload.slot as EquipmentSlotKey)
-    ) {
-      socket.emit('error', { message: 'Invalid equip payload.' });
-      return;
-    }
-
-    const success = inventoryManager.equipItem(socket.id, payload.itemId, payload.slot as EquipmentSlotKey);
-    if (!success) {
-      socket.emit('error', { message: 'Cannot equip that item in that slot.' });
-      return;
-    }
-
-    const inventory = inventoryManager.getInventory(socket.id)!;
-    socket.emit('inventory:updated', inventory);
-  });
-
-  // ── inventory:unequip ────────────────────────────────────────────────────
-  socket.on('inventory:unequip', (payload: InventoryUnequipPayload) => {
-    if (
-      typeof payload?.slot !== 'string' ||
-      !VALID_SLOTS.has(payload.slot as EquipmentSlotKey)
-    ) {
-      socket.emit('error', { message: 'Invalid unequip payload.' });
-      return;
-    }
-
-    const success = inventoryManager.unequipItem(socket.id, payload.slot as EquipmentSlotKey);
-    if (!success) {
-      socket.emit('error', { message: 'Nothing equipped in that slot.' });
-      return;
-    }
-
-    const inventory = inventoryManager.getInventory(socket.id)!;
-    socket.emit('inventory:updated', inventory);
-  });
+  // NOTE: the legacy `inventory:equip` / `inventory:unequip` handlers were
+  // removed — EquipmentScene manages its local preview state and no client
+  // emits those events.  Server-side equipping happens via `equipment:equip`.
 
   // ── equipment:equip ──────────────────────────────────────────────────────
   //
@@ -699,11 +548,8 @@ export function registerHandlers(
       return;
     }
 
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before equipping items.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before equipping items.');
+    if (!player) return;
 
     const inv = inventoryManager.getInventory(socket.id);
     if (!inv) {
@@ -740,8 +586,7 @@ export function registerHandlers(
       return;
     }
 
-    const inventory = inventoryManager.getInventory(socket.id)!;
-    socket.emit('inventory:updated', inventory);
+    pushInventoryUpdate();
     console.log(
       `[equip] ${player.username} equipped ${catalogItem.name} (${catalogItem.id}) in ${slotKey}`,
     );
@@ -767,11 +612,8 @@ export function registerHandlers(
   // Returns the player's purchased skills/strategies and shard balances so
   // the shop scenes can render owned / affordable states.  Read-only.
   socket.on('shop:get_unlocks', () => {
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before visiting shops.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before visiting shops.');
+    if (!player) return;
     socket.emit('shop:unlocks', buildUnlocksPayload(player));
   });
 
@@ -790,11 +632,8 @@ export function registerHandlers(
       return;
     }
 
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before buying skills.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before buying skills.');
+    if (!player) return;
 
     const skill = SKILL_MAP.get(payload.skillId);
     if (!skill) {
@@ -831,8 +670,7 @@ export function registerHandlers(
       skillId: skill.id,
       ...buildUnlocksPayload(player),
     });
-    const inventory = inventoryManager.getInventory(socket.id);
-    if (inventory) socket.emit('inventory:updated', inventory);
+    pushInventoryUpdate();
 
     console.log(`[shop] ${player.username} bought skill ${skill.id} for ${price} skill shard(s)`);
   });
@@ -853,11 +691,8 @@ export function registerHandlers(
       return;
     }
 
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before buying strategies.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before buying strategies.');
+    if (!player) return;
 
     const strategy = STRATEGY_MAP.get(payload.strategyId);
     if (!strategy) {
@@ -886,8 +721,7 @@ export function registerHandlers(
       strategyId: payload.strategyId,
       ...buildUnlocksPayload(player),
     });
-    const inventory = inventoryManager.getInventory(socket.id);
-    if (inventory) socket.emit('inventory:updated', inventory);
+    pushInventoryUpdate();
 
     console.log(`[shop] ${player.username} bought ${label} for ${price} combat shard(s)`);
   });
@@ -903,11 +737,8 @@ export function registerHandlers(
   //  4. Every id must already be owned (player.unlockedStrategies).
   //  5. No duplicate ids.
   socket.on('strategy:set_loadout', (payload: StrategySetLoadoutPayload) => {
-    const player = playerManager.getPlayer(socket.id);
-    if (!player) {
-      socket.emit('error', { message: 'You must join before arranging strategies.' });
-      return;
-    }
+    const player = requireJoinedPlayer('You must join before arranging strategies.');
+    if (!player) return;
 
     const ids = payload?.strategyIds;
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {

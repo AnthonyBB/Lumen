@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, createContext, useContext, createElement, type ReactNode } from 'react'
+import { API_BASE } from '../config'
 
 export type ContentMode = 'child' | 'adolescent' | null
 
@@ -72,7 +73,7 @@ export function useSessionGuard(enabled: boolean): void {
     if (!token) return
 
     // 1. Validate the token against the server once on load
-    fetch('http://localhost:3001/api/auth/me', {
+    fetch(`${API_BASE}/api/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => {
@@ -116,7 +117,7 @@ function useAuthState() {
   const token = localStorage.getItem(TOKEN_KEY)
 
   const login = useCallback(async (email: string, password: string): Promise<void> => {
-    const res = await fetch('http://localhost:3001/api/auth/login', {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -153,7 +154,7 @@ function useAuthState() {
       const storedToken = localStorage.getItem(TOKEN_KEY)
       if (!storedToken) throw new Error('Not authenticated')
 
-      const res = await fetch('http://localhost:3001/api/auth/content-mode', {
+      const res = await fetch(`${API_BASE}/api/auth/content-mode`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

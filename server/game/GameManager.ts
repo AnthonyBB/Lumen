@@ -2,14 +2,13 @@
  * GameManager — coordinates zones/rooms and delegates to specialist managers.
  *
  * The server is authoritative: this class never accepts HP, XP, or level
- * values from the client.  All mutations go through PlayerManager and
- * CombatManager which enforce game rules.
+ * values from the client.  All mutations go through the specialist managers,
+ * which enforce game rules.
  */
 
 import type { Zone, PublicPlayer } from '../types/index.js';
 import { PlayerManager } from './PlayerManager.js';
 import { QuestionEngine } from './QuestionEngine.js';
-import { CombatManager } from './CombatManager.js';
 import { LearningSessionManager } from './LearningSessionManager.js';
 import { InventoryManager } from './InventoryManager.js';
 import { ChestManager } from './ChestManager.js';
@@ -20,7 +19,6 @@ const STARTING_ZONES: string[] = ['town', 'forest', 'dungeon', 'academy'];
 export class GameManager {
   public readonly playerManager: PlayerManager;
   public readonly questionEngine: QuestionEngine;
-  public readonly combatManager: CombatManager;
   public readonly learningSessionManager: LearningSessionManager;
   public readonly inventoryManager: InventoryManager;
   public readonly chestManager: ChestManager;
@@ -31,7 +29,6 @@ export class GameManager {
   constructor() {
     this.playerManager = new PlayerManager();
     this.questionEngine = new QuestionEngine();
-    this.combatManager = new CombatManager(this.playerManager);
     this.learningSessionManager = new LearningSessionManager(this.questionEngine, this.playerManager);
     this.inventoryManager = new InventoryManager();
     this.chestManager = new ChestManager(this.inventoryManager);
@@ -86,9 +83,6 @@ export class GameManager {
     const zone = player.zone;
     this.removeFromZone(socketId, zone);
     this.playerManager.removePlayer(socketId);
-
-    // Clean up any active combat sessions
-    this.combatManager.endSessionsForPlayer(socketId);
 
     // Clean up any active learning sessions
     this.learningSessionManager.endPlayerSession(socketId);

@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
 import { Building } from '../objects/Building'
@@ -82,6 +83,19 @@ export class WorldScene extends Phaser.Scene {
   // Spawn position — set via init() when returning from a biome, otherwise world centre
   private spawnX = WORLD_WIDTH / 2
   private spawnY = WORLD_HEIGHT / 2
+
+  // ── Multiplayer presence ──────────────────────────────────────────────────
+  // Other players in the shared 'town' zone, rendered from server pushes only.
+  private socket: Socket | null = null
+  private remotePlayers = new Map<string, {
+    sprite: Phaser.GameObjects.Sprite
+    label: Phaser.GameObjects.Text
+    tx: number
+    ty: number
+  }>()
+  private lastMoveSentAt = 0
+  private lastSentX = 0
+  private lastSentY = 0
 
   constructor() {
     super({ key: 'WorldScene' })
@@ -289,6 +303,9 @@ export class WorldScene extends Phaser.Scene {
       this.physics.add.collider(this.player, entry.building.collider)
     }
 
+    // ── Multiplayer: see and be seen by other players in town ───────────────
+    this.setupMultiplayer()
+
     // ── Camera ────────────────────────────────────────────────────────────────
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1)
@@ -329,6 +346,87 @@ export class WorldScene extends Phaser.Scene {
     this.popup.setVisible(false)
 
     this.scene.launch('UIScene')
+  }
+
+  // ── Multiplayer presence ────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to server presence pushes and request the current town roster.
+   * SECURITY: remote players are rendered exclusively from server events
+   * (zone:players / player:moved); the client only reports its own position.
+   */
+  private setupMultiplayer() {
+    this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
+    if (!this.socket) return
+
+    interface RosterEntry { id: string; username: string; position: { x: number; y: number } }
+
+    const onZonePlayers = (data: { players: RosterEntry[] }) =>
+      this.syncRemotePlayers(data?.players ?? [])
+    const onJoined = (data: { zonePlayers: RosterEntry[] }) =>
+      this.syncRemotePlayers(data?.zonePlayers ?? [])
+    const onMoved = (data: { playerId: string; x: number; y: number }) => {
+      const rp = this.remotePlayers.get(data.playerId)
+      if (rp) { rp.tx = data.x; rp.ty = data.y }
+    }
+
+    this.socket.on('zone:players', onZonePlayers)
+    this.socket.on('player:joined', onJoined)
+    this.socket.on('player:moved', onMoved)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.socket?.off('zone:players', onZonePlayers)
+      this.socket?.off('player:joined', onJoined)
+      this.socket?.off('player:moved', onMoved)
+      this.remotePlayers.forEach(rp => { rp.sprite.destroy(); rp.label.destroy() })
+      this.remotePlayers.clear()
+    })
+
+    // The join ack fired before this scene existed — fetch the roster now,
+    // and report our real spawn position so others see us where we stand.
+    this.socket.emit('zone:get')
+    this.socket.emit('player:move', {
+      x: Math.round(this.player.x), y: Math.round(this.player.y), zone: 'town',
+    })
+    this.lastSentX = this.player.x
+    this.lastSentY = this.player.y
+  }
+
+  /** Reconcile rendered remote players against a server roster snapshot. */
+  private syncRemotePlayers(players: { id: string; username: string; position: { x: number; y: number } }[]) {
+    const selfId = this.socket?.id
+    const present = new Set<string>()
+
+    for (const p of players) {
+      if (!p?.id || p.id === selfId) continue
+      present.add(p.id)
+
+      const existing = this.remotePlayers.get(p.id)
+      if (existing) {
+        existing.tx = p.position.x
+        existing.ty = p.position.y
+        continue
+      }
+
+      const sprite = this.add.sprite(p.position.x, p.position.y, 'character_idle')
+        .setDepth(9)
+      if (this.anims.exists('idle_down')) sprite.play('idle_down')
+
+      const label = this.add.text(p.position.x, p.position.y - 34, p.username, {
+        fontSize: '11px', fontFamily: 'Arial', color: '#aaddff',
+        backgroundColor: '#00000088', padding: { x: 4, y: 1 },
+      }).setOrigin(0.5, 1).setDepth(9)
+
+      this.remotePlayers.set(p.id, { sprite, label, tx: p.position.x, ty: p.position.y })
+    }
+
+    // Remove players no longer in the zone
+    for (const [id, rp] of this.remotePlayers) {
+      if (!present.has(id)) {
+        rp.sprite.destroy()
+        rp.label.destroy()
+        this.remotePlayers.delete(id)
+      }
+    }
   }
 
   /** Draw a winding diagonal path (3 tiles wide) stepping from (fromX,fromY) to (toX,toY).
@@ -735,6 +833,28 @@ export class WorldScene extends Phaser.Scene {
       this.player.update(this.cursors, this.wasd)
     } else {
       this.player.setVelocity(0, 0)
+    }
+
+    // ── Multiplayer: smooth remote players toward their reported positions ──
+    this.remotePlayers.forEach(rp => {
+      rp.sprite.x = Phaser.Math.Linear(rp.sprite.x, rp.tx, 0.2)
+      rp.sprite.y = Phaser.Math.Linear(rp.sprite.y, rp.ty, 0.2)
+      rp.label.setPosition(rp.sprite.x, rp.sprite.y - 34)
+    })
+
+    // ── Multiplayer: report our own position (throttled to 10 Hz, only when
+    //    we actually moved — the server validates and rebroadcasts) ──────────
+    if (this.socket && this.time.now - this.lastMoveSentAt > 100) {
+      if (Math.abs(this.player.x - this.lastSentX) > 2 || Math.abs(this.player.y - this.lastSentY) > 2) {
+        this.lastMoveSentAt = this.time.now
+        this.lastSentX = this.player.x
+        this.lastSentY = this.player.y
+        this.socket.emit('player:move', {
+          x: Math.round(this.player.x),
+          y: Math.round(this.player.y),
+          zone: 'town',
+        })
+      }
     }
 
     // Check proximity to buildings

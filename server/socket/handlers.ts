@@ -135,6 +135,16 @@ export function registerHandlers(
   socket.on('players:get_online', () => {
     socket.emit('players:online', onlinePlayers.size)
   })
+
+  // ── zone:get ──────────────────────────────────────────────────────────────
+  // Current zone roster on demand. WorldScene is created after the join ack
+  // already fired, so it asks for the occupant list once it is ready to
+  // render remote players.
+  socket.on('zone:get', () => {
+    const player = game.playerManager.getPlayer(socket.id);
+    if (!player) return;
+    socket.emit('zone:players', { players: game.getZonePlayers(player.zone) });
+  })
   const {
     playerManager,
     questionEngine,

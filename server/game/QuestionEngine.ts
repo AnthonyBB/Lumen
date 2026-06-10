@@ -123,6 +123,52 @@ export class QuestionEngine {
       .map((q) => q.id);
   }
 
+  /**
+   * Gather up to `count` UNIQUE questions for a session, draining pools in
+   * fallback order: subcategory+difficulty → subcategory (any difficulty) →
+   * subject+difficulty → subject. Unlike repeated getQuestion() calls (which
+   * always sample the first non-empty pool), this fills the remainder from
+   * broader pools when the specific pool is smaller than `count` — so a
+   * topic with only 2 easy questions still yields a full 5-question session.
+   */
+  getSessionQuestions(
+    subject: Subject,
+    difficulty: Difficulty,
+    count: number,
+    subcategory?: string,
+  ): Question[] {
+    const all = Array.from(this.questions.values());
+    const bySubject = all.filter((q) => q.subject === subject);
+
+    const pools: Question[][] = [];
+    if (subcategory) {
+      const bySubcat = bySubject.filter((q) => q.subcategory === subcategory);
+      pools.push(bySubcat.filter((q) => q.difficulty === difficulty));
+      pools.push(bySubcat);
+    }
+    pools.push(bySubject.filter((q) => q.difficulty === difficulty));
+    pools.push(bySubject);
+
+    const picked: Question[] = [];
+    const seen = new Set<string>();
+    for (const pool of pools) {
+      // Fisher–Yates shuffle a copy so each session gets a fresh order
+      const shuffled = [...pool];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      for (const q of shuffled) {
+        if (picked.length >= count) return picked;
+        if (!seen.has(q.id)) {
+          seen.add(q.id);
+          picked.push(q);
+        }
+      }
+    }
+    return picked;
+  }
+
   // -------------------------------------------------------------------------
   // Server-side validation
   // -------------------------------------------------------------------------

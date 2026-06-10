@@ -105,18 +105,15 @@ export class LearningSessionManager {
     const player = this.playerManager.getPlayer(playerId);
     if (!player) return { error: 'Player not found. Have you joined yet?' };
 
-    // Gather enough unique questions for the session
-    const questions: Question[] = [];
-    const seen = new Set<string>();
-    let attempts = 0;
-    while (questions.length < QUESTIONS_PER_SESSION && attempts < 50) {
-      attempts++;
-      const q = this.questionEngine.getQuestion(subject, difficulty, subcategory);
-      if (q && !seen.has(q.id)) {
-        seen.add(q.id);
-        questions.push(q);
-      }
-    }
+    // Gather unique questions, filling from broader pools (same subcategory
+    // at other difficulties, then the whole subject) when the specific
+    // topic+difficulty pool holds fewer than QUESTIONS_PER_SESSION questions.
+    const questions: Question[] = this.questionEngine.getSessionQuestions(
+      subject,
+      difficulty,
+      QUESTIONS_PER_SESSION,
+      subcategory,
+    );
 
     if (questions.length === 0) {
       return { error: `No questions available for subject "${subject}" at difficulty "${difficulty}".` };

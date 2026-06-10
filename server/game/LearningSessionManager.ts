@@ -67,6 +67,23 @@ export interface AnswerSubmitResult {
   nextQuestion?: ClientLearningQuestion;
 }
 
+/**
+ * Return a copy of the question with its 4 answers shuffled and correctIndex
+ * remapped to the new position. Authored questions cluster the correct answer
+ * at a few positions (often index 1); shuffling per session makes the correct
+ * position uniformly random. The shuffled correctIndex stays server-side — the
+ * client still only ever receives the answer strings, never the index.
+ */
+function shuffleAnswers(q: Question): Question {
+  const order = [0, 1, 2, 3];
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  const answers = order.map((i) => q.answers[i]) as [string, string, string, string];
+  return { ...q, answers, correctIndex: order.indexOf(q.correctIndex) };
+}
+
 /** Strip the correctIndex before sending a question to the client. */
 function toClientQuestion(q: Question): ClientLearningQuestion {
   return {
@@ -115,7 +132,11 @@ export class LearningSessionManager {
     const player = this.playerManager.getPlayer(playerId);
     if (!player) return { error: 'Player not found. Have you joined yet?' };
 
-    const questions: Question[] = this.questionEngine.getQuizQuestions(topicId, QUIZ_QUESTION_COUNT);
+    // Shuffle each question's answers per session so the correct position is
+    // random regardless of how the question was authored.
+    const questions: Question[] = this.questionEngine
+      .getQuizQuestions(topicId, QUIZ_QUESTION_COUNT)
+      .map(shuffleAnswers);
     if (questions.length === 0) {
       return { error: `No questions available for topic "${topicId}".` };
     }
@@ -183,10 +204,11 @@ export class LearningSessionManager {
       return { error: 'Question ID mismatch. Please wait for the current question.' };
     }
 
-    const validation = this.questionEngine.validateAnswer(questionId, answerIndex);
-    if (!validation) return { error: 'Answer validation failed.' };
-
-    const { correct, explanation } = validation;
+    // Validate against the session's SHUFFLED correctIndex (the answers were
+    // reordered per session in startSession, so the engine's original-order
+    // index no longer applies).
+    const correct = answerIndex === currentQuestion.correctIndex;
+    const explanation = currentQuestion.explanation;
     const xpThisAnswer = correct ? XP_BY_DIFFICULTY[currentQuestion.difficulty] : 0;
 
     if (correct) {

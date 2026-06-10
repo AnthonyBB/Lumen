@@ -92,6 +92,7 @@ export class WorldScene extends Phaser.Scene {
     label: Phaser.GameObjects.Text
     tx: number
     ty: number
+    dir: 'down' | 'left' | 'right' | 'up'
   }>()
   private lastMoveSentAt = 0
   private lastSentX = 0
@@ -416,7 +417,7 @@ export class WorldScene extends Phaser.Scene {
         backgroundColor: '#00000088', padding: { x: 4, y: 1 },
       }).setOrigin(0.5, 1).setDepth(9)
 
-      this.remotePlayers.set(p.id, { sprite, label, tx: p.position.x, ty: p.position.y })
+      this.remotePlayers.set(p.id, { sprite, label, tx: p.position.x, ty: p.position.y, dir: 'down' })
     }
 
     // Remove players no longer in the zone
@@ -835,11 +836,26 @@ export class WorldScene extends Phaser.Scene {
       this.player.setVelocity(0, 0)
     }
 
-    // ── Multiplayer: smooth remote players toward their reported positions ──
+    // ── Multiplayer: smooth remote players toward their reported positions,
+    //    deriving facing + walk/idle animation from the movement delta ───────
     this.remotePlayers.forEach(rp => {
+      const dx = rp.tx - rp.sprite.x
+      const dy = rp.ty - rp.sprite.y
+
       rp.sprite.x = Phaser.Math.Linear(rp.sprite.x, rp.tx, 0.2)
       rp.sprite.y = Phaser.Math.Linear(rp.sprite.y, rp.ty, 0.2)
       rp.label.setPosition(rp.sprite.x, rp.sprite.y - 34)
+
+      const moving = Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5
+      if (moving) {
+        rp.dir = Math.abs(dy) >= Math.abs(dx)
+          ? (dy > 0 ? 'down' : 'up')
+          : (dx > 0 ? 'right' : 'left')
+      }
+      const animKey = moving ? `walk_${rp.dir}` : `idle_${rp.dir}`
+      if (this.anims.exists(animKey) && rp.sprite.anims.currentAnim?.key !== animKey) {
+        rp.sprite.play(animKey)
+      }
     })
 
     // ── Multiplayer: report our own position (throttled to 10 Hz, only when

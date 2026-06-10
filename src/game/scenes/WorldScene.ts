@@ -2,6 +2,13 @@ import Phaser from 'phaser'
 import { TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
 import { Building } from '../objects/Building'
+import {
+  RL_GRASS, RL_GRASS2, RL_GRASS_PEBBLES, RL_GRASS_TUFT,
+  RL_DIRT, RL_DIRT2,
+  RL_FLOWERS_ORANGE, RL_FLOWERS_WHITE, RL_FLOWERS_BLUE,
+  RL_ROCKS_GRAY, RL_BUSH_GREEN,
+  TT_POPLAR_GREEN, TT_POPLAR_ORANGE, TT_TREE_ROUND,
+} from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
@@ -87,25 +94,42 @@ export class WorldScene extends Phaser.Scene {
 
   create() {
     // ── Ground ───────────────────────────────────────────────────────────────
-    // Solid grass fill using a colour that matches the tileset_ground palette.
+    // Solid grass fill matching the Kenney roguelike grass palette (backstop).
     const groundFill = this.add.graphics()
-    groundFill.fillStyle(0x5a8a3c, 1)
+    groundFill.fillStyle(0x73b94e, 1)
     groundFill.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
     groundFill.setDepth(0)
 
-    // Scatter texture tiles from ground_tiles spritesheet for visual variety.
-    // Frames 0–3 are solid/variant grass tiles in the first row of the tileset.
-    // Each tile is stamped at 2× scale (64 px) every 128 px across the world.
+    // Varied roguelike grass: 16px tiles stamped at 4× scale (64px cells).
+    // ~85% plain grass, the rest pebbled/tufted, plus scattered flower patches.
     {
       const groundRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
       groundRT.setDepth(0)
-      const tileW = 64  // 32 px tile at ×2 scale
+      const tileW = 64  // 16 px tile at ×4 scale
       const rand = this.rng(99)
+      const scale = { scaleX: 4, scaleY: 4 }
       for (let ty = 0; ty < WORLD_HEIGHT; ty += tileW) {
         for (let tx = 0; tx < WORLD_WIDTH; tx += tileW) {
-          const frame = Math.floor(rand() * 4)  // frames 0-3: grass variants
-          groundRT.stamp('ground_tiles', frame, tx + tileW / 2, ty + tileW / 2, { scaleX: 2, scaleY: 2 })
+          const r = rand()
+          const frame = r < 0.55 ? RL_GRASS : r < 0.88 ? RL_GRASS2 : RL_GRASS_PEBBLES
+          groundRT.stamp('roguelike', frame, tx + tileW / 2, ty + tileW / 2, scale)
+          if (r >= 0.88 && r < 0.93) {
+            // tuft overlay on a plain tile instead of pebbles
+            groundRT.stamp('roguelike', RL_GRASS, tx + tileW / 2, ty + tileW / 2, scale)
+            groundRT.stamp('roguelike', RL_GRASS_TUFT, tx + tileW / 2, ty + tileW / 2, scale)
+          }
         }
+      }
+      // Flower patches: 2×2 tile motifs (orange / white / blue), random spots
+      const flowerSets = [RL_FLOWERS_ORANGE, RL_FLOWERS_WHITE, RL_FLOWERS_BLUE]
+      for (let i = 0; i < 36; i++) {
+        const set = flowerSets[Math.floor(rand() * flowerSets.length)]
+        const fx = Math.floor(rand() * (WORLD_WIDTH / tileW - 2)) * tileW
+        const fy = Math.floor(rand() * (WORLD_HEIGHT / tileW - 2)) * tileW
+        groundRT.stamp('roguelike', set[0], fx + tileW / 2,     fy + tileW / 2,     scale)
+        groundRT.stamp('roguelike', set[1], fx + tileW * 1.5,   fy + tileW / 2,     scale)
+        groundRT.stamp('roguelike', set[2], fx + tileW / 2,     fy + tileW * 1.5,   scale)
+        groundRT.stamp('roguelike', set[3], fx + tileW * 1.5,   fy + tileW * 1.5,   scale)
       }
     }
 
@@ -116,8 +140,8 @@ export class WorldScene extends Phaser.Scene {
     const pathHalfH = 3
 
     // ── Horizontal winding path (Desert ↔ Ocean) ──────────────────────────────
-    // Uses a RenderTexture for performance — stamps road_tiles frame 0 (sandy
-    // dirt fill) at each tile position rather than creating individual sprites.
+    // Uses a RenderTexture for performance — stamps roguelike dirt tiles
+    // (16px at 2× = 32px) at each tile position rather than creating sprites.
     {
       const hRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
       hRoadRT.setDepth(1)
@@ -133,7 +157,8 @@ export class WorldScene extends Phaser.Scene {
         const baseY = centerY + offsets[tx] * TILE_SIZE
         for (let ty = -pathHalfH; ty <= pathHalfH; ty++) {
           const py = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, baseY + ty * TILE_SIZE))
-          hRoadRT.stamp('road_tiles', 0, px + TILE_SIZE / 2, py + TILE_SIZE / 2)
+          hRoadRT.stamp('roguelike', rand() < 0.7 ? RL_DIRT : RL_DIRT2,
+            px + TILE_SIZE / 2, py + TILE_SIZE / 2, { scaleX: 2, scaleY: 2 })
         }
       }
     }
@@ -153,7 +178,8 @@ export class WorldScene extends Phaser.Scene {
         const baseX = centerX + offsets[ty] * TILE_SIZE
         for (let tx = -pathHalfW; tx <= pathHalfW; tx++) {
           const px = Math.max(0, Math.min(WORLD_WIDTH - TILE_SIZE, baseX + tx * TILE_SIZE))
-          vRoadRT.stamp('road_tiles', 0, px + TILE_SIZE / 2, py + TILE_SIZE / 2)
+          vRoadRT.stamp('roguelike', rand() < 0.7 ? RL_DIRT : RL_DIRT2,
+            px + TILE_SIZE / 2, py + TILE_SIZE / 2, { scaleX: 2, scaleY: 2 })
         }
       }
     }
@@ -178,12 +204,20 @@ export class WorldScene extends Phaser.Scene {
       this.drawDiagonalPath(branch.fromX, branch.fromY, branch.toX, branch.toY, diagRT)
     }
 
-    // ── Trees ────────────────────────────────────────────────────────────────
+    // ── Trees (Tiny Town poplars + round trees, 16px tiles at 4× scale) ──────
     const treePositions = this.generateTreePositions(20)
-    for (const [tx, ty] of treePositions) {
-      this.add.image(tx + 16, ty + 44, 'shadow').setAlpha(0.5).setDepth(1)
-      this.add.image(tx, ty, 'tree').setOrigin(0, 0).setDepth(2)
-    }
+    treePositions.forEach(([tx, ty], i) => {
+      this.add.image(tx, ty, 'shadow').setAlpha(0.5).setDepth(1).setScale(1.6, 1.4)
+      if (i % 4 === 3) {
+        // single-tile round tree
+        this.add.image(tx, ty - 28, 'tiny_town', TT_TREE_ROUND).setScale(4).setDepth(2)
+      } else {
+        // two-tile tall poplar (mostly green, some orange)
+        const [top, bottom] = i % 3 === 1 ? TT_POPLAR_ORANGE : TT_POPLAR_GREEN
+        this.add.image(tx, ty - 28, 'tiny_town', bottom).setScale(4).setDepth(2)
+        this.add.image(tx, ty - 92, 'tiny_town', top).setScale(4).setDepth(2)
+      }
+    })
 
     // ── Buildings ────────────────────────────────────────────────────────────
     const buildingDefs = [
@@ -211,10 +245,11 @@ export class WorldScene extends Phaser.Scene {
 
     this.add.image(1280, 1170, 'sign').setDepth(3).setScale(3)
 
+    // Green bushes framing the town square (roguelike pack)
     for (const [rx, ry] of [
       [1010, 1220], [1550, 1220], [1010, 1380], [1550, 1380],
     ] as [number, number][]) {
-      this.add.image(rx, ry, 'rock').setDepth(3).setScale(3)
+      this.add.image(rx, ry, 'roguelike', RL_BUSH_GREEN).setDepth(3).setScale(3)
     }
 
     // ── Chest ─────────────────────────────────────────────────────────────────
@@ -233,11 +268,11 @@ export class WorldScene extends Phaser.Scene {
       this.drawBiomeGate(gate.x, gate.y, gate.name, gate.color)
     }
 
-    // ── Rock accents around each biome gate ───────────────────────────────────
-    for (const gate of this.biomeGates) {
-      this.add.image(gate.x - 40, gate.y, 'rock').setScale(2.5).setDepth(3)
-      this.add.image(gate.x + 40, gate.y, 'rock').setScale(2.5).setDepth(3)
-    }
+    // ── Rock accents around each biome gate (roguelike pack) ──────────────────
+    this.biomeGates.forEach((gate, i) => {
+      this.add.image(gate.x - 44, gate.y, 'roguelike', RL_ROCKS_GRAY[i % 3]).setScale(3).setDepth(3)
+      this.add.image(gate.x + 44, gate.y, 'roguelike', RL_ROCKS_GRAY[(i + 1) % 3]).setScale(3).setDepth(3)
+    })
 
     // ── Benches near the town square ──────────────────────────────────────────
     const benchPositions: [number, number][] = [
@@ -322,7 +357,8 @@ export class WorldScene extends Phaser.Scene {
         const oy = cy + (t + perp) * ( dx) * TILE_SIZE
         const clampedOx = Math.max(0, Math.min(WORLD_WIDTH  - TILE_SIZE, ox - TILE_SIZE / 2))
         const clampedOy = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, oy - TILE_SIZE / 2))
-        rt.stamp('road_tiles', 0, clampedOx + TILE_SIZE / 2, clampedOy + TILE_SIZE / 2)
+        rt.stamp('roguelike', rand() < 0.7 ? RL_DIRT : RL_DIRT2,
+          clampedOx + TILE_SIZE / 2, clampedOy + TILE_SIZE / 2, { scaleX: 2, scaleY: 2 })
       }
     }
   }

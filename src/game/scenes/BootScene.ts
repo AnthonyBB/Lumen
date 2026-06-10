@@ -21,10 +21,20 @@ export class BootScene extends Phaser.Scene {
       frameHeight: 48,
     })
 
-    // ── GROUND TILES ────────────────────────────────────────────────────────────
-    // Loaded as spritesheets so individual frames can be addressed (32×32 per tile)
-    this.load.spritesheet('ground_tiles', '/assets/tiles/tileset_ground.png', { frameWidth: 32, frameHeight: 32 })
-    this.load.spritesheet('road_tiles',   '/assets/tiles/tileset_road.png',   { frameWidth: 32, frameHeight: 32 })
+    // ── KENNEY CC0 ASSET PACKS (see public/assets/CREDITS.md) ───────────────────
+    // roguelike:    968×526, 16×16 tiles with 1px spacing, 57 cols × 31 rows
+    // tiny_town:    192×176, 16×16 tiles, no spacing, 12 cols × 11 rows
+    // tiny_dungeon: 192×176, same geometry as tiny_town
+    // Frame constants for these sheets live in src/game/data/tileFrames.ts.
+    this.load.spritesheet('roguelike', '/assets/packs/roguelike_rpg.png', {
+      frameWidth: 16, frameHeight: 16, spacing: 1,
+    })
+    this.load.spritesheet('tiny_town', '/assets/packs/tiny_town.png', {
+      frameWidth: 16, frameHeight: 16,
+    })
+    this.load.spritesheet('tiny_dungeon', '/assets/packs/tiny_dungeon.png', {
+      frameWidth: 16, frameHeight: 16,
+    })
 
     // ── BUILDINGS ───────────────────────────────────────────────────────────────
     // building_learning = purple house (magical / scholarly)
@@ -41,13 +51,10 @@ export class BootScene extends Phaser.Scene {
     this.load.image('bench',    '/assets/props/bench.png')
     this.load.image('barrel',   '/assets/props/barrel.png')
     this.load.image('sign',     '/assets/props/sign.png')
-    this.load.image('rock',     '/assets/props/rock.png')
+    // (trees and rocks now come from the Kenney packs above)
 
     // ── CHEST (keep existing SVG) ────────────────────────────────────────────────
     this.load.image('chest', '/assets/sprites/chest.svg')
-
-    // ── TREE (keep existing SVG — no tree in tileset pack) ──────────────────────
-    this.load.image('tree', '/assets/sprites/tree.svg')
 
     // ── SHADOW (programmatic — 40x8 ellipse) ────────────────────────────────────
     const shadowGfx = this.make.graphics({ x: 0, y: 0 })

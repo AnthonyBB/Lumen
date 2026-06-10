@@ -626,9 +626,9 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private drawDeciduousForest(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x4a7a4a, 1).fillRect(0, 0, WORLD_W, WORLD_H)
-    g.fillStyle(0x3a6a20, 1).fillRect(0, WORLD_H * 0.45, WORLD_W, WORLD_H * 0.55)
+    this.drawBiomeGround('Deciduous Forest')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x4a7a4a, 0.5).fillRect(0, 0, WORLD_W, WORLD_H * 0.45)
     for (let i = 0; i < 18; i++) {
       g.fillStyle(0x4a8a30, 0.25)
       g.fillEllipse(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.4, WORLD_H * 0.7),
@@ -649,6 +649,8 @@ export class BiomeScene extends Phaser.Scene {
       g.fillCircle(rng.integerInRange(20, WORLD_W - 20), rng.integerInRange(WORLD_H * 0.45, WORLD_H - 60),
         rng.integerInRange(4, 8))
     }
+    // Dense tree + rock scatter
+    this.scatterProps(60, 0, WORLD_W, 0, WORLD_H, rng, 0.7)
   }
 
   private drawDeciduousTree(g: Phaser.GameObjects.Graphics, x: number, y: number, h: number) {
@@ -659,9 +661,9 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private drawSwamp(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x050f05, 1).fillRect(0, 0, WORLD_W, WORLD_H)
-    g.fillStyle(0x1a2e10, 1).fillRect(0, WORLD_H * 0.44, WORLD_W, WORLD_H * 0.56)
+    this.drawBiomeGround('Swamp')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x050f05, 0.75).fillRect(0, 0, WORLD_W, WORLD_H)
     for (let i = 0; i < 22; i++) {
       g.fillStyle(rng.pick([0x1a3020, 0x0d2018]), 0.9)
       g.fillEllipse(rng.integerInRange(60, WORLD_W - 60), rng.integerInRange(WORLD_H * 0.38, WORLD_H * 0.82),
@@ -686,17 +688,18 @@ export class BiomeScene extends Phaser.Scene {
       this.tweens.add({ targets: wisp, alpha: { from: 0.1, to: 0.9 },
         duration: rng.integerInRange(700, 1600), yoyo: true, repeat: -1 })
     }
+    // Sparse trees (dark tint) + rocks for swamp
+    this.scatterProps(30, 0, WORLD_W, WORLD_H * 0.2, WORLD_H, rng, 0.4, 0x4a5a30)
   }
 
   private drawSnow(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x0a1030, 1).fillRect(0, 0, WORLD_W, WORLD_H)
+    this.drawBiomeGround('Snow')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x0a1030, 0.7).fillRect(0, 0, WORLD_W, WORLD_H * 0.44)
     for (let i = 0; i < 200; i++) {
       g.fillStyle(0xffffff, 1).fillCircle(rng.integerInRange(0, WORLD_W), rng.integerInRange(0, WORLD_H * 0.4), rng.integerInRange(1, 3))
     }
-    g.fillStyle(0xddeeff, 1).fillRect(0, WORLD_H * 0.44, WORLD_W, WORLD_H * 0.56)
-    g.fillStyle(0xeef8ff, 1).fillRect(0, WORLD_H * 0.44, WORLD_W, 28)
-    g.fillStyle(0xaaddff, 0.55).fillRect(WORLD_W * 0.3, WORLD_H * 0.5, WORLD_W * 0.4, WORLD_H * 0.15)
+    g.fillStyle(0xaaddff, 0.4).fillRect(WORLD_W * 0.3, WORLD_H * 0.5, WORLD_W * 0.4, WORLD_H * 0.15)
     g.fillStyle(0xbbddff, 1)
     for (let i = 0; i < 60; i++) {
       const ix = rng.integerInRange(0, WORLD_W); const il = rng.integerInRange(30, 100)
@@ -709,6 +712,8 @@ export class BiomeScene extends Phaser.Scene {
     for (let i = 0; i < 150; i++) {
       g.fillStyle(0xffffff, 0.8).fillCircle(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.2, WORLD_H), rng.integerInRange(2, 5))
     }
+    // Sparse rocks + occasional tree (light tint for snow)
+    this.scatterProps(25, 0, WORLD_W, WORLD_H * 0.2, WORLD_H, rng, 0.3, 0xddeeff)
   }
 
   private drawSnowTree(g: Phaser.GameObjects.Graphics, x: number, y: number, h: number) {
@@ -718,14 +723,14 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private drawGrassland(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x4a90d9, 1).fillRect(0, 0, WORLD_W, WORLD_H)
+    this.drawBiomeGround('Grassland')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x4a90d9, 1).fillRect(0, 0, WORLD_W, WORLD_H * 0.42)
     for (let i = 0; i < 12; i++) {
       g.fillStyle(0xffffff, rng.realInRange(0.6, 0.9))
       const cx = rng.integerInRange(0, WORLD_W); const cy = rng.integerInRange(40, WORLD_H * 0.25)
       g.fillEllipse(cx, cy, rng.integerInRange(120, 300), 60)
     }
-    g.fillStyle(0x5aaa2a, 1).fillRect(0, WORLD_H * 0.42, WORLD_W, WORLD_H * 0.58)
     for (let i = 0; i < 10; i++) {
       g.fillStyle(0x4a9a20, 0.3)
       g.fillEllipse(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.3, WORLD_H * 0.55),
@@ -741,18 +746,14 @@ export class BiomeScene extends Phaser.Scene {
       g.fillStyle(fc[rng.integerInRange(0, 4)], 1)
       g.fillCircle(rng.integerInRange(20, WORLD_W - 20), rng.integerInRange(WORLD_H * 0.45, WORLD_H - 50), rng.integerInRange(4, 9))
     }
-    for (let i = 0; i < 25; i++) {
-      const tx = rng.integerInRange(60, WORLD_W - 60); const ty = rng.integerInRange(WORLD_H * 0.2, WORLD_H * 0.7)
-      const th = rng.integerInRange(60, 120)
-      g.fillStyle(0x5a3a10, 1).fillRect(tx - th * 0.08, ty, th * 0.16, th * 0.4)
-      g.fillStyle(0x3a7a20, 1).fillCircle(tx, ty - th * 0.18, th * 0.46)
-    }
+    // Mixed trees and rocks scattered across grassland
+    this.scatterProps(40, 0, WORLD_W, WORLD_H * 0.2, WORLD_H, rng, 0.55)
   }
 
   private drawTropicalRainforest(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x042208, 1).fillRect(0, 0, WORLD_W, WORLD_H)
-    g.fillStyle(0x0d3a10, 1).fillRect(0, WORLD_H * 0.46, WORLD_W, WORLD_H * 0.54)
+    this.drawBiomeGround('Tropical Rainforest')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x042208, 0.7).fillRect(0, 0, WORLD_W, WORLD_H * 0.46)
     const cc = [0x0d6e1e, 0x1a5e14, 0x0a4e12, 0x157a1a]
     for (let i = 0; i < 50; i++) {
       g.fillStyle(cc[rng.integerInRange(0, 3)], 0.85)
@@ -780,11 +781,14 @@ export class BiomeScene extends Phaser.Scene {
       this.tweens.add({ targets: fly, alpha: { from: 0.1, to: 0.9 },
         duration: rng.integerInRange(500, 1300), yoyo: true, repeat: -1 })
     }
+    // Very dense trees (lush green tint) + rock scatter
+    this.scatterProps(60, 0, WORLD_W, 0, WORLD_H, rng, 0.8, 0x88ff88)
   }
 
   private drawOcean(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x0a1a4a, 1).fillRect(0, 0, WORLD_W, WORLD_H)
+    this.drawBiomeGround('Ocean')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x0a1a4a, 0.85).fillRect(0, 0, WORLD_W, WORLD_H)
     g.fillStyle(0x1a3a6a, 1).fillRect(0, WORLD_H * 0.28, WORLD_W, WORLD_H * 0.72)
     for (let i = 0; i < 14; i++) {
       const rx = rng.integerInRange(0, WORLD_W)
@@ -823,10 +827,13 @@ export class BiomeScene extends Phaser.Scene {
       g.fillEllipse(ffx2, ffy2, 28, 14)
       g.fillTriangle(ffx2 - 14, ffy2, ffx2 - 24, ffy2 - 8, ffx2 - 24, ffy2 + 8)
     }
+    // Rock scatter on sandy shores, no trees
+    this.scatterProps(20, 0, WORLD_W, WORLD_H * 0.75, WORLD_H, rng, 0.0, 0x8899cc)
   }
 
   private drawFallback() {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x1a1a2e, 1).fillRect(0, 0, WORLD_W, WORLD_H)
+    this.drawBiomeGround('Grassland')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x1a1a2e, 0.5).fillRect(0, 0, WORLD_W, WORLD_H)
   }
 }

@@ -114,6 +114,11 @@ export const CPD_COLS = 12
 const cpd = (col: number, row: number) => row * CPD_COLS + col
 export const CPD_BLADES  = [cpd(0, 13), cpd(1, 13), cpd(2, 13), cpd(3, 13), cpd(4, 13), cpd(5, 13)]
 export const CPD_SPECKS  = [cpd(1, 12), cpd(3, 12), cpd(4, 12), cpd(6, 12), cpd(8, 12), cpd(6, 11)]
+// Dirt pebbles/dots (alpha) — stamped over dirt paths for texture (rows 11-12)
+export const CPD_PEBBLES = [
+  cpd(7, 11), cpd(8, 11), cpd(9, 11), cpd(11, 11),
+  cpd(0, 11), cpd(3, 11), cpd(5, 11), cpd(2, 12), cpd(5, 12), cpd(9, 12),
+]
 export const CPD_MOUNDS  = [cpd(0, 4), cpd(4, 4), cpd(9, 4), cpd(7, 6), cpd(2, 6)]
 export const CPD_TUFTS   = [cpd(10, 6), cpd(11, 6), cpd(9, 8)]
 export const CPD_FLOWERS = [cpd(10, 8), cpd(11, 8), cpd(0, 10), cpd(8, 10), cpd(10, 10), cpd(11, 10)]

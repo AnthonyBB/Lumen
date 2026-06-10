@@ -3,7 +3,7 @@ import type { Socket } from 'socket.io-client'
 import { TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
 import { Building } from '../objects/Building'
-import { CP_GRASS, CP_GRASS2, CP_DIRT, CPD_BLADES, CPD_SPECKS } from '../data/tileFrames'
+import { CP_GRASS, CP_GRASS2, CP_DIRT, CPD_BLADES, CPD_SPECKS, CPD_PEBBLES } from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
@@ -480,15 +480,17 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** Stamp a trail along a parametric centerline (t: 0→1) in three passes:
+  /** Stamp a trail along a parametric centerline (t: 0→1) in four passes:
    *  1. the fringed 48px blob every 8px — overlapping blobs fuse into a
    *     ribbon, but each blob's rim also braids over its neighbours;
    *  2. the solid dirt tile across the ribbon INTERIOR (3 stamps perpendicular
    *     to the tangent), erasing the braiding so the fringe survives only on
    *     the outside edge;
-   *  3. grass-blade decals straddling both edges, so the dirt/grass boundary
-   *     is softened with overgrowth like the pack's demo map (rather than a
-   *     hard rim). All verified against a rendered simulation. */
+   *  3. pebble/dirt-clod decals scattered over the interior so the dirt reads
+   *     as textured ground rather than a flat brown stripe;
+   *  4. grass-blade decals straddling both edges, so the dirt/grass boundary
+   *     is softened with overhanging grass like the pack's demo map (rather
+   *     than a hard rim). All verified against a rendered simulation. */
   private stampTrail(
     rt: Phaser.GameObjects.RenderTexture,
     centerline: (t: number) => { x: number; y: number },
@@ -525,7 +527,25 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Pass 3: grassy overgrowth on both edges (~22px out from centerline)
+    // Pass 3: pebble texture scattered across the dirt interior (±9px of center)
+    const pebbleRand = this.rng(steps * 17 + 3)
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const p = centerline(t)
+      const ahead = centerline(Math.min(1, t + 0.01))
+      const dx = ahead.x - p.x
+      const dy = ahead.y - p.y
+      const len = Math.max(1, Math.hypot(dx, dy))
+      const nx = -dy / len
+      const ny = dx / len
+      if (pebbleRand() < 0.3) {
+        const o = (pebbleRand() - 0.5) * 18
+        const frame = CPD_PEBBLES[Math.floor(pebbleRand() * CPD_PEBBLES.length)]
+        rt.stamp('cp_details', frame, p.x + nx * o, p.y + ny * o, scale)
+      }
+    }
+
+    // Pass 4: grassy overgrowth straddling both edges (~20px out from center)
     const edgeRand = this.rng(steps * 31 + 7)
     for (let i = 0; i <= steps; i++) {
       const t = i / steps
@@ -537,8 +557,8 @@ export class WorldScene extends Phaser.Scene {
       const nx = -dy / len
       const ny = dx / len
       for (const side of [-1, 1]) {
-        if (edgeRand() < 0.45) {
-          const o = side * (18 + edgeRand() * 8)
+        if (edgeRand() < 0.6) {
+          const o = side * (16 + edgeRand() * 8)
           const frame = CPD_BLADES[Math.floor(edgeRand() * CPD_BLADES.length)]
           rt.stamp('cp_details', frame, p.x + nx * o, p.y + ny * o, { scaleX: 2, scaleY: 2 })
         }

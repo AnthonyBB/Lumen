@@ -1,6 +1,9 @@
 /**
- * History question bank — tagged with subcategories from curriculum.ts.
+ * History question bank — tagged with grade-level TOPIC ids from curriculum.ts.
  * Imported and concatenated by QuestionEngine.  Server-side only.
+ *
+ * SEED: 3 questions per topic (24 topics → 72 questions).
+ * TODO: expand to 20+ per topic. Append below the matching topic header.
  */
 
 import { makeQ, type RawQuestion } from './util.js';
@@ -8,67 +11,123 @@ import { makeQ, type RawQuestion } from './util.js';
 const q = makeQ('history');
 
 export const HISTORY_QUESTIONS: RawQuestion[] = [
-  // ── Community & Citizenship (K-3) ─────────────────────────────────────────
-  q('hist_community', 0, 'easy', 'Who helps keep people safe and puts out fires?', ['Bakers', 'Firefighters', 'Painters', 'Singers'], 1, 'Firefighters are community helpers who put out fires and rescue people.'),
-  q('hist_community', 1, 'easy', 'Where do people in a town go to borrow books?', ['The bank', 'The library', 'The post office', 'The bakery'], 1, 'A library lends books to everyone in the community for free.'),
-  q('hist_community', 1, 'easy', 'What is a good way to be a kind citizen?', ['Littering', 'Helping a neighbor', 'Breaking rules', 'Pushing in line'], 1, 'Good citizens help others, follow rules, and care for their community.'),
-  q('hist_community', 2, 'medium', 'Who leads a city government?', ['A mayor', 'A king', 'A captain', 'A coach'], 0, 'Most cities elect a mayor to lead their local government.'),
-  q('hist_community', 2, 'medium', 'Why do communities have rules and laws?', ['To make life boring', 'To keep people safe and fair', 'To stop all fun', 'Only for grown-ups'], 1, 'Rules and laws protect people and help everyone get along fairly.'),
-  q('hist_community', 3, 'medium', 'What does it mean to volunteer?', ['To get paid for work', 'To help without being paid', 'To go on vacation', 'To win a prize'], 1, 'Volunteers freely give their time to help others and improve their community.'),
+  // ── history_g1_t1 · Grade 1 · My Community ───────────────────────────────────
+  q('history_g1_t1', 1, 'easy', 'Who helps put out fires?', ['Bakers', 'Firefighters', 'Painters', 'Singers'], 1, 'Firefighters put out fires and rescue people.'),
+  q('history_g1_t1', 1, 'easy', 'Where do people borrow books?', ['The bank', 'The library', 'The bakery', 'The gym'], 1, 'A library lends books to the community.'),
+  q('history_g1_t1', 1, 'medium', 'Who delivers letters to homes?', ['A teacher', 'A mail carrier', 'A doctor', 'A pilot'], 1, 'A mail carrier delivers letters and packages.'),
 
-  // ── Ancient Civilizations (3-7) ───────────────────────────────────────────
-  q('hist_ancient', 4, 'easy', 'What ancient civilization built the pyramids at Giza?', ['Mesopotamians', 'Ancient Egyptians', 'Mayans', 'Romans'], 1, 'The Ancient Egyptians built the Giza pyramids around 2500 BC as tombs for their pharaohs.'),
-  q('hist_ancient', 5, 'medium', 'Which empire built the Colosseum in Rome?', ['Greek', 'Ottoman', 'Roman', 'Byzantine'], 2, 'The Roman Empire built the Colosseum between AD 70 and 80 under Emperor Vespasian.'),
-  q('hist_ancient', 5, 'medium', 'Which ancient wonder was located in Alexandria, Egypt?', ['Colossus of Rhodes', 'Great Pyramid', 'Lighthouse of Alexandria', 'Hanging Gardens'], 2, 'The Lighthouse of Alexandria (Pharos) guided ships and was one of the Seven Wonders of the Ancient World.'),
-  q('hist_ancient', 3, 'easy', 'What did ancient Egyptians use to write?', ['Hieroglyphics', 'Emojis', 'The English alphabet', 'Morse code'], 0, 'Hieroglyphics were picture symbols used for writing in ancient Egypt.'),
-  q('hist_ancient', 6, 'medium', 'Which ancient Greek city is called the birthplace of democracy?', ['Sparta', 'Athens', 'Troy', 'Olympia'], 1, 'Athens let citizens vote on laws around 500 BC — an early democracy.'),
-  q('hist_ancient', 7, 'hard', 'Between which two rivers did ancient Mesopotamia develop?', ['Nile and Congo', 'Tigris and Euphrates', 'Amazon and Orinoco', 'Yellow and Yangtze'], 1, 'Mesopotamia means "between the rivers" — the Tigris and Euphrates in modern Iraq.'),
+  // ── history_g1_t2 · Grade 1 · Then & Now ─────────────────────────────────────
+  q('history_g1_t2', 1, 'easy', 'Long ago, how did people travel before cars?', ['Airplanes', 'Horses', 'Trains only', 'Rockets'], 1, 'Before cars, people often rode horses.'),
+  q('history_g1_t2', 1, 'easy', 'What do we use today to talk to faraway friends?', ['Smoke signals', 'Phones', 'Drums', 'Nothing'], 1, 'Today we use phones to talk far away.'),
+  q('history_g1_t2', 1, 'medium', 'How did people keep food cold before refrigerators?', ['With ice', 'With fire', 'With fans', 'With light'], 0, 'People used ice boxes to keep food cold.'),
 
-  // ── World Explorers (4-7) ─────────────────────────────────────────────────
-  q('hist_explorers', 4, 'easy', 'What year did Christopher Columbus first reach the Americas?', ['1488', '1492', '1498', '1502'], 1, 'Columbus reached the Bahamas on October 12, 1492, during his first voyage.'),
-  q('hist_explorers', 4, 'easy', 'What did early explorers use to find their direction at sea?', ['A telescope', 'A compass', 'A telephone', 'A clock'], 1, 'A magnetic compass always points north, helping sailors navigate.'),
-  q('hist_explorers', 5, 'medium', 'Whose expedition was the first to sail all the way around the world?', ['Columbus', 'Magellan', 'Marco Polo', 'Leif Erikson'], 1, 'Ferdinand Magellan’s expedition (1519-1522) completed the first circumnavigation of the globe.'),
-  q('hist_explorers', 5, 'medium', 'Which explorer traveled from Italy to China and wrote about it?', ['Marco Polo', 'Hernán Cortés', 'James Cook', 'Vasco da Gama'], 0, 'Marco Polo journeyed along the Silk Road to China in the 1270s and described his travels in a famous book.'),
-  q('hist_explorers', 6, 'medium', 'Which explorers were likely the first Europeans to reach North America, around the year 1000?', ['The Spanish', 'The Vikings', 'The Portuguese', 'The Dutch'], 1, 'Viking sailors led by Leif Erikson reached Newfoundland nearly 500 years before Columbus.'),
-  q('hist_explorers', 7, 'hard', 'Why did European explorers seek a sea route to Asia?', ['To find penguins', 'To trade for spices and silk', 'To study volcanoes', 'To escape winter'], 1, 'Spices and silk were extremely valuable, and land routes were long and costly.'),
+  // ── history_g2_t1 · Grade 2 · Maps & Globes ─────────────────────────────────
+  q('history_g2_t1', 2, 'easy', 'What does a globe show?', ['A whole street', 'The round Earth', 'One house', 'A car'], 1, 'A globe is a model of the round Earth.'),
+  q('history_g2_t1', 2, 'medium', 'On most maps, which direction is up?', ['South', 'North', 'East', 'West'], 1, 'North is usually at the top of a map.'),
+  q('history_g2_t1', 2, 'medium', 'What part of a map tells what symbols mean?', ['The key', 'The title only', 'The corner', 'The border'], 0, 'A map key (legend) explains the symbols.'),
 
-  // ── American History (4-11) ───────────────────────────────────────────────
-  q('hist_american', 3, 'easy', 'Who was the first President of the United States?', ['Thomas Jefferson', 'John Adams', 'Benjamin Franklin', 'George Washington'], 3, 'George Washington became the first U.S. President in 1789.'),
-  q('hist_american', 4, 'medium', 'What document declared American independence in 1776?', ['The Constitution', 'The Magna Carta', 'The Bill of Rights', 'The Declaration of Independence'], 3, 'The Declaration of Independence, adopted on July 4, 1776, declared the 13 colonies free from British rule.'),
-  q('hist_american', 5, 'easy', 'How many original colonies formed the United States?', ['10', '13', '15', '50'], 1, 'Thirteen British colonies along the Atlantic coast became the first states.'),
-  q('hist_american', 7, 'medium', 'Which president wrote the Emancipation Proclamation during the Civil War?', ['George Washington', 'Abraham Lincoln', 'Theodore Roosevelt', 'Thomas Jefferson'], 1, 'Abraham Lincoln issued it in 1863, declaring enslaved people in Confederate states free.'),
-  q('hist_american', 9, 'hard', 'What movement, led in part by Dr. Martin Luther King Jr., worked for equal rights in the 1950s-60s?', ['The Gold Rush', 'The Civil Rights Movement', 'The New Deal', 'Westward Expansion'], 1, 'The Civil Rights Movement used peaceful protest to win equal rights for Black Americans.'),
-  q('hist_american', 11, 'hard', 'Which purchase in 1803 doubled the size of the United States?', ['The Alaska Purchase', 'The Louisiana Purchase', 'The Gadsden Purchase', 'The Florida Treaty'], 1, 'The U.S. bought the Louisiana Territory from France, doubling the nation’s land.'),
+  // ── history_g2_t2 · Grade 2 · Good Citizens ─────────────────────────────────
+  q('history_g2_t2', 2, 'easy', 'What is a good way to be a kind citizen?', ['Littering', 'Helping a neighbor', 'Breaking rules', 'Pushing in line'], 1, 'Good citizens help others and follow rules.'),
+  q('history_g2_t2', 2, 'medium', 'Who leads a city government?', ['A mayor', 'A king', 'A captain', 'A coach'], 0, 'Most cities elect a mayor to lead.'),
+  q('history_g2_t2', 2, 'medium', 'Why do communities have rules?', ['To keep people safe and fair', 'To make people sad', 'For no reason', 'To waste time'], 0, 'Rules keep everyone safe and treat people fairly.'),
 
-  // ── World History (6-12) ──────────────────────────────────────────────────
-  q('hist_world', 6, 'easy', 'In which year did World War II end?', ['1943', '1944', '1945', '1946'], 2, 'World War II ended in 1945: Germany surrendered in May and Japan in September.'),
-  q('hist_world', 7, 'medium', 'What was the Renaissance?', ['A type of castle', 'A rebirth of art and learning in Europe', 'A war between kingdoms', 'A trade ship'], 1, 'The Renaissance (14th-17th centuries) revived art, science, and learning across Europe.'),
-  q('hist_world', 8, 'medium', 'The Industrial Revolution began in which country?', ['France', 'Great Britain', 'United States', 'Japan'], 1, 'Factories and steam power first transformed Britain in the late 1700s.'),
-  q('hist_world', 9, 'medium', 'What wall divided a famous German city until 1989?', ['The Great Wall', 'Hadrian’s Wall', 'The Berlin Wall', 'The Western Wall'], 2, 'The Berlin Wall separated East and West Berlin during the Cold War until it fell in 1989.'),
-  q('hist_world', 10, 'hard', 'What event in 1914 sparked the start of World War I?', ['The sinking of the Titanic', 'The assassination of Archduke Franz Ferdinand', 'The French Revolution', 'The Moon landing'], 1, 'The archduke’s assassination in Sarajevo set off a chain of alliances that led to war.'),
-  q('hist_world', 12, 'hard', 'What was the Cold War?', ['A war fought in winter', 'A tense rivalry between the USA and USSR without direct war', 'A battle over Antarctica', 'A medieval conflict'], 1, 'From about 1947 to 1991, the two superpowers competed through politics, technology, and influence.'),
+  // ── history_g3_t1 · Grade 3 · Communities Around the World ───────────────────
+  q('history_g3_t1', 3, 'easy', 'A very large city is called a:', ['Village', 'Metropolis', 'Farm', 'Tent'], 1, 'A metropolis is a large, busy city.'),
+  q('history_g3_t1', 3, 'medium', 'People in different places may speak different:', ['Languages', 'Numbers only', 'Colors', 'Shapes'], 0, 'Communities around the world speak many languages.'),
+  q('history_g3_t1', 3, 'medium', 'A community near the ocean might depend on:', ['Fishing', 'Mining ice', 'Volcanoes', 'Nothing'], 0, 'Coastal communities often rely on fishing.'),
 
-  // ── Geography & Maps (K-8) ────────────────────────────────────────────────
-  q('hist_geography', 0, 'easy', 'Which of these is the biggest?', ['A town', 'A country', 'A continent', 'A street'], 2, 'A continent is a huge landmass containing many countries, like Africa or Asia.'),
-  q('hist_geography', 2, 'easy', 'How many continents are there on Earth?', ['5', '6', '7', '8'], 2, 'There are 7 continents: Africa, Antarctica, Asia, Australia, Europe, North America, and South America.'),
-  q('hist_geography', 3, 'easy', 'On most maps, which direction is at the top?', ['South', 'East', 'West', 'North'], 3, 'Maps are usually drawn with north at the top — the compass rose shows directions.'),
-  q('hist_geography', 4, 'medium', 'What is the largest ocean on Earth?', ['Atlantic', 'Indian', 'Arctic', 'Pacific'], 3, 'The Pacific Ocean is the largest and deepest ocean, covering about a third of the planet.'),
-  q('hist_geography', 6, 'medium', 'What imaginary line circles the Earth halfway between the poles?', ['The prime meridian', 'The equator', 'The horizon', 'The tropic line'], 1, 'The equator divides Earth into the Northern and Southern Hemispheres.'),
-  q('hist_geography', 8, 'hard', 'What do lines of longitude measure?', ['Distance north or south', 'Distance east or west', 'Ocean depth', 'Mountain height'], 1, 'Longitude lines run pole to pole and measure how far east or west a place is from the prime meridian.'),
+  // ── history_g3_t2 · Grade 3 · Local & National Heroes ───────────────────────
+  q('history_g3_t2', 3, 'easy', 'A hero who helps the community is someone who:', ['Helps others', 'Only helps themselves', 'Hides away', 'Breaks things'], 0, 'Heroes act bravely to help others.'),
+  q('history_g3_t2', 3, 'medium', 'Martin Luther King Jr. is remembered for working for:', ['Equal rights', 'Faster cars', 'Taller buildings', 'New games'], 0, 'Dr. King worked for civil rights and equality.'),
+  q('history_g3_t2', 3, 'medium', 'A national holiday honors:', ['Important people or events', 'Only birthdays', 'Nothing', 'The weather'], 0, 'Holidays honor important people and events.'),
 
-  // ── Government & Civics (5-12) ────────────────────────────────────────────
-  q('hist_civics', 5, 'easy', 'In a democracy, how do citizens choose their leaders?', ['By voting', 'By drawing straws', 'By birthright', 'By contest'], 0, 'Democracies hold elections where citizens vote for their leaders.'),
-  q('hist_civics', 6, 'medium', 'What are the three branches of the U.S. government?', ['Army, Navy, Air Force', 'Legislative, Executive, Judicial', 'Federal, State, City', 'King, Court, Council'], 1, 'Congress makes laws (legislative), the President enforces them (executive), and courts interpret them (judicial).'),
-  q('hist_civics', 7, 'medium', 'What is the supreme law of the United States?', ['The Declaration of Independence', 'The Constitution', 'The Federalist Papers', 'State law'], 1, 'The Constitution, written in 1787, is the highest law of the land.'),
-  q('hist_civics', 8, 'medium', 'What are the first ten amendments to the U.S. Constitution called?', ['The Preamble', 'The Bill of Rights', 'The Articles', 'The Charters'], 1, 'The Bill of Rights protects freedoms like speech, press, and religion.'),
-  q('hist_civics', 10, 'hard', 'What does "checks and balances" mean?', ['Banks checking money', 'Each branch limits the others’ power', 'Voting twice', 'Balancing the budget'], 1, 'Each branch of government can limit the others so no single branch becomes too powerful.'),
-  q('hist_civics', 12, 'hard', 'What is a veto?', ['A type of election', 'The president’s power to reject a bill', 'A court ruling', 'A new amendment'], 1, 'A president can veto (reject) a bill, though Congress can override it with a two-thirds vote.'),
+  // ── history_g4_t1 · Grade 4 · U.S. Regions & Geography ──────────────────────
+  q('history_g4_t1', 4, 'easy', 'Which is the largest ocean bordering the United States?', ['Atlantic', 'Pacific', 'Indian', 'Arctic'], 1, 'The Pacific Ocean borders the U.S. west coast.'),
+  q('history_g4_t1', 4, 'medium', 'The Rocky Mountains are found in which region?', ['The West', 'The Southeast', 'The Northeast', 'The Midwest'], 0, 'The Rockies run through the western U.S.'),
+  q('history_g4_t1', 4, 'medium', 'Which river is one of the longest in the U.S.?', ['The Thames', 'The Mississippi', 'The Nile', 'The Amazon'], 1, 'The Mississippi River flows through the central U.S.'),
 
-  // ── Economics Basics (6-12) ───────────────────────────────────────────────
-  q('hist_economics', 6, 'easy', 'What do we call the money you keep instead of spending?', ['Debt', 'Savings', 'Tax', 'Rent'], 1, 'Savings is money you set aside to use later.'),
-  q('hist_economics', 6, 'easy', 'What is a "good" in economics?', ['A kind deed', 'A physical thing you can buy, like a toy', 'A law', 'A holiday'], 1, 'Goods are physical products; services are work done for others, like a haircut.'),
-  q('hist_economics', 7, 'medium', 'What usually happens to price when something is scarce but many people want it?', ['The price falls', 'The price rises', 'The price stays the same', 'It becomes free'], 1, 'High demand plus low supply pushes prices up — the law of supply and demand.'),
-  q('hist_economics', 8, 'medium', 'What is a budget?', ['A type of bank', 'A plan for spending and saving money', 'A loan', 'A paycheck'], 1, 'A budget helps you plan how much to spend and save from the money you have.'),
-  q('hist_economics', 10, 'hard', 'What is inflation?', ['Money gaining value', 'A general rise in prices over time', 'A type of tax', 'Free trade'], 1, 'Inflation means prices rise over time, so each dollar buys a little less.'),
-  q('hist_economics', 12, 'hard', 'What do we call money paid to the government to fund public services?', ['Interest', 'Taxes', 'Profit', 'Wages'], 1, 'Taxes pay for roads, schools, parks, and other public services.'),
+  // ── history_g4_t2 · Grade 4 · Native Peoples & Settlers ─────────────────────
+  q('history_g4_t2', 4, 'easy', 'Native Americans lived in the Americas:', ['Before European settlers', 'After cars', 'Only last year', 'Never'], 0, 'Native peoples lived here long before settlers arrived.'),
+  q('history_g4_t2', 4, 'medium', 'Many Plains tribes hunted which animal?', ['Bison', 'Penguins', 'Camels', 'Kangaroos'], 0, 'Plains tribes depended on the bison (buffalo).'),
+  q('history_g4_t2', 4, 'medium', 'Early settlers and Native peoples often traded:', ['Goods', 'Cell phones', 'Cars', 'Televisions'], 0, 'They traded food, furs, and other goods.'),
+
+  // ── history_g5_t1 · Grade 5 · Colonial America ──────────────────────────────
+  q('history_g5_t1', 5, 'easy', 'The Pilgrims sailed to America on which ship?', ['Titanic', 'Mayflower', 'Santa Maria', 'Endeavour'], 1, 'The Pilgrims sailed on the Mayflower in 1620.'),
+  q('history_g5_t1', 5, 'medium', 'How many original colonies were there?', ['10', '13', '50', '7'], 1, 'There were 13 original colonies.'),
+  q('history_g5_t1', 5, 'medium', 'Jamestown, founded in 1607, was in which colony?', ['Virginia', 'Texas', 'California', 'Maine'], 0, 'Jamestown was the first lasting English settlement, in Virginia.'),
+
+  // ── history_g5_t2 · Grade 5 · American Revolution ───────────────────────────
+  q('history_g5_t2', 5, 'easy', 'The Declaration of Independence was signed in what year?', ['1492', '1776', '1865', '1920'], 1, 'It was signed in 1776.'),
+  q('history_g5_t2', 5, 'medium', 'Who was the first U.S. president?', ['Abraham Lincoln', 'George Washington', 'Thomas Jefferson', 'John Adams'], 1, 'George Washington was the first president.'),
+  q('history_g5_t2', 5, 'medium', 'The colonists fought for independence from which country?', ['France', 'Spain', 'Great Britain', 'Mexico'], 2, 'They fought against Great Britain.'),
+
+  // ── history_g6_t1 · Grade 6 · Ancient Civilizations ─────────────────────────
+  q('history_g6_t1', 6, 'easy', 'The ancient pyramids were built in which country?', ['Greece', 'Egypt', 'China', 'Peru'], 1, 'The great pyramids are in Egypt.'),
+  q('history_g6_t1', 6, 'medium', 'Mesopotamia developed between which two rivers?', ['Nile and Congo', 'Tigris and Euphrates', 'Amazon and Plata', 'Ganges and Indus'], 1, 'Mesopotamia lay between the Tigris and Euphrates.'),
+  q('history_g6_t1', 6, 'medium', 'One of the earliest forms of writing was:', ['Cuneiform', 'Email', 'Braille', 'Morse code'], 0, 'Cuneiform was used in ancient Mesopotamia.'),
+
+  // ── history_g6_t2 · Grade 6 · Greece & Rome ─────────────────────────────────
+  q('history_g6_t2', 6, 'easy', 'Democracy began in which ancient city?', ['Rome', 'Athens', 'Cairo', 'Babylon'], 1, 'Athens is known as the birthplace of democracy.'),
+  q('history_g6_t2', 6, 'medium', 'Who was a famous ruler of the Roman Empire?', ['Julius Caesar', 'King Tut', 'Genghis Khan', 'Napoleon'], 0, 'Julius Caesar was a famous Roman leader.'),
+  q('history_g6_t2', 6, 'medium', 'The Romans are known for building:', ['Roads and aqueducts', 'Spaceships', 'Smartphones', 'Skyscrapers'], 0, 'Romans built lasting roads and aqueducts.'),
+
+  // ── history_g7_t1 · Grade 7 · The Middle Ages ───────────────────────────────
+  q('history_g7_t1', 7, 'easy', 'In feudalism, peasants who worked the land were called:', ['Knights', 'Serfs', 'Kings', 'Merchants'], 1, 'Serfs farmed the land under a lord.'),
+  q('history_g7_t1', 7, 'medium', 'A large fortified home of a medieval lord was a:', ['Castle', 'Cottage', 'Tent', 'Skyscraper'], 0, 'Lords lived in fortified castles.'),
+  q('history_g7_t1', 7, 'medium', 'The Black Death was a deadly:', ['Plague', 'Storm', 'War', 'Famine only'], 0, 'The Black Death was a plague that swept Europe.'),
+
+  // ── history_g7_t2 · Grade 7 · Renaissance & Exploration ─────────────────────
+  q('history_g7_t2', 7, 'easy', 'The Renaissance was a rebirth of art and:', ['Learning', 'Farming', 'War', 'Hunting'], 0, 'It revived art, science, and learning.'),
+  q('history_g7_t2', 7, 'medium', 'Who painted the Mona Lisa?', ['Michelangelo', 'Leonardo da Vinci', 'Raphael', 'Donatello'], 1, 'Leonardo da Vinci painted the Mona Lisa.'),
+  q('history_g7_t2', 7, 'medium', 'In 1492, who sailed across the Atlantic for Spain?', ['Magellan', 'Columbus', 'Cook', 'Hudson'], 1, 'Christopher Columbus crossed the Atlantic in 1492.'),
+
+  // ── history_g8_t1 · Grade 8 · U.S. Constitution & Civics ────────────────────
+  q('history_g8_t1', 8, 'easy', 'The first ten amendments are called the:', ['Bill of Rights', 'Preamble', 'Declaration', 'Articles'], 0, 'The Bill of Rights is the first ten amendments.'),
+  q('history_g8_t1', 8, 'medium', 'How many branches does the U.S. government have?', ['2', '3', '4', '5'], 1, 'Three: legislative, executive, and judicial.'),
+  q('history_g8_t1', 8, 'medium', 'Which branch makes laws?', ['Executive', 'Legislative', 'Judicial', 'Military'], 1, 'Congress (legislative branch) makes laws.'),
+
+  // ── history_g8_t2 · Grade 8 · Civil War & Reconstruction ────────────────────
+  q('history_g8_t2', 8, 'easy', 'Who was president during the Civil War?', ['Washington', 'Lincoln', 'Jefferson', 'Roosevelt'], 1, 'Abraham Lincoln led during the Civil War.'),
+  q('history_g8_t2', 8, 'medium', 'The Civil War was fought mainly over:', ['Slavery and union', 'Taxes on tea', 'Land in Asia', 'Trade with China'], 0, 'Slavery and preserving the Union were central issues.'),
+  q('history_g8_t2', 8, 'medium', 'The Emancipation Proclamation aimed to free:', ['Enslaved people', 'Prisoners of war', 'Soldiers', 'Farmers'], 0, 'It declared enslaved people in rebel states free.'),
+
+  // ── history_g9_t1 · Grade 9 · World History: Revolutions ────────────────────
+  q('history_g9_t1', 9, 'easy', 'The French Revolution began in which year?', ['1689', '1789', '1889', '1989'], 1, 'The French Revolution began in 1789.'),
+  q('history_g9_t1', 9, 'medium', 'A common cause of revolutions is:', ['Inequality and unrest', 'Good weather', 'New holidays', 'More books'], 0, 'Inequality and discontent often spark revolutions.'),
+  q('history_g9_t1', 9, 'medium', 'The Enlightenment promoted ideas of:', ['Reason and rights', 'Magic', 'Conquest only', 'Silence'], 0, 'Enlightenment thinkers emphasized reason and individual rights.'),
+
+  // ── history_g9_t2 · Grade 9 · Industrial Age ────────────────────────────────
+  q('history_g9_t2', 9, 'easy', 'The Industrial Revolution began in which country?', ['France', 'Great Britain', 'Japan', 'Brazil'], 1, 'It began in Great Britain in the 1700s.'),
+  q('history_g9_t2', 9, 'medium', 'The steam engine was used to power:', ['Factories and trains', 'Smartphones', 'Airplanes', 'Satellites'], 0, 'Steam engines powered factories and railways.'),
+  q('history_g9_t2', 9, 'medium', 'Industrialization caused many people to move to:', ['Cities', 'Deserts', 'Caves', 'Oceans'], 0, 'People moved to cities for factory jobs (urbanization).'),
+
+  // ── history_g10_t1 · Grade 10 · World Wars ──────────────────────────────────
+  q('history_g10_t1', 10, 'easy', 'World War I began in which year?', ['1814', '1914', '1939', '1945'], 1, 'World War I began in 1914.'),
+  q('history_g10_t1', 10, 'medium', 'World War II ended in which year?', ['1918', '1939', '1945', '1950'], 2, 'World War II ended in 1945.'),
+  q('history_g10_t1', 10, 'medium', 'The alliance opposing the Axis powers was the:', ['Allies', 'Central Powers', 'Triple Entente', 'Union'], 0, 'The Allies fought the Axis in World War II.'),
+
+  // ── history_g10_t2 · Grade 10 · Cold War & Modern Era ───────────────────────
+  q('history_g10_t2', 10, 'easy', 'The Cold War was mainly between the U.S. and the:', ['Soviet Union', 'Roman Empire', 'British Empire', 'Ottoman Empire'], 0, 'It was a rivalry between the U.S. and the USSR.'),
+  q('history_g10_t2', 10, 'medium', 'The Berlin Wall fell in which year?', ['1969', '1979', '1989', '1999'], 2, 'The Berlin Wall fell in 1989.'),
+  q('history_g10_t2', 10, 'medium', 'The "Space Race" was a competition to explore:', ['Space', 'The ocean', 'Antarctica', 'The desert'], 0, 'The U.S. and USSR raced to achievements in space.'),
+
+  // ── history_g11_t1 · Grade 11 · U.S. History in Depth ───────────────────────
+  q('history_g11_t1', 11, 'easy', 'The Great Depression began in which year?', ['1919', '1929', '1939', '1949'], 1, 'The Great Depression began in 1929.'),
+  q('history_g11_t1', 11, 'medium', "FDR's set of relief programs was called the:", ['New Deal', 'Square Deal', 'Fair Deal', 'Great Society'], 0, 'The New Deal addressed the Great Depression.'),
+  q('history_g11_t1', 11, 'medium', 'The Civil Rights Movement sought to end:', ['Segregation', 'Trade', 'Voting', 'Schools'], 0, 'It fought racial segregation and discrimination.'),
+
+  // ── history_g11_t2 · Grade 11 · Government & Economics ──────────────────────
+  q('history_g11_t2', 11, 'easy', 'In a market economy, prices are set mainly by:', ['Supply and demand', 'A king', 'Random chance', 'The weather'], 0, 'Supply and demand drive prices in a market economy.'),
+  q('history_g11_t2', 11, 'medium', 'The power to declare war belongs to which branch?', ['Legislative', 'Executive', 'Judicial', 'Press'], 0, 'Congress holds the power to declare war.'),
+  q('history_g11_t2', 11, 'medium', 'Inflation means that prices, in general, are:', ['Rising', 'Falling', 'Frozen', 'Disappearing'], 0, 'Inflation is a general rise in prices.'),
+
+  // ── history_g12_t1 · Grade 12 · Modern World History ────────────────────────
+  q('history_g12_t1', 12, 'easy', 'Globalization means the world is becoming more:', ['Connected', 'Isolated', 'Empty', 'Silent'], 0, 'Globalization links economies and cultures worldwide.'),
+  q('history_g12_t1', 12, 'medium', 'The United Nations was founded to promote:', ['International cooperation', 'One world army', 'Trade bans', 'Space travel'], 0, 'The UN promotes peace and cooperation among nations.'),
+  q('history_g12_t1', 12, 'medium', 'The European Union is primarily a(n):', ['Economic and political union', 'Military empire', 'Single country', 'Sports league'], 0, 'The EU is an economic and political partnership of nations.'),
+
+  // ── history_g12_t2 · Grade 12 · Civics & Global Issues ──────────────────────
+  q('history_g12_t2', 12, 'easy', 'A right protected by free speech is the ability to:', ['Express opinions', 'Break laws', 'Avoid taxes', 'Vote twice'], 0, 'Free speech protects expressing opinions.'),
+  q('history_g12_t2', 12, 'medium', 'Climate change is largely driven by:', ['Greenhouse gas emissions', 'Reading books', 'Ocean currents only', 'Moon phases'], 0, 'Human greenhouse gas emissions are the main driver.'),
+  q('history_g12_t2', 12, 'medium', 'Human rights are rights that belong to:', ['Every person', 'Only leaders', 'Only adults', 'No one'], 0, 'Human rights belong to all people.'),
 ];

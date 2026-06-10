@@ -31,10 +31,14 @@ import type {
   ShopUnlocksPayload,
   Player,
   Subject,
-  Difficulty,
 } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
-import { CURRICULUM, SUBCATEGORY_MAP } from '../game/data/curriculum.js';
+import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
+import {
+  GRADE_COMPLETE_SKILL_SHARDS,
+  GRADE_COMPLETE_COMBAT_SHARDS,
+} from '../game/PlayerManager.js';
+import { QUIZ_PASS_THRESHOLD } from '../game/LearningSessionManager.js';
 import { SKILL_TREES, type CombatSkill } from '../game/data/skillTrees.js';
 import { STRATEGIES, type CombatStrategy } from '../game/data/combatStrategies.js';
 
@@ -80,7 +84,6 @@ const EQUIP_SLOT_TO_KEY: Record<EquipSlot, EquipmentSlotKey> = {
 };
 
 const VALID_SUBJECTS: ReadonlySet<Subject> = new Set(['math', 'science', 'history', 'language']);
-const VALID_DIFFICULTIES: ReadonlySet<Difficulty> = new Set(['easy', 'medium', 'hard']);
 
 /** Maximum chat message length (characters). */
 const MAX_CHAT_LENGTH = 200;
@@ -121,7 +124,6 @@ export function registerHandlers(
 ): void {
   const {
     playerManager,
-    questionEngine,
     learningSessionManager,
     inventoryManager,
     chestManager,
@@ -296,50 +298,41 @@ export function registerHandlers(
   });
 
   // ── learning:start ───────────────────────────────────────────────────────
+  //
+  // Starts a 5-question quiz for a single curriculum topic.  Server-authoritative
+  // validation:
+  //  1. topicId must be a known curriculum topic (curriculum.ts catalog).
+  //  2. The topic's grade MUST equal the player's CURRENT grade in that
+  //     subject — players cannot skip ahead or replay completed grades.
   socket.on('learning:start', (payload: LearningStartPayload) => {
-    if (
-      typeof payload?.subject !== 'string' ||
-      !VALID_SUBJECTS.has(payload.subject as Subject) ||
-      typeof payload?.difficulty !== 'string' ||
-      !VALID_DIFFICULTIES.has(payload.difficulty as Difficulty)
-    ) {
-      socket.emit('error', { message: 'Invalid learning start payload. Provide a valid subject and difficulty.' });
+    if (typeof payload?.topicId !== 'string') {
+      socket.emit('error', { message: 'Invalid learning start payload. Provide a topicId.' });
       return;
     }
 
-    // Optional subcategory — must be a known curriculum id belonging to the
-    // requested subject.  Unknown ids are rejected (never trusted blindly).
-    let subcategory: string | undefined;
-    if (payload.subcategory !== undefined) {
-      if (typeof payload.subcategory !== 'string') {
-        socket.emit('error', { message: 'Invalid subcategory.' });
-        return;
-      }
-      const subcat = SUBCATEGORY_MAP[payload.subcategory];
-      if (!subcat || subcat.subject !== payload.subject) {
-        socket.emit('error', { message: 'Unknown subcategory for that subject.' });
-        return;
-      }
-      subcategory = subcat.id;
-    }
-
-    // Content-mode gating: child mode (user-chosen or defaulting from ageGroup)
-    // may only access easy/medium difficulty questions.
-    const contentMode = (socket.data.contentMode as string | null) ??
-      ((socket.data.ageGroup as string) === 'child' ? 'child' : 'adolescent');
-    if (contentMode === 'child' && payload.difficulty === 'hard') {
-      socket.emit('error', { message: 'Hard difficulty requires Adolescent+ content mode.' });
+    const topic = TOPIC_MAP[payload.topicId];
+    if (!topic) {
+      socket.emit('error', { message: 'Unknown topic.' });
       return;
     }
 
     const player = requireJoinedPlayer('You must join before starting a learning session.');
     if (!player) return;
 
+    // Grade gate — the topic must be at the player's current grade for the subject.
+    const currentGrade = player.subjectGrades[topic.subject];
+    if (topic.grade !== currentGrade) {
+      socket.emit('error', {
+        message: `That topic is grade ${topic.grade}, but your current ${topic.subject} grade is ${currentGrade}.`,
+      });
+      return;
+    }
+
     const result = learningSessionManager.startSession(
       socket.id,
-      payload.subject as Subject,
-      payload.difficulty as Difficulty,
-      subcategory,
+      topic.id,
+      topic.subject,
+      topic.grade,
     );
 
     if ('error' in result) {
@@ -351,21 +344,21 @@ export function registerHandlers(
 
     socket.emit('learning:session_started', {
       sessionId: session.sessionId,
+      topicId: topic.id,
       firstQuestion,
     });
 
     console.log(
-      `[learning] ${socket.id} started session ${session.sessionId} ` +
-      `(${payload.subject}/${subcategory ?? 'any'}/${payload.difficulty})`,
+      `[learning] ${socket.id} started quiz ${session.sessionId} (${topic.id} · grade ${topic.grade})`,
     );
   });
 
   // ── curriculum:get ───────────────────────────────────────────────────────
   //
-  // Returns the K-12 subject → subcategory taxonomy so clients can render the
-  // subcategory picker.  Safe to send: contains no questions or answers.
+  // Returns the grade-level topic catalog so clients can render the classroom.
+  // Safe to send: contains no questions or answers.
   socket.on('curriculum:get', () => {
-    socket.emit('curriculum:data', { curriculum: CURRICULUM });
+    socket.emit('curriculum:data', { topics: GRADE_TOPICS });
   });
 
   // ── learning:answer ──────────────────────────────────────────────────────
@@ -379,8 +372,8 @@ export function registerHandlers(
       return;
     }
 
-    // Capture the session BEFORE submitting — we need its subcategory for
-    // the Combat Shard award after completion.
+    // Capture the session BEFORE submitting — we need its topic/subject/grade
+    // for the grade-progression rewards once the quiz completes.
     const session = learningSessionManager.getSession(payload.sessionId);
 
     const result = learningSessionManager.submitAnswer(
@@ -397,46 +390,8 @@ export function registerHandlers(
 
     const { correct, attemptsLeft, explanation, xpEarned, sessionComplete, perfectScore, nextQuestion } = result;
 
-    // ── Server-authoritative shard awards ────────────────────────────────────
-    // 🔷 Skill Shard: 1 per 5 cumulative correct answers (persisted per user).
-    // 🔶 Combat Shard: a subcategory is complete only when EVERY question in
-    //    it has been answered correctly at least 3 times (tracked per user
-    //    across sessions; awarded once per subcategory).
-    let skillShardsAwarded = 0;
-    let combatShardAwarded = false;
-
-    if (correct) {
-      skillShardsAwarded = playerManager.recordCorrectAnswer(socket.id);
-      if (skillShardsAwarded > 0) {
-        inventoryManager.addCurrency(socket.id, 'skill_shard', skillShardsAwarded);
-        console.log(`[learning] ${socket.id} reached a 5-correct milestone — skill shard awarded`);
-      }
-
-      if (session?.subcategory) {
-        const subcatQuestionIds = questionEngine.getQuestionIdsForSubcategory(session.subcategory);
-        const newlyMastered = playerManager.recordQuestionMastery(
-          socket.id,
-          payload.questionId,
-          session.subcategory,
-          subcatQuestionIds,
-        );
-        if (newlyMastered) {
-          combatShardAwarded = true;
-          inventoryManager.addCurrency(socket.id, 'combat_shard', 1);
-          console.log(
-            `[learning] ${socket.id} mastered subcategory "${session.subcategory}" ` +
-            `(every question correct ≥3×) — combat shard awarded`,
-          );
-        }
-      }
-    }
-
-    // Persist XP / level / cumulative-correct progress on every correct
-    // answer and at session end (XP is added inside LearningSessionManager).
-    if (correct || sessionComplete) {
-      playerManager.persistProgress(socket.id);
-    }
-
+    // Mid-quiz answer result (no reward fields — rewards are computed once on
+    // completion and delivered via the separate `learning:complete` event).
     socket.emit('learning:answer_result', {
       correct,
       attemptsLeft,
@@ -445,26 +400,79 @@ export function registerHandlers(
       sessionComplete,
       perfectScore,
       nextQuestion,
+    });
+
+    // Persist XP / level on every correct answer (XP is added inside
+    // LearningSessionManager) so progress is never lost mid-quiz.
+    if (correct) {
+      playerManager.persistProgress(socket.id);
+    }
+
+    if (!sessionComplete) return;
+
+    // ── Quiz complete — server-authoritative grade-progression rewards ───────
+    const completedSession = learningSessionManager.getSession(payload.sessionId) ?? session;
+    const score = completedSession ? completedSession.correctCount : 0;
+    const passed = score >= QUIZ_PASS_THRESHOLD;
+
+    let topicPasses = completedSession
+      ? playerManager.getTopicPasses(socket.id, completedSession.topicId)
+      : 0;
+    let gradeCompleted = false;
+    let skillShardsAwarded = 0;
+    let combatShardAwarded = 0;
+    let newGrade = completedSession
+      ? playerManager.getSubjectGrade(socket.id, completedSession.subject)
+      : 1;
+
+    if (passed && completedSession) {
+      const { topicId, subject } = completedSession;
+      topicPasses = playerManager.recordTopicPass(socket.id, topicId);
+
+      // Did this pass complete BOTH topics of the subject's current grade?
+      if (playerManager.isCurrentGradeComplete(socket.id, subject)) {
+        gradeCompleted = true;
+        skillShardsAwarded = GRADE_COMPLETE_SKILL_SHARDS;
+        combatShardAwarded = GRADE_COMPLETE_COMBAT_SHARDS;
+        inventoryManager.addCurrency(socket.id, 'skill_shard', skillShardsAwarded);
+        inventoryManager.addCurrency(socket.id, 'combat_shard', combatShardAwarded);
+        newGrade = playerManager.advanceSubjectGrade(socket.id, subject);
+        console.log(
+          `[learning] ${socket.id} completed grade in ${subject} → grade ${newGrade} ` +
+          `(+${skillShardsAwarded} skill, +${combatShardAwarded} combat shards)`,
+        );
+      }
+      playerManager.persistProgress(socket.id);
+    }
+
+    // Final XP / level persist (handles the case the last answer was wrong).
+    playerManager.persistProgress(socket.id);
+
+    socket.emit('learning:complete', {
+      topicId: completedSession?.topicId ?? '',
+      score,
+      passed,
+      topicPasses,
+      gradeCompleted,
+      newGrade,
       skillShardsAwarded,
       combatShardAwarded,
     });
 
-    // Push the updated inventory whenever shard currency changed
-    if (skillShardsAwarded > 0 || combatShardAwarded) {
+    // Refresh inventory HUD counters when shards changed.
+    if (skillShardsAwarded > 0 || combatShardAwarded > 0) {
       pushInventoryUpdate();
     }
 
-    // Let the HUD refresh XP / level after the session wraps up
-    if (sessionComplete) {
-      const player = playerManager.getPlayer(socket.id);
-      if (player) {
-        socket.emit('player:xp_updated', {
-          newXp: player.xp,
-          newLevel: player.level,
-          leveledUp: false,
-          xpAwarded: 0,
-        });
-      }
+    // Let the HUD refresh XP / level after the quiz wraps up.
+    const player = playerManager.getPlayer(socket.id);
+    if (player) {
+      socket.emit('player:xp_updated', {
+        newXp: player.xp,
+        newLevel: player.level,
+        leveledUp: false,
+        xpAwarded: 0,
+      });
     }
   });
 
@@ -634,6 +642,8 @@ export function registerHandlers(
     skillShards: inventoryManager.getCurrencyCount(socket.id, 'skill_shard'),
     combatShards: inventoryManager.getCurrencyCount(socket.id, 'combat_shard'),
     strategyLoadout: [...player.strategyLoadout],
+    subjectGrades: { ...player.subjectGrades },
+    topicPasses: { ...player.topicPasses },
   });
 
   // ── shop:get_unlocks ─────────────────────────────────────────────────────

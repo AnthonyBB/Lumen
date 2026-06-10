@@ -7,8 +7,9 @@
  *  - Duplicate username detection prevents impersonation within a session.
  */
 
-import type { Player, PublicPlayer } from '../types/index.js';
+import type { Player, PublicPlayer, Subject } from '../types/index.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
+import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
 
 /** Starting stats for a brand-new player joining the server. */
 const INITIAL_STATS = {
@@ -19,6 +20,34 @@ const INITIAL_STATS = {
   zone: 'town',
   position: { x: 400, y: 300 },
 };
+
+const SUBJECTS: Subject[] = ['math', 'science', 'history', 'language'];
+
+/** Default per-subject grade map: every subject starts at grade 1. */
+function defaultSubjectGrades(): Record<Subject, number> {
+  return { math: 1, science: 1, history: 1, language: 1 };
+}
+
+/** Sanitise a loaded subjectGrades map, clamping to 1..13 and filling gaps. */
+function normaliseSubjectGrades(raw: Partial<Record<Subject, number>> | undefined): Record<Subject, number> {
+  const out = defaultSubjectGrades();
+  if (raw) {
+    for (const s of SUBJECTS) {
+      const g = raw[s];
+      if (typeof g === 'number' && Number.isFinite(g)) {
+        out[s] = Math.min(MASTERED_GRADE, Math.max(1, Math.floor(g)));
+      }
+    }
+  }
+  return out;
+}
+
+/** Pass count at which a topic counts as COMPLETE. */
+export const TOPIC_PASSES_TO_COMPLETE = 3;
+
+/** Shard awards granted once per grade completion. */
+export const GRADE_COMPLETE_SKILL_SHARDS = 10;
+export const GRADE_COMPLETE_COMBAT_SHARDS = 5;
 
 export class PlayerManager {
   /** socketId → Player */
@@ -64,9 +93,8 @@ export class PlayerManager {
       ...INITIAL_STATS,
       position: { ...INITIAL_STATS.position },
       lastMessageAt: 0,
-      correctAnswers: 0,
-      questionMastery: {},
-      masteredSubcategories: [],
+      subjectGrades: defaultSubjectGrades(),
+      topicPasses: {},
       unlockedSkills: [],
       unlockedStrategies: [],
       strategyLoadout: [],
@@ -146,9 +174,8 @@ export class PlayerManager {
   async loadProgress(userId: string): Promise<{
     xp: number;
     level: number;
-    correctAnswers: number;
-    questionMastery: Record<string, number>;
-    masteredSubcategories: string[];
+    subjectGrades: Record<Subject, number>;
+    topicPasses: Record<string, number>;
     unlockedSkills: string[];
     unlockedStrategies: string[];
     strategyLoadout: string[];
@@ -159,9 +186,8 @@ export class PlayerManager {
         return {
           xp: doc.xp,
           level: doc.level,
-          correctAnswers: doc.correctAnswers ?? 0,
-          questionMastery: doc.questionMastery ?? {},
-          masteredSubcategories: doc.masteredSubcategories ?? [],
+          subjectGrades: normaliseSubjectGrades(doc.subjectGrades),
+          topicPasses: doc.topicPasses ?? {},
           unlockedSkills: doc.unlockedSkills ?? [],
           unlockedStrategies: doc.unlockedStrategies ?? [],
           strategyLoadout: doc.strategyLoadout ?? [],
@@ -171,8 +197,8 @@ export class PlayerManager {
       console.error('[PlayerManager] loadProgress error:', err);
     }
     return {
-      xp: 0, level: 1, correctAnswers: 0,
-      questionMastery: {}, masteredSubcategories: [],
+      xp: 0, level: 1,
+      subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
     };
   }
@@ -186,9 +212,8 @@ export class PlayerManager {
     progress: {
       xp: number;
       level: number;
-      correctAnswers?: number;
-      questionMastery?: Record<string, number>;
-      masteredSubcategories?: string[];
+      subjectGrades?: Record<Subject, number>;
+      topicPasses?: Record<string, number>;
       unlockedSkills?: string[];
       unlockedStrategies?: string[];
       strategyLoadout?: string[];
@@ -200,9 +225,8 @@ export class PlayerManager {
     player.level = Math.min(50, Math.max(1, progress.level));
     player.maxHp = 100 + (player.level - 1) * 20;
     player.hp = player.maxHp;
-    player.correctAnswers = Math.max(0, progress.correctAnswers ?? 0);
-    player.questionMastery = { ...(progress.questionMastery ?? {}) };
-    player.masteredSubcategories = [...(progress.masteredSubcategories ?? [])];
+    player.subjectGrades = normaliseSubjectGrades(progress.subjectGrades);
+    player.topicPasses = { ...(progress.topicPasses ?? {}) };
     player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
     player.unlockedStrategies = [...(progress.unlockedStrategies ?? [])];
     // Defensive: only keep loadout entries the player actually owns.
@@ -224,9 +248,8 @@ export class PlayerManager {
       {
         xp: player.xp,
         level: player.level,
-        correctAnswers: player.correctAnswers,
-        questionMastery: player.questionMastery,
-        masteredSubcategories: player.masteredSubcategories,
+        subjectGrades: player.subjectGrades,
+        topicPasses: player.topicPasses,
         unlockedSkills: player.unlockedSkills,
         unlockedStrategies: player.unlockedStrategies,
         strategyLoadout: player.strategyLoadout,
@@ -237,50 +260,61 @@ export class PlayerManager {
     });
   }
 
+  /** Current grade for a subject (1..12, or 13 = mastered). */
+  getSubjectGrade(socketId: string, subject: Subject): number {
+    return this.players.get(socketId)?.subjectGrades[subject] ?? 1;
+  }
+
+  /** Pass count for a topic (0..3). */
+  getTopicPasses(socketId: string, topicId: string): number {
+    return this.players.get(socketId)?.topicPasses[topicId] ?? 0;
+  }
+
   /**
-   * Record one correct learning answer (server-validated) and return how many
-   * Skill Shards this crossing earns: 1 for every multiple of 5 cumulative
-   * correct answers reached.
+   * Record a quiz PASS for a topic, capping the pass count at
+   * TOPIC_PASSES_TO_COMPLETE. Returns the new pass count (unchanged if it was
+   * already at the cap). Caller is responsible for grade-completion checks.
    */
-  recordCorrectAnswer(socketId: string): number {
+  recordTopicPass(socketId: string, topicId: string): number {
     const player = this.players.get(socketId);
     if (!player) return 0;
-    player.correctAnswers += 1;
-    return player.correctAnswers % 5 === 0 ? 1 : 0;
+    const current = player.topicPasses[topicId] ?? 0;
+    const next = Math.min(TOPIC_PASSES_TO_COMPLETE, current + 1);
+    player.topicPasses[topicId] = next;
+    return next;
+  }
+
+  /** True when a topic has reached the completion pass count. */
+  isTopicComplete(socketId: string, topicId: string): boolean {
+    return this.getTopicPasses(socketId, topicId) >= TOPIC_PASSES_TO_COMPLETE;
   }
 
   /**
-   * Record one correct answer toward per-question mastery and report whether
-   * this answer just completed the subcategory. A subcategory is complete
-   * when EVERY question in it has been answered correctly at least
-   * MASTERY_THRESHOLD times; the Combat Shard is awarded once per
-   * subcategory (tracked in masteredSubcategories).
+   * Check whether BOTH topics of the player's CURRENT grade in a subject are
+   * complete (3 passes each). Returns the list of those topic ids and whether
+   * the grade is complete.
    */
-  recordQuestionMastery(
-    socketId: string,
-    questionId: string,
-    subcategory: string,
-    subcategoryQuestionIds: string[],
-  ): boolean {
+  isCurrentGradeComplete(socketId: string, subject: Subject): boolean {
     const player = this.players.get(socketId);
     if (!player) return false;
-
-    player.questionMastery[questionId] = (player.questionMastery[questionId] ?? 0) + 1;
-
-    if (player.masteredSubcategories.includes(subcategory)) return false;
-    if (subcategoryQuestionIds.length === 0) return false;
-
-    const mastered = subcategoryQuestionIds.every(
-      (id) => (player.questionMastery[id] ?? 0) >= PlayerManager.MASTERY_THRESHOLD,
-    );
-    if (!mastered) return false;
-
-    player.masteredSubcategories.push(subcategory);
-    return true;
+    const grade = player.subjectGrades[subject];
+    const topics = TOPICS_BY_SUBJECT_GRADE[subject]?.[grade];
+    if (!topics || topics.length === 0) return false;
+    return topics.every((t) => (player.topicPasses[t.id] ?? 0) >= TOPIC_PASSES_TO_COMPLETE);
   }
 
-  /** Correct answers required per question before a subcategory counts as complete. */
-  static readonly MASTERY_THRESHOLD = 3;
+  /**
+   * Advance a subject to the next grade (grade 12 → 13 = mastered). Returns the
+   * new grade. No-op if already at the mastered sentinel.
+   */
+  advanceSubjectGrade(socketId: string, subject: Subject): number {
+    const player = this.players.get(socketId);
+    if (!player) return MASTERED_GRADE;
+    const current = player.subjectGrades[subject];
+    if (current >= MASTERED_GRADE) return current;
+    player.subjectGrades[subject] = Math.min(MASTERED_GRADE, current + 1);
+    return player.subjectGrades[subject];
+  }
 
   /** Add a purchased skill id to the player's unlocks (idempotent). */
   unlockSkill(socketId: string, skillId: string): void {

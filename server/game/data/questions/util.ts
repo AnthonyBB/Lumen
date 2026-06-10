@@ -3,7 +3,11 @@
  *
  * Questions are authored in a compact tuple style via `makeQ(subject)` so the
  * bank files stay readable.  The returned objects are full server-side
- * questions minus the runtime UUID (assigned by QuestionEngine at startup).
+ * questions minus the runtime id (assigned by QuestionEngine at startup).
+ *
+ * Each question is tagged with a curriculum TOPIC id (see data/curriculum.ts),
+ * e.g. 'math_g3_t1'.  The grade is passed explicitly and should match the
+ * grade embedded in the topic id.
  *
  * SECURITY: these files contain `correctIndex` and must NEVER be imported by
  * client code.  The client only ever receives `ClientQuestion` payloads.
@@ -18,8 +22,8 @@ type FourAnswers = [string, string, string, string];
 export const makeQ =
   (subject: Subject) =>
   (
-    subcategory: string,
-    gradeLevel: number,
+    topic: string,
+    grade: number,
     difficulty: Difficulty,
     question: string,
     answers: FourAnswers,
@@ -27,8 +31,8 @@ export const makeQ =
     explanation: string,
   ): RawQuestion => ({
     subject,
-    subcategory,
-    gradeLevel,
+    topic,
+    grade,
     difficulty,
     question,
     answers,

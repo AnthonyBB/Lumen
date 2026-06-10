@@ -1,6 +1,9 @@
 /**
- * Language Arts question bank — tagged with subcategories from curriculum.ts.
+ * Language Arts question bank — tagged with grade-level TOPIC ids from curriculum.ts.
  * Imported and concatenated by QuestionEngine.  Server-side only.
+ *
+ * SEED: 3 questions per topic (24 topics → 72 questions).
+ * TODO: expand to 20+ per topic. Append below the matching topic header.
  */
 
 import { makeQ, type RawQuestion } from './util.js';
@@ -8,59 +11,123 @@ import { makeQ, type RawQuestion } from './util.js';
 const q = makeQ('language');
 
 export const LANGUAGE_QUESTIONS: RawQuestion[] = [
-  // ── Phonics & Spelling (K-3) ──────────────────────────────────────────────
-  q('lang_phonics', 0, 'easy', 'Which word starts with the same sound as "cat"?', ['Dog', 'Cup', 'Sun', 'Map'], 1, '"Cat" and "cup" both start with the hard C sound: /k/.'),
-  q('lang_phonics', 1, 'easy', 'Which word rhymes with "tree"?', ['Trap', 'Bee', 'Toe', 'Tan'], 1, '"Tree" and "bee" both end with the same /ee/ sound — they rhyme.'),
-  q('lang_phonics', 1, 'easy', 'How many syllables are in the word "banana"?', ['1', '2', '3', '4'], 2, 'Ba-na-na — clap it out: three syllables.'),
-  q('lang_phonics', 2, 'medium', 'Which word is spelled correctly?', ['Frend', 'Freind', 'Friend', 'Frennd'], 2, '"Friend" is the correct spelling — remember "i before e" here: f-r-i-e-n-d.'),
-  q('lang_phonics', 3, 'medium', 'What is the correct spelling of the word meaning "to postpone"?', ['Defur', 'Deffur', 'Defer', 'Defurr'], 2, '"Defer" (d-e-f-e-r) means to put something off to a later time.'),
-  q('lang_phonics', 3, 'medium', 'Which word has a silent letter?', ['Jump', 'Knee', 'Fast', 'Drip'], 1, 'In "knee" the K is silent — you only hear the N sound.'),
+  // ── language_g1_t1 · Grade 1 · Phonics & Sounds ─────────────────────────────
+  q('language_g1_t1', 1, 'easy', 'Which word starts with the same sound as "cat"?', ['Dog', 'Cup', 'Sun', 'Map'], 1, '"Cat" and "cup" both start with /k/.'),
+  q('language_g1_t1', 1, 'easy', 'Which word rhymes with "tree"?', ['Trap', 'Bee', 'Toe', 'Tan'], 1, '"Tree" and "bee" share the /ee/ sound.'),
+  q('language_g1_t1', 1, 'medium', 'How many syllables are in "banana"?', ['1', '2', '3', '4'], 2, 'Ba-na-na — three syllables.'),
 
-  // ── Vocabulary (K-12) ─────────────────────────────────────────────────────
-  q('lang_vocabulary', 2, 'easy', 'What is a synonym for "happy"?', ['Sad', 'Joyful', 'Angry', 'Tired'], 1, '"Joyful" means feeling great happiness — it is a synonym for "happy".'),
-  q('lang_vocabulary', 4, 'medium', 'What is an antonym for "ancient"?', ['Old', 'Modern', 'Historic', 'Aged'], 1, '"Modern" means current or new — the opposite of "ancient", which means very old.'),
-  q('lang_vocabulary', 1, 'easy', 'Which word means the opposite of "big"?', ['Huge', 'Giant', 'Small', 'Tall'], 2, '"Small" is the antonym (opposite) of "big".'),
-  q('lang_vocabulary', 6, 'medium', 'What does "reluctant" mean?', ['Very excited', 'Unwilling or hesitant', 'Extremely fast', 'Brightly colored'], 1, 'A reluctant person does not want to do something — they hesitate.'),
-  q('lang_vocabulary', 9, 'hard', 'What does the word "meticulous" mean?', ['Careless', 'Very careful and precise', 'Loud and bold', 'Quick and sloppy'], 1, 'A meticulous person pays great attention to every small detail.'),
-  q('lang_vocabulary', 11, 'hard', 'Which word means "to make something less severe"?', ['Aggravate', 'Mitigate', 'Escalate', 'Duplicate'], 1, '"Mitigate" means to soften or lessen — like mitigating damage.'),
+  // ── language_g1_t2 · Grade 1 · Sight Words & Reading ────────────────────────
+  q('language_g1_t2', 1, 'easy', 'Which is a common sight word?', ['the', 'xylophone', 'elephant', 'computer'], 0, '"the" is a very common sight word.'),
+  q('language_g1_t2', 1, 'easy', 'Finish the sentence: "I ___ a dog."', ['see', 'tree', 'blue', 'jump'], 0, '"I see a dog" makes sense.'),
+  q('language_g1_t2', 1, 'medium', 'What word completes: "The sun is ___"?', ['hot', 'run', 'box', 'and'], 0, '"The sun is hot" is a complete idea.'),
 
-  // ── Grammar & Punctuation (2-10) ──────────────────────────────────────────
-  q('lang_grammar', 2, 'easy', 'Which sentence uses correct punctuation?', ['She went to the store', 'She went to the store.', 'she went to the store.', 'She went, to the store'], 1, 'A sentence starts with a capital letter and ends with a period.'),
-  q('lang_grammar', 3, 'easy', 'What is the plural of "mouse" (the animal)?', ['Mouses', 'Meese', 'Mice', 'Mouse'], 2, '"Mice" is the irregular plural of "mouse". English has many irregular plurals.'),
-  q('lang_grammar', 3, 'medium', 'Which part of speech describes an action or state of being?', ['Noun', 'Adjective', 'Verb', 'Adverb'], 2, 'A verb expresses an action (run, eat) or a state of being (is, was).'),
-  q('lang_grammar', 5, 'medium', 'Which sentence uses the apostrophe correctly?', ['The dogs bone is lost.', "The dog's bone is lost.", "The dogs' bone is lost, said one dog.", 'The dog,s bone is lost.'], 1, "\"The dog's bone\" shows one dog owns the bone — apostrophe before the s."),
-  q('lang_grammar', 7, 'hard', 'Which sentence is in the passive voice?', ['The cat chased the mouse.', 'The mouse was chased by the cat.', 'The cat is chasing the mouse.', 'The cat will chase the mouse.'], 1, 'In passive voice the subject receives the action: "was chased by".'),
-  q('lang_grammar', 9, 'hard', 'Which sentence has correct subject-verb agreement?', ['The team are winning.', 'Each of the players have a jersey.', 'Neither of the answers is correct.', 'The dogs barks loudly.'], 2, '"Neither" is singular, so it takes the singular verb "is".'),
+  // ── language_g2_t1 · Grade 2 · Spelling Patterns ────────────────────────────
+  q('language_g2_t1', 2, 'easy', 'Which word is spelled correctly?', ['Frend', 'Freind', 'Friend', 'Frennd'], 2, 'The correct spelling is "friend".'),
+  q('language_g2_t1', 2, 'medium', 'What is the plural of "box"?', ['Boxs', 'Boxes', 'Boxen', 'Box'], 1, 'Words ending in -x add -es: boxes.'),
+  q('language_g2_t1', 2, 'medium', 'Which word has a long "a" sound?', ['Cat', 'Cake', 'Cap', 'Can'], 1, 'The silent e in "cake" makes the a long.'),
 
-  // ── Reading Comprehension (1-12) ──────────────────────────────────────────
-  q('lang_reading', 1, 'easy', '"Sam fed his fish before school." What did Sam do first?', ['Went to school', 'Fed his fish', 'Ate lunch', 'Took a nap'], 1, 'The sentence says he fed the fish BEFORE school, so that came first.'),
-  q('lang_reading', 3, 'easy', 'What do we call the main message or lesson of a story?', ['The setting', 'The theme', 'The title', 'The chapter'], 1, 'The theme is the big idea or lesson a story teaches.'),
-  q('lang_reading', 4, 'medium', 'What is the "setting" of a story?', ['The main character', 'Where and when it happens', 'The ending', 'The author'], 1, 'Setting is the time and place of a story — like a castle long ago.'),
-  q('lang_reading', 6, 'medium', '"The wind howled and shutters slammed as Mia gripped her flashlight." What mood does this create?', ['Cheerful', 'Tense and spooky', 'Bored', 'Silly'], 1, 'Words like "howled", "slammed", and "gripped" build suspense and a spooky mood.'),
-  q('lang_reading', 8, 'hard', 'What is an inference?', ['Copying the text word for word', 'A conclusion drawn from clues in the text', 'The story’s title', 'A spelling rule'], 1, 'Readers infer by combining text clues with what they already know.'),
-  q('lang_reading', 11, 'hard', 'An author writes an article to convince readers to recycle. What is the author’s purpose?', ['To entertain', 'To persuade', 'To confuse', 'To rhyme'], 1, 'Convincing readers to act or believe something is persuasion.'),
+  // ── language_g2_t2 · Grade 2 · Sentences & Reading ──────────────────────────
+  q('language_g2_t2', 2, 'easy', 'A sentence should begin with a:', ['Capital letter', 'Number', 'Period', 'Space'], 0, 'Sentences start with a capital letter.'),
+  q('language_g2_t2', 2, 'medium', 'What punctuation ends a question?', ['Period', 'Question mark', 'Comma', 'Dash'], 1, 'Questions end with a question mark (?).'),
+  q('language_g2_t2', 2, 'medium', 'Which is a complete sentence?', ['The happy dog.', 'The dog ran fast.', 'Running quickly.', 'Big red.'], 1, '"The dog ran fast." has a subject and verb.'),
 
-  // ── Writing & Composition (3-12) ──────────────────────────────────────────
-  q('lang_writing', 3, 'easy', 'Which sentence is a complete sentence?', ['Running fast.', 'The dog barked.', 'Under the table.', 'Because it rained.'], 1, 'A complete sentence needs a subject (the dog) and a verb (barked).'),
-  q('lang_writing', 4, 'medium', 'What does a topic sentence do?', ['Ends the essay', 'Tells the main idea of a paragraph', 'Lists every detail', 'Asks a riddle'], 1, 'A topic sentence introduces what the paragraph will be about.'),
-  q('lang_writing', 5, 'medium', 'Which is the best order for a story?', ['End, middle, beginning', 'Beginning, middle, end', 'Middle only', 'Random order'], 1, 'Stories flow best with a clear beginning, middle, and end.'),
-  q('lang_writing', 7, 'medium', 'Which transition word shows contrast?', ['Also', 'However', 'First', 'Next'], 1, '"However" signals a contrasting or opposite idea is coming.'),
-  q('lang_writing', 9, 'hard', 'In a persuasive essay, what is a "counterargument"?', ['Your strongest point', 'The opposing side’s view that you address', 'The conclusion', 'A quotation'], 1, 'Strong writers present the other side’s view, then explain why their position still stands.'),
-  q('lang_writing', 11, 'hard', 'What is a thesis statement?', ['A list of sources', 'The main claim an essay will support', 'The final sentence', 'A type of poem'], 1, 'The thesis states the essay’s central argument, usually at the end of the introduction.'),
+  // ── language_g3_t1 · Grade 3 · Parts of Speech ──────────────────────────────
+  q('language_g3_t1', 3, 'easy', 'Which word is a noun?', ['Run', 'Happy', 'Dog', 'Quickly'], 2, 'A noun names a person, place, or thing — "dog".'),
+  q('language_g3_t1', 3, 'medium', 'Which word is a verb?', ['Jump', 'Blue', 'Table', 'Soft'], 0, 'A verb shows action — "jump".'),
+  q('language_g3_t1', 3, 'medium', 'Which word is an adjective?', ['Sing', 'Bright', 'River', 'They'], 1, 'An adjective describes — "bright".'),
 
-  // ── Literature & Poetry (5-12) ────────────────────────────────────────────
-  q('lang_literature', 5, 'easy', 'What literary device compares two things using "like" or "as"?', ['Metaphor', 'Simile', 'Alliteration', 'Hyperbole'], 1, 'A simile uses "like" or "as" to compare, e.g. "fast as lightning".'),
-  q('lang_literature', 6, 'medium', '"The wind whispered through the trees" is an example of what?', ['Personification', 'Rhyme', 'Alliteration', 'Onomatopoeia'], 0, 'Giving human actions (whispering) to non-human things is personification.'),
-  q('lang_literature', 7, 'medium', 'What is a haiku?', ['A long adventure novel', 'A 3-line poem with 5-7-5 syllables', 'A type of play', 'A newspaper article'], 1, 'A haiku is a short Japanese poem with 5, 7, and 5 syllables per line.'),
-  q('lang_literature', 8, 'medium', 'What is the "climax" of a story?', ['The first sentence', 'The most exciting turning point', 'The list of characters', 'The dedication page'], 1, 'The climax is the peak of tension where the conflict comes to a head.'),
-  q('lang_literature', 10, 'hard', '"I’ve told you a million times!" is an example of which device?', ['Simile', 'Hyperbole', 'Irony', 'Metaphor'], 1, 'Hyperbole is deliberate exaggeration for effect.'),
-  q('lang_literature', 12, 'hard', 'A story’s narrator uses "I" and "me". What point of view is this?', ['Second person', 'Third person limited', 'First person', 'Omniscient'], 2, 'First-person narrators tell the story from their own perspective using "I".'),
+  // ── language_g3_t2 · Grade 3 · Reading Comprehension ────────────────────────
+  q('language_g3_t2', 3, 'easy', 'The main idea of a story is:', ['What it is mostly about', 'The last word', 'The title font', 'The page number'], 0, 'The main idea is what a text is mostly about.'),
+  q('language_g3_t2', 3, 'medium', 'A detail that supports the main idea is called a:', ['Supporting detail', 'Cover', 'Margin', 'Glossary'], 0, 'Supporting details back up the main idea.'),
+  q('language_g3_t2', 3, 'medium', 'To find out what happens next, you can make a:', ['Prediction', 'Sandwich', 'Drawing only', 'Rhyme'], 0, 'A prediction is a smart guess about what comes next.'),
 
-  // ── Roots, Prefixes & Suffixes (4-9) ──────────────────────────────────────
-  q('lang_roots', 4, 'easy', 'What does the prefix "re-" mean in "redo"?', ['Not', 'Again', 'Before', 'Under'], 1, '"Re-" means again — to redo is to do something again.'),
-  q('lang_roots', 4, 'easy', 'What does the prefix "un-" mean in "unhappy"?', ['Very', 'Not', 'After', 'More'], 1, '"Un-" means not — unhappy means not happy.'),
-  q('lang_roots', 5, 'medium', 'What does the suffix "-less" mean in "fearless"?', ['Full of', 'Without', 'Smaller', 'Again'], 1, '"-less" means without — fearless means without fear.'),
-  q('lang_roots', 6, 'medium', 'The root "aqua" (as in aquarium) means what?', ['Air', 'Fire', 'Water', 'Earth'], 2, '"Aqua" is Latin for water — an aquarium holds water and fish.'),
-  q('lang_roots', 8, 'hard', 'The Greek root "tele" in "telescope" and "telephone" means what?', ['Sound', 'Far', 'Light', 'Small'], 1, '"Tele" means far or distant — a telescope lets you see far away.'),
-  q('lang_roots', 9, 'hard', 'Knowing "bene" means good, what does "benevolent" most likely mean?', ['Harmful', 'Kind and well-meaning', 'Invisible', 'Wealthy'], 1, '"Bene" (good) + "volent" (wishing) — benevolent means wishing others well.'),
+  // ── language_g4_t1 · Grade 4 · Grammar & Punctuation ────────────────────────
+  q('language_g4_t1', 4, 'easy', 'Which sentence is punctuated correctly?', ['i like cats', 'I like cats.', 'I like cats', 'i like cats.'], 1, 'Capital start and a period at the end.'),
+  q('language_g4_t1', 4, 'medium', 'Choose the correct word: "They\'re going to ___ house."', ['there', 'their', "they're", 'thair'], 1, '"Their" shows possession.'),
+  q('language_g4_t1', 4, 'medium', 'A comma is used to:', ['Separate items in a list', 'End a sentence', 'Start a paragraph', 'Make a question'], 0, 'Commas separate items in a list.'),
+
+  // ── language_g4_t2 · Grade 4 · Vocabulary & Context ─────────────────────────
+  q('language_g4_t2', 4, 'easy', 'A synonym for "happy" is:', ['Sad', 'Glad', 'Angry', 'Tired'], 1, '"Glad" means about the same as "happy".'),
+  q('language_g4_t2', 4, 'medium', 'An antonym for "begin" is:', ['Start', 'End', 'Open', 'Run'], 1, '"End" is the opposite of "begin".'),
+  q('language_g4_t2', 4, 'medium', 'Using nearby words to guess a meaning is using:', ['Context clues', 'A ruler', 'A timer', 'A rhyme'], 0, 'Context clues help define unknown words.'),
+
+  // ── language_g5_t1 · Grade 5 · Writing Paragraphs ───────────────────────────
+  q('language_g5_t1', 5, 'easy', 'A paragraph usually begins with a:', ['Topic sentence', 'Period', 'Random word', 'Page number'], 0, 'A topic sentence introduces the paragraph\'s idea.'),
+  q('language_g5_t1', 5, 'medium', 'Sentences in a paragraph should all relate to:', ['One main idea', 'Many random ideas', 'The title only', 'Nothing'], 0, 'A good paragraph stays focused on one main idea.'),
+  q('language_g5_t1', 5, 'medium', 'A concluding sentence does what?', ['Wraps up the idea', 'Starts a new topic', 'Adds a title', 'Lists the author'], 0, 'It wraps up the paragraph\'s main idea.'),
+
+  // ── language_g5_t2 · Grade 5 · Roots, Prefixes & Suffixes ───────────────────
+  q('language_g5_t2', 5, 'easy', 'The prefix "un-" usually means:', ['Not', 'Again', 'Before', 'Many'], 0, '"Un-" means not, as in "unhappy".'),
+  q('language_g5_t2', 5, 'medium', 'The root "port" means:', ['Carry', 'Water', 'Light', 'Sound'], 0, '"Port" means carry (transport, portable).'),
+  q('language_g5_t2', 5, 'medium', 'The suffix "-less" means:', ['Without', 'Full of', 'Before', 'Two'], 0, '"-less" means without, as in "fearless".'),
+
+  // ── language_g6_t1 · Grade 6 · Figurative Language ──────────────────────────
+  q('language_g6_t1', 6, 'easy', 'A simile compares two things using:', ['"like" or "as"', 'Numbers', 'Periods', 'Nouns only'], 0, 'Similes use "like" or "as".'),
+  q('language_g6_t1', 6, 'medium', '"The wind whispered" is an example of:', ['Personification', 'A simile', 'A pun', 'Alliteration'], 0, 'Giving human traits to the wind is personification.'),
+  q('language_g6_t1', 6, 'medium', '"Her smile was sunshine" is a:', ['Metaphor', 'Simile', 'Question', 'List'], 0, 'A metaphor states one thing IS another.'),
+
+  // ── language_g6_t2 · Grade 6 · Essay Writing ────────────────────────────────
+  q('language_g6_t2', 6, 'easy', 'An essay introduction usually ends with a:', ['Thesis statement', 'Bibliography', 'Random fact', 'Title only'], 0, 'The thesis states the essay\'s main point.'),
+  q('language_g6_t2', 6, 'medium', 'Body paragraphs should each:', ['Support the thesis', 'Change the topic', 'Repeat the title', 'Add nothing'], 0, 'Each body paragraph supports the thesis.'),
+  q('language_g6_t2', 6, 'medium', 'A conclusion should:', ['Restate and wrap up', 'Introduce new topics', 'List sources only', 'Be the longest part'], 0, 'A conclusion restates and wraps up the essay.'),
+
+  // ── language_g7_t1 · Grade 7 · Literary Elements ────────────────────────────
+  q('language_g7_t1', 7, 'easy', 'The sequence of events in a story is the:', ['Plot', 'Setting', 'Theme', 'Title'], 0, 'The plot is the sequence of events.'),
+  q('language_g7_t1', 7, 'medium', 'The time and place of a story is the:', ['Setting', 'Plot', 'Climax', 'Narrator'], 0, 'Setting is where and when a story happens.'),
+  q('language_g7_t1', 7, 'medium', 'The struggle that drives a story is the:', ['Conflict', 'Cover', 'Index', 'Footnote'], 0, 'Conflict is the central struggle.'),
+
+  // ── language_g7_t2 · Grade 7 · Grammar Mastery ──────────────────────────────
+  q('language_g7_t2', 7, 'easy', 'Which is an independent clause?', ['Because it rained', 'She sang', 'When we left', 'After the show'], 1, '"She sang" stands alone as a sentence.'),
+  q('language_g7_t2', 7, 'medium', 'A dependent clause cannot:', ['Stand alone', 'Have a subject', 'Have a verb', 'Be in a sentence'], 0, 'A dependent clause cannot stand alone.'),
+  q('language_g7_t2', 7, 'medium', 'Choose the correct verb: "Each of the students ___ ready."', ['are', 'is', 'were', 'be'], 1, '"Each" is singular, so use "is".'),
+
+  // ── language_g8_t1 · Grade 8 · Theme & Author\'s Craft ───────────────────────
+  q('language_g8_t1', 8, 'easy', 'The central message of a story is its:', ['Theme', 'Setting', 'Title', 'Length'], 0, 'Theme is the underlying message or lesson.'),
+  q('language_g8_t1', 8, 'medium', 'Foreshadowing is used to:', ['Hint at future events', 'End the story', 'List characters', 'Number pages'], 0, 'Foreshadowing hints at what will happen.'),
+  q('language_g8_t1', 8, 'medium', 'Tone refers to the author\'s:', ['Attitude', 'Page count', 'Font', 'Title'], 0, 'Tone is the author\'s attitude toward the subject.'),
+
+  // ── language_g8_t2 · Grade 8 · Persuasive Writing ───────────────────────────
+  q('language_g8_t2', 8, 'easy', 'A persuasive essay tries to:', ['Convince the reader', 'Tell a fairy tale', 'List facts only', 'Rhyme'], 0, 'Persuasive writing convinces the reader of a position.'),
+  q('language_g8_t2', 8, 'medium', 'Strong arguments are backed by:', ['Evidence', 'Guesses', 'Insults', 'Blank space'], 0, 'Good arguments use evidence and reasons.'),
+  q('language_g8_t2', 8, 'medium', 'Addressing the other side\'s view is called a:', ['Counterargument', 'Title', 'Heading', 'Citation'], 0, 'A counterargument addresses opposing views.'),
+
+  // ── language_g9_t1 · Grade 9 · Literary Analysis ────────────────────────────
+  q('language_g9_t1', 9, 'easy', 'A claim in an analysis must be supported by:', ['Textual evidence', 'Opinions only', 'Drawings', 'Nothing'], 0, 'Analysis claims need textual evidence.'),
+  q('language_g9_t1', 9, 'medium', 'A symbol in literature is something that:', ['Represents a bigger idea', 'Ends a sentence', 'Counts pages', 'Is always a person'], 0, 'A symbol stands for a larger idea.'),
+  q('language_g9_t1', 9, 'medium', 'Analyzing characters by their actions reveals their:', ['Traits and motives', 'Page count', 'Font size', 'Spelling'], 0, 'Actions reveal a character\'s traits and motives.'),
+
+  // ── language_g9_t2 · Grade 9 · Argumentative Essays ─────────────────────────
+  q('language_g9_t2', 9, 'easy', 'A strong thesis takes a clear:', ['Position', 'Pause', 'Picture', 'Rhyme'], 0, 'A thesis states a clear, arguable position.'),
+  q('language_g9_t2', 9, 'medium', 'A logical fallacy is an error in:', ['Reasoning', 'Spelling', 'Margins', 'Fonts'], 0, 'A fallacy is a flaw in reasoning.'),
+  q('language_g9_t2', 9, 'medium', 'Citing a credible source strengthens an essay\'s:', ['Credibility', 'Page count', 'Color', 'Rhythm'], 0, 'Credible sources boost an argument\'s credibility.'),
+
+  // ── language_g10_t1 · Grade 10 · World & Classic Literature ─────────────────
+  q('language_g10_t1', 10, 'easy', 'Shakespeare is famous for writing:', ['Plays and sonnets', 'Cookbooks', 'Maps', 'Laws'], 0, 'Shakespeare wrote plays and sonnets.'),
+  q('language_g10_t1', 10, 'medium', 'An epic is a long narrative poem about:', ['Heroic deeds', 'Grocery lists', 'Weather only', 'Math'], 0, 'Epics tell of heroic deeds (e.g., The Odyssey).'),
+  q('language_g10_t1', 10, 'medium', 'A tragedy typically ends with the protagonist\'s:', ['Downfall', 'Wedding', 'Promotion', 'Birthday'], 0, 'Classical tragedies end in the hero\'s downfall.'),
+
+  // ── language_g10_t2 · Grade 10 · Rhetoric & Style ───────────────────────────
+  q('language_g10_t2', 10, 'easy', 'An appeal to emotion is called:', ['Pathos', 'Logos', 'Ethos', 'Chaos'], 0, 'Pathos appeals to the audience\'s emotions.'),
+  q('language_g10_t2', 10, 'medium', 'An appeal to logic and reason is called:', ['Logos', 'Pathos', 'Ethos', 'Tempo'], 0, 'Logos appeals to logic and evidence.'),
+  q('language_g10_t2', 10, 'medium', 'Repeating a word at the start of clauses is:', ['Anaphora', 'A footnote', 'A simile', 'A pun'], 0, 'Anaphora repeats words for emphasis.'),
+
+  // ── language_g11_t1 · Grade 11 · American Literature ────────────────────────
+  q('language_g11_t1', 11, 'easy', 'Mark Twain is known for writing about life along the:', ['Mississippi River', 'Nile River', 'Thames', 'Amazon'], 0, 'Twain wrote about the Mississippi River.'),
+  q('language_g11_t1', 11, 'medium', 'Transcendentalism valued nature and:', ['Individualism', 'Conformity', 'Warfare', 'Industry'], 0, 'Transcendentalists prized nature and the individual.'),
+  q('language_g11_t1', 11, 'medium', 'The Harlem Renaissance celebrated African American:', ['Art and culture', 'Math', 'Sports only', 'Farming'], 0, 'It was a flourishing of Black art and culture.'),
+
+  // ── language_g11_t2 · Grade 11 · Research & Synthesis ───────────────────────
+  q('language_g11_t2', 11, 'easy', 'Giving credit to sources avoids:', ['Plagiarism', 'Reading', 'Editing', 'Writing'], 0, 'Citing sources prevents plagiarism.'),
+  q('language_g11_t2', 11, 'medium', 'Synthesis means combining ideas from:', ['Multiple sources', 'One word', 'A title only', 'No sources'], 0, 'Synthesis blends ideas from several sources.'),
+  q('language_g11_t2', 11, 'medium', 'A primary source is:', ['A firsthand account', 'A summary', 'A textbook only', 'A rumor'], 0, 'Primary sources are original, firsthand records.'),
+
+  // ── language_g12_t1 · Grade 12 · British & World Literature ─────────────────
+  q('language_g12_t1', 12, 'easy', '"Beowulf" is an example of an Old English:', ['Epic poem', 'Newspaper', 'Cookbook', 'Map'], 0, '"Beowulf" is an Old English epic poem.'),
+  q('language_g12_t1', 12, 'medium', 'A sonnet is a poem with how many lines?', ['10', '12', '14', '16'], 2, 'A sonnet has 14 lines.'),
+  q('language_g12_t1', 12, 'medium', 'An allusion is a reference to:', ['Another work or event', 'A spelling rule', 'A page number', 'A font'], 0, 'An allusion references another work, person, or event.'),
+
+  // ── language_g12_t2 · Grade 12 · Composition & Analysis ─────────────────────
+  q('language_g12_t2', 12, 'easy', 'A well-structured essay needs a clear:', ['Thesis and support', 'Cover image', 'Long title', 'Rhyme scheme'], 0, 'Strong essays have a clear thesis and support.'),
+  q('language_g12_t2', 12, 'medium', 'Revising focuses mainly on improving:', ['Content and clarity', 'Only fonts', 'Page color', 'Margins only'], 0, 'Revision improves content, organization, and clarity.'),
+  q('language_g12_t2', 12, 'medium', 'A rhetorical analysis examines HOW a text:', ['Persuades its audience', 'Is printed', 'Is bound', 'Is sold'], 0, 'It analyzes how an author persuades the audience.'),
 ];

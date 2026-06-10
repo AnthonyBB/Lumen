@@ -5,18 +5,18 @@
  */
 
 import mongoose, { Schema, Document } from 'mongoose'
+import type { Subject } from '../../types/index.js'
 
 export interface IPlayerProgress extends Document {
   userId: string
   xp: number
   level: number
-  /** Cumulative correct learning answers — every 5th awards a Skill Shard. */
-  correctAnswers: number
-  /** Per-question correct-answer counts (questionId → count). Question ids are
-   *  stable content hashes (see QuestionEngine), so counts survive restarts. */
-  questionMastery: Record<string, number>
-  /** Subcategories already mastered (every question correct ≥3×) and rewarded. */
-  masteredSubcategories: string[]
+  /** Current grade per subject (1..12, or 13 = mastered). Subjects progress
+   *  independently. Defaults to grade 1 for every subject. */
+  subjectGrades: Record<Subject, number>
+  /** topicId → number of quiz passes (0..3). Topic ids are stable
+   *  (`<subject>_g<grade>_t<n>`), so counts survive restarts. */
+  topicPasses: Record<string, number>
   /** Skill ids purchased at Combat Training (see game/data/skillTrees.ts). */
   unlockedSkills: string[]
   /** Strategy ids purchased at the Strategy Hall (see game/data/combatStrategies.ts). */
@@ -44,18 +44,13 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       min: 1,
       max: 50,
     },
-    correctAnswers: {
-      type: Number,
-      default: 0,
-      min: 0,
+    subjectGrades: {
+      type: Schema.Types.Mixed,
+      default: () => ({ math: 1, science: 1, history: 1, language: 1 }),
     },
-    questionMastery: {
+    topicPasses: {
       type: Schema.Types.Mixed,
       default: {},
-    },
-    masteredSubcategories: {
-      type: [String],
-      default: [],
     },
     unlockedSkills: {
       type: [String],

@@ -1,6 +1,9 @@
 /**
- * Science question bank — tagged with subcategories from curriculum.ts.
+ * Science question bank — tagged with grade-level TOPIC ids from curriculum.ts.
  * Imported and concatenated by QuestionEngine.  Server-side only.
+ *
+ * SEED: 3 questions per topic (24 topics → 72 questions).
+ * TODO: expand to 20+ per topic. Append below the matching topic header.
  */
 
 import { makeQ, type RawQuestion } from './util.js';
@@ -8,91 +11,123 @@ import { makeQ, type RawQuestion } from './util.js';
 const q = makeQ('science');
 
 export const SCIENCE_QUESTIONS: RawQuestion[] = [
-  // ── Animals & Habitats (K-3) ──────────────────────────────────────────────
-  q('sci_animals', 0, 'easy', 'Which animal lives in the ocean?', ['Lion', 'Dolphin', 'Eagle', 'Camel'], 1, 'Dolphins are ocean mammals — they swim but breathe air.'),
-  q('sci_animals', 1, 'easy', 'What do caterpillars turn into?', ['Bees', 'Spiders', 'Butterflies', 'Beetles'], 2, 'Caterpillars form a chrysalis and emerge as butterflies — metamorphosis!'),
-  q('sci_animals', 1, 'easy', 'Which animal is a reptile?', ['Frog', 'Snake', 'Rabbit', 'Owl'], 1, 'Snakes are reptiles: scaly skin and cold-blooded. Frogs are amphibians.'),
-  q('sci_animals', 2, 'medium', 'What is a desert habitat like?', ['Cold and icy', 'Hot and dry', 'Wet and rainy', 'Deep underwater'], 1, 'Deserts get very little rain and are usually hot and dry.'),
-  q('sci_animals', 2, 'medium', 'Which animal hibernates through winter?', ['Bear', 'Wolf', 'Deer', 'Hawk'], 0, 'Bears sleep through winter in dens to save energy when food is scarce.'),
-  q('sci_animals', 3, 'medium', 'What do we call animals that eat only plants?', ['Carnivores', 'Omnivores', 'Herbivores', 'Predators'], 2, 'Herbivores, like rabbits and deer, eat only plants.'),
+  // ── science_g1_t1 · Grade 1 · Living & Nonliving ────────────────────────────
+  q('science_g1_t1', 1, 'easy', 'Which of these is a living thing?', ['A rock', 'A tree', 'A spoon', 'A cloud'], 1, 'A tree grows, needs water, and is alive.'),
+  q('science_g1_t1', 1, 'easy', 'What do living things need to grow?', ['Food and water', 'Only sunlight', 'Nothing', 'Only air'], 0, 'Living things need food, water, and air.'),
+  q('science_g1_t1', 1, 'medium', 'Which is NOT alive?', ['A puppy', 'A flower', 'A toy car', 'A fish'], 2, 'A toy car does not grow, eat, or breathe.'),
 
-  // ── Plants & Ecosystems (1-5) ─────────────────────────────────────────────
-  q('sci_plants', 4, 'easy', 'What gas do plants absorb from the air during photosynthesis?', ['Oxygen', 'Nitrogen', 'Carbon Dioxide', 'Hydrogen'], 2, 'Plants take in carbon dioxide (CO₂) and use sunlight to convert it into glucose and oxygen.'),
-  q('sci_plants', 1, 'easy', 'What do seeds need to start growing?', ['Water and warmth', 'Wind and snow', 'Sand and rocks', 'Darkness and ice'], 0, 'Seeds sprout when they have water, warmth, and air.'),
-  q('sci_plants', 2, 'easy', 'Which part of a plant takes in water from the soil?', ['Leaves', 'Flowers', 'Roots', 'Petals'], 2, 'Roots anchor the plant and absorb water and nutrients from the soil.'),
-  q('sci_plants', 3, 'medium', 'In a food chain, what do we call animals that eat other animals?', ['Producers', 'Predators', 'Plants', 'Prey'], 1, 'Predators hunt and eat other animals, which are their prey.'),
-  q('sci_plants', 4, 'medium', 'What is the first link in most food chains?', ['Fish', 'Insects', 'Plants', 'Birds'], 2, 'Plants are producers — they make their own food from sunlight and feed everything else.'),
-  q('sci_plants', 5, 'hard', 'What do we call all the living and nonliving things interacting in one area?', ['A herd', 'An ecosystem', 'A colony', 'A biosphere'], 1, 'An ecosystem includes the plants, animals, water, soil, and climate of an area working together.'),
+  // ── science_g1_t2 · Grade 1 · Weather & Seasons ─────────────────────────────
+  q('science_g1_t2', 1, 'easy', 'Which season is the coldest?', ['Summer', 'Winter', 'Spring', 'Fall'], 1, 'Winter is the coldest season.'),
+  q('science_g1_t2', 1, 'easy', 'What falls from clouds when it rains?', ['Snow', 'Water', 'Sand', 'Leaves'], 1, 'Rain is water that falls from clouds.'),
+  q('science_g1_t2', 1, 'medium', 'What do we usually see in the sky on a sunny day?', ['The sun', 'The moon', 'Stars', 'Lightning'], 0, 'On a sunny day the sun shines in the sky.'),
 
-  // ── Weather & Climate (K-6) ───────────────────────────────────────────────
-  q('sci_weather', 0, 'easy', 'What falls from clouds when it rains?', ['Sand', 'Water', 'Leaves', 'Dust'], 1, 'Rain is water droplets falling from clouds.'),
-  q('sci_weather', 1, 'easy', 'What do we use to measure temperature?', ['A ruler', 'A clock', 'A thermometer', 'A scale'], 2, 'A thermometer measures how hot or cold something is.'),
-  q('sci_weather', 2, 'easy', 'In which season do leaves usually fall from trees?', ['Spring', 'Summer', 'Autumn', 'Winter'], 2, 'In autumn (fall), many trees drop their leaves to get ready for winter.'),
-  q('sci_weather', 4, 'medium', 'What is it called when water vapor in the air turns into liquid drops?', ['Evaporation', 'Condensation', 'Precipitation', 'Collection'], 1, 'Condensation is vapor cooling into liquid — that is how clouds form.'),
-  q('sci_weather', 5, 'medium', 'Which cloud type usually brings thunderstorms?', ['Cirrus', 'Stratus', 'Cumulonimbus', 'Fog'], 2, 'Tall, towering cumulonimbus clouds produce thunder, lightning, and heavy rain.'),
-  q('sci_weather', 6, 'hard', 'What is the difference between weather and climate?', ['They are the same', 'Weather is daily; climate is the long-term pattern', 'Climate changes hourly', 'Weather only happens in summer'], 1, 'Weather is what happens day to day; climate is the average pattern over many years.'),
+  // ── science_g2_t1 · Grade 2 · Animals & Habitats ────────────────────────────
+  q('science_g2_t1', 2, 'easy', 'Which animal lives in the ocean?', ['Lion', 'Dolphin', 'Eagle', 'Camel'], 1, 'Dolphins live in the ocean.'),
+  q('science_g2_t1', 2, 'medium', 'What is a desert habitat like?', ['Cold and icy', 'Hot and dry', 'Wet and rainy', 'Underwater'], 1, 'Deserts are hot and dry with little rain.'),
+  q('science_g2_t1', 2, 'medium', 'Which animal is a reptile?', ['Frog', 'Snake', 'Rabbit', 'Owl'], 1, 'Snakes are scaly, cold-blooded reptiles.'),
 
-  // ── Earth & Space (2-8) ───────────────────────────────────────────────────
-  q('sci_space', 3, 'easy', 'What planet is closest to the Sun?', ['Venus', 'Earth', 'Mars', 'Mercury'], 3, 'Mercury is the closest planet to the Sun in our solar system.'),
-  q('sci_space', 6, 'medium', 'Which layer of the Earth is the thickest?', ['Crust', 'Outer Core', 'Inner Core', 'Mantle'], 3, 'The mantle is about 2,900 km thick — the thickest layer of the Earth.'),
-  q('sci_space', 2, 'easy', 'What lights up the sky during the day?', ['The Moon', 'The Sun', 'Stars', 'Clouds'], 1, 'The Sun is our star — its light makes daytime bright.'),
-  q('sci_space', 4, 'medium', 'How long does Earth take to orbit the Sun once?', ['One day', 'One month', 'One year', 'One week'], 2, 'Earth completes one trip around the Sun every year (about 365 days).'),
-  q('sci_space', 6, 'medium', 'What causes the Moon to shine?', ['It burns like the Sun', 'It reflects sunlight', 'Electric storms', 'City lights'], 1, 'The Moon makes no light of its own — it reflects light from the Sun.'),
-  q('sci_space', 8, 'hard', 'What type of rock forms when lava cools and hardens?', ['Sedimentary', 'Metamorphic', 'Igneous', 'Fossil'], 2, 'Igneous rock forms from cooled magma or lava — like basalt and granite.'),
+  // ── science_g2_t2 · Grade 2 · Plants & Life Cycles ──────────────────────────
+  q('science_g2_t2', 2, 'easy', 'What do caterpillars turn into?', ['Bees', 'Spiders', 'Butterflies', 'Beetles'], 2, 'Caterpillars become butterflies — metamorphosis.'),
+  q('science_g2_t2', 2, 'easy', 'What part of a plant takes in water from the soil?', ['Leaves', 'Flower', 'Roots', 'Stem'], 2, 'Roots absorb water from the soil.'),
+  q('science_g2_t2', 2, 'medium', 'What does a seed need to grow?', ['Water and sunlight', 'Only darkness', 'Only rocks', 'Nothing'], 0, 'Seeds need water, sunlight, and soil to grow.'),
 
-  // ── Matter & Materials (3-7) ──────────────────────────────────────────────
-  q('sci_matter', 4, 'easy', 'What is the chemical symbol for water?', ['WO', 'HO', 'H₂O', 'W₂O'], 2, 'Water is made of two hydrogen atoms and one oxygen atom: H₂O.'),
-  q('sci_matter', 3, 'easy', 'Which of these is a solid?', ['Milk', 'Steam', 'Ice', 'Juice'], 2, 'Ice is frozen water — a solid with a fixed shape.'),
-  q('sci_matter', 3, 'easy', 'What are the three common states of matter?', ['Hot, cold, warm', 'Solid, liquid, gas', 'Rock, water, air', 'Big, medium, small'], 1, 'Matter commonly exists as solid, liquid, or gas.'),
-  q('sci_matter', 5, 'medium', 'What happens to water when it boils?', ['It becomes a solid', 'It becomes a gas', 'It disappears forever', 'It becomes heavier'], 1, 'Boiling water turns into water vapor, a gas. The water is still there, just invisible.'),
-  q('sci_matter', 6, 'medium', 'Which is a physical change, not a chemical change?', ['Burning wood', 'Rusting iron', 'Melting ice', 'Baking a cake'], 2, 'Melting only changes the state — the ice is still water. Burning and rusting create new substances.'),
-  q('sci_matter', 7, 'hard', 'What is the smallest particle of an element that keeps its properties?', ['A cell', 'A molecule', 'An atom', 'A grain'], 2, 'Atoms are the basic building blocks of all matter.'),
+  // ── science_g3_t1 · Grade 3 · Forces & Motion ───────────────────────────────
+  q('science_g3_t1', 3, 'easy', 'What force pulls objects toward the ground?', ['Magnetism', 'Gravity', 'Friction', 'Wind'], 1, 'Gravity pulls things down toward Earth.'),
+  q('science_g3_t1', 3, 'medium', 'What force slows a ball rolling on grass?', ['Gravity', 'Friction', 'Magnetism', 'Sound'], 1, 'Friction between the ball and grass slows it.'),
+  q('science_g3_t1', 3, 'medium', 'A push or a pull is called a:', ['Force', 'Speed', 'Mass', 'Weight'], 0, 'Pushes and pulls are forces.'),
 
-  // ── Forces & Motion (4-9) ─────────────────────────────────────────────────
-  q('sci_forces', 5, 'medium', 'What force keeps planets in orbit around the Sun?', ['Magnetism', 'Gravity', 'Friction', 'Electricity'], 1, 'Gravity is the attractive force between objects with mass that keeps planets orbiting the Sun.'),
-  q('sci_forces', 4, 'easy', 'What force slows a ball rolling across the grass?', ['Gravity', 'Friction', 'Magnetism', 'Sound'], 1, 'Friction between the ball and the grass rubs against the motion and slows it down.'),
-  q('sci_forces', 4, 'easy', 'Which force pulls objects toward the ground?', ['Friction', 'Wind', 'Gravity', 'Heat'], 2, 'Gravity pulls everything toward Earth’s center — that is why dropped things fall.'),
-  q('sci_forces', 6, 'medium', 'What unit do scientists use to measure force?', ['Watts', 'Newtons', 'Liters', 'Volts'], 1, 'Force is measured in newtons (N), named after Isaac Newton.'),
-  q('sci_forces', 8, 'hard', 'According to Newton’s third law, every action has...', ['A bigger reaction', 'An equal and opposite reaction', 'No reaction', 'A delayed reaction'], 1, 'Newton’s third law: forces come in equal and opposite pairs.'),
-  q('sci_forces', 9, 'hard', 'A car travels 100 km in 2 hours. What is its average speed?', ['25 km/h', '50 km/h', '100 km/h', '200 km/h'], 1, 'Speed = distance ÷ time = 100 ÷ 2 = 50 km/h.'),
+  // ── science_g3_t2 · Grade 3 · Earth & Its Resources ─────────────────────────
+  q('science_g3_t2', 3, 'easy', 'Which is a natural resource?', ['Plastic toy', 'Water', 'Television', 'Bicycle'], 1, 'Water is a natural resource from the Earth.'),
+  q('science_g3_t2', 3, 'medium', 'What is soil mostly made of?', ['Plastic', 'Tiny bits of rock and matter', 'Metal', 'Glass'], 1, 'Soil is weathered rock mixed with organic matter.'),
+  q('science_g3_t2', 3, 'medium', 'Which resource can run out if we use too much?', ['Sunlight', 'Coal', 'Wind', 'Moonlight'], 1, 'Coal is nonrenewable and can be used up.'),
 
-  // ── Energy & Electricity (5-10) ───────────────────────────────────────────
-  q('sci_energy', 5, 'easy', 'Which of these is a source of renewable energy?', ['Coal', 'Oil', 'Sunlight', 'Natural gas'], 2, 'Sunlight never runs out — solar power is renewable energy.'),
-  q('sci_energy', 5, 'easy', 'What kind of energy does a stretched rubber band store?', ['Sound energy', 'Stored (potential) energy', 'Light energy', 'Heat only'], 1, 'A stretched band stores elastic potential energy, released when you let go.'),
-  q('sci_energy', 6, 'medium', 'What must a circuit be for electricity to flow?', ['Open', 'Closed', 'Wet', 'Painted'], 1, 'Current only flows around a complete, closed loop.'),
-  q('sci_energy', 7, 'medium', 'Which material is a good conductor of electricity?', ['Rubber', 'Glass', 'Copper', 'Wood'], 2, 'Metals like copper let electricity flow easily — that is why wires are made of it.'),
-  q('sci_energy', 9, 'hard', 'A ball at the top of a hill has mostly which kind of energy?', ['Kinetic', 'Potential', 'Sound', 'Chemical'], 1, 'Height gives it gravitational potential energy, which becomes kinetic as it rolls down.'),
-  q('sci_energy', 10, 'hard', 'What does the law of conservation of energy state?', ['Energy can be destroyed', 'Energy cannot be created or destroyed, only changed in form', 'Energy always increases', 'Energy only comes from the Sun'], 1, 'Energy transforms between forms, but the total amount stays the same.'),
+  // ── science_g4_t1 · Grade 4 · Energy & Sound ────────────────────────────────
+  q('science_g4_t1', 4, 'easy', 'Sound travels as:', ['Light', 'Vibrations', 'Heat', 'Color'], 1, 'Sound is vibrations moving through the air.'),
+  q('science_g4_t1', 4, 'medium', 'Which travels faster?', ['Sound', 'Light', 'They are equal', 'Neither moves'], 1, 'Light travels much faster than sound.'),
+  q('science_g4_t1', 4, 'medium', 'What lets us see objects?', ['Sound', 'Light', 'Wind', 'Gravity'], 1, 'Light reflects off objects into our eyes.'),
 
-  // ── Cells & Life Science (6-10) ───────────────────────────────────────────
-  q('sci_cells', 7, 'medium', 'What is the powerhouse of the cell?', ['Nucleus', 'Ribosome', 'Mitochondria', 'Vacuole'], 2, 'Mitochondria produce ATP energy through cellular respiration, earning the nickname "powerhouse of the cell".'),
-  q('sci_cells', 6, 'easy', 'What is the basic unit of all living things?', ['The atom', 'The cell', 'The organ', 'The bone'], 1, 'All living things are made of one or more cells.'),
-  q('sci_cells', 6, 'medium', 'Which part of the cell holds its genetic instructions (DNA)?', ['Cell wall', 'Nucleus', 'Cytoplasm', 'Membrane'], 1, 'The nucleus is the control center that stores DNA.'),
-  q('sci_cells', 7, 'medium', 'Which structure do plant cells have that animal cells lack?', ['Nucleus', 'Cell wall', 'Cytoplasm', 'Mitochondria'], 1, 'Plant cells have a stiff cell wall (and chloroplasts) that animal cells do not.'),
-  q('sci_cells', 9, 'hard', 'What molecule carries genetic information in nearly all living things?', ['ATP', 'RNA only', 'DNA', 'Glucose'], 2, 'DNA (deoxyribonucleic acid) stores the genetic code passed from parents to offspring.'),
-  q('sci_cells', 10, 'hard', 'What process do cells use to divide into two identical cells?', ['Photosynthesis', 'Mitosis', 'Digestion', 'Osmosis'], 1, 'Mitosis copies the cell’s DNA and splits it into two identical daughter cells.'),
+  // ── science_g4_t2 · Grade 4 · Ecosystems & Food Chains ──────────────────────
+  q('science_g4_t2', 4, 'easy', 'In a food chain, where does energy start?', ['The sun', 'The soil', 'Predators', 'Decomposers'], 0, 'The sun provides energy that plants capture.'),
+  q('science_g4_t2', 4, 'medium', 'An animal that eats only plants is a:', ['Carnivore', 'Herbivore', 'Omnivore', 'Producer'], 1, 'Herbivores eat only plants.'),
+  q('science_g4_t2', 4, 'medium', 'What do decomposers do?', ['Hunt prey', 'Break down dead matter', 'Make sunlight', 'Drink water only'], 1, 'Decomposers recycle nutrients from dead matter.'),
 
-  // ── Chemistry (8-12) ──────────────────────────────────────────────────────
-  q('sci_chemistry', 8, 'medium', 'What is the chemical symbol for gold?', ['Go', 'Gd', 'Au', 'Ag'], 2, 'Gold is Au, from its Latin name "aurum". Silver is Ag.'),
-  q('sci_chemistry', 8, 'medium', 'What particle in an atom has a positive charge?', ['Electron', 'Neutron', 'Proton', 'Photon'], 2, 'Protons are positive, electrons negative, and neutrons neutral.'),
-  q('sci_chemistry', 9, 'medium', 'What does the pH scale measure?', ['Temperature', 'How acidic or basic a solution is', 'Density', 'Color'], 1, 'pH below 7 is acidic, 7 is neutral, above 7 is basic (alkaline).'),
-  q('sci_chemistry', 10, 'hard', 'What is the atomic number of an element equal to?', ['Its number of neutrons', 'Its number of protons', 'Its mass', 'Its number of shells'], 1, 'The atomic number counts the protons — it defines which element it is.'),
-  q('sci_chemistry', 11, 'hard', 'In the reaction 2H₂ + O₂ → 2H₂O, what are H₂ and O₂ called?', ['Products', 'Reactants', 'Catalysts', 'Solutions'], 1, 'The substances on the left that get used up are the reactants; H₂O is the product.'),
-  q('sci_chemistry', 12, 'hard', 'What kind of bond forms when atoms share electrons?', ['Ionic bond', 'Covalent bond', 'Magnetic bond', 'Metallic bond'], 1, 'Covalent bonds share electron pairs; ionic bonds transfer electrons.'),
+  // ── science_g5_t1 · Grade 5 · Matter & Its States ───────────────────────────
+  q('science_g5_t1', 5, 'easy', 'Which is a gas?', ['Ice', 'Water', 'Steam', 'Rock'], 2, 'Steam is water in its gas state.'),
+  q('science_g5_t1', 5, 'medium', 'What happens to water when it freezes?', ['Becomes a gas', 'Becomes a solid', 'Disappears', 'Becomes warmer'], 1, 'Freezing turns liquid water into solid ice.'),
+  q('science_g5_t1', 5, 'medium', 'A solid keeps its:', ['Shape', 'Temperature only', 'Color only', 'Nothing'], 0, 'Solids hold a fixed shape.'),
 
-  // ── Physics (9-12) ────────────────────────────────────────────────────────
-  q('sci_physics', 9, 'medium', 'What is the speed of light in a vacuum (approximately)?', ['300,000 km/s', '3,000 km/s', '300 km/s', '30,000 km/s'], 0, 'Light travels at about 300,000 kilometers per second — nature’s speed limit.'),
-  q('sci_physics', 9, 'medium', 'Sound travels fastest through which material?', ['Air', 'Water', 'Steel', 'A vacuum'], 2, 'Sound moves fastest through solids like steel; it cannot travel through a vacuum at all.'),
-  q('sci_physics', 10, 'medium', 'What does Newton’s second law say force equals?', ['Mass × acceleration', 'Mass ÷ speed', 'Weight × height', 'Speed × time'], 0, 'F = ma: force equals mass times acceleration.'),
-  q('sci_physics', 10, 'hard', 'Which color of visible light has the longest wavelength?', ['Blue', 'Green', 'Violet', 'Red'], 3, 'Red light has the longest visible wavelength; violet has the shortest.'),
-  q('sci_physics', 11, 'hard', 'What unit measures electrical resistance?', ['Volt', 'Ampere', 'Ohm', 'Joule'], 2, 'Resistance is measured in ohms (Ω); V = IR relates volts, amps, and ohms.'),
-  q('sci_physics', 12, 'hard', 'What is the kinetic energy formula?', ['KE = mgh', 'KE = ½mv²', 'KE = mv', 'KE = m²v'], 1, 'Kinetic energy is one-half mass times velocity squared.'),
+  // ── science_g5_t2 · Grade 5 · Earth & Space ─────────────────────────────────
+  q('science_g5_t2', 5, 'easy', 'What is at the center of our solar system?', ['Earth', 'The Moon', 'The Sun', 'Mars'], 2, 'The Sun is at the center; planets orbit it.'),
+  q('science_g5_t2', 5, 'medium', 'What causes day and night?', ['Earth spinning on its axis', 'The Sun moving', 'Clouds', 'The Moon'], 0, 'Earth rotates, bringing day then night.'),
+  q('science_g5_t2', 5, 'medium', 'Which planet is known as the Red Planet?', ['Venus', 'Mars', 'Jupiter', 'Saturn'], 1, 'Mars looks red from its iron-rich dust.'),
 
-  // ── Human Body & Health (2-10) ────────────────────────────────────────────
-  q('sci_body', 5, 'medium', 'How many bones are in an adult human body?', ['196', '206', '216', '226'], 1, 'An adult human body has 206 bones. Babies are born with about 270.'),
-  q('sci_body', 2, 'easy', 'Which organ pumps blood around your body?', ['The brain', 'The lungs', 'The heart', 'The stomach'], 2, 'Your heart is a muscle that pumps blood to every part of your body.'),
-  q('sci_body', 3, 'easy', 'What do your lungs help you do?', ['Digest food', 'Breathe', 'See', 'Hear'], 1, 'Lungs take in oxygen from the air and release carbon dioxide.'),
-  q('sci_body', 6, 'medium', 'Which body system includes the brain, spinal cord, and nerves?', ['Digestive system', 'Nervous system', 'Skeletal system', 'Circulatory system'], 1, 'The nervous system carries electrical messages that control the body.'),
-  q('sci_body', 8, 'hard', 'What do red blood cells carry to the body’s tissues?', ['Carbon dioxide only', 'Oxygen', 'Food', 'Water only'], 1, 'Red blood cells use hemoglobin to carry oxygen from the lungs to your tissues.'),
-  q('sci_body', 10, 'hard', 'Which organ filters waste from the blood to make urine?', ['The liver', 'The kidneys', 'The pancreas', 'The spleen'], 1, 'The two kidneys filter blood and remove waste as urine.'),
+  // ── science_g6_t1 · Grade 6 · Cells & Living Systems ────────────────────────
+  q('science_g6_t1', 6, 'easy', 'What is the basic unit of life?', ['Atom', 'Cell', 'Organ', 'Molecule'], 1, 'The cell is the smallest unit of life.'),
+  q('science_g6_t1', 6, 'medium', 'Which part controls the cell\'s activities?', ['Nucleus', 'Cell wall', 'Vacuole', 'Cytoplasm'], 0, 'The nucleus is the cell\'s control center.'),
+  q('science_g6_t1', 6, 'medium', 'Plants make food through:', ['Respiration', 'Photosynthesis', 'Digestion', 'Evaporation'], 1, 'Photosynthesis uses sunlight to make food.'),
+
+  // ── science_g6_t2 · Grade 6 · Weather & Climate ─────────────────────────────
+  q('science_g6_t2', 6, 'easy', 'What instrument measures temperature?', ['Barometer', 'Thermometer', 'Anemometer', 'Ruler'], 1, 'A thermometer measures temperature.'),
+  q('science_g6_t2', 6, 'medium', 'Weather is short-term; climate is:', ['The same thing', 'A long-term pattern', 'Only rain', 'Only wind'], 1, 'Climate is the long-term average of weather.'),
+  q('science_g6_t2', 6, 'medium', 'What drives the water cycle?', ['Energy from the sun', 'Gravity only', 'Wind only', 'Moonlight'], 0, 'The sun evaporates water, driving the cycle.'),
+
+  // ── science_g7_t1 · Grade 7 · Human Body Systems ────────────────────────────
+  q('science_g7_t1', 7, 'easy', 'Which organ pumps blood?', ['Lungs', 'Heart', 'Stomach', 'Brain'], 1, 'The heart pumps blood through the body.'),
+  q('science_g7_t1', 7, 'medium', 'Which system carries oxygen into the body?', ['Digestive', 'Respiratory', 'Skeletal', 'Muscular'], 1, 'The respiratory system brings in oxygen.'),
+  q('science_g7_t1', 7, 'medium', 'What do the kidneys do?', ['Pump blood', 'Filter waste from blood', 'Digest food', 'Send signals'], 1, 'Kidneys filter waste to make urine.'),
+
+  // ── science_g7_t2 · Grade 7 · Atoms & Elements ──────────────────────────────
+  q('science_g7_t2', 7, 'easy', 'What is the smallest unit of an element?', ['Cell', 'Atom', 'Molecule', 'Compound'], 1, 'An atom is the smallest unit of an element.'),
+  q('science_g7_t2', 7, 'medium', 'Which particle has a positive charge?', ['Electron', 'Proton', 'Neutron', 'Photon'], 1, 'Protons carry a positive charge.'),
+  q('science_g7_t2', 7, 'medium', 'What does the periodic table organize?', ['Animals', 'Elements', 'Planets', 'Rocks'], 1, 'It organizes the chemical elements.'),
+
+  // ── science_g8_t1 · Grade 8 · Forces & Newton\'s Laws ────────────────────────
+  q('science_g8_t1', 8, 'easy', 'An object at rest stays at rest unless acted on by a:', ['Color', 'Force', 'Sound', 'Smell'], 1, 'Newton\'s first law: a force is needed to change motion.'),
+  q('science_g8_t1', 8, 'medium', 'Newton\'s second law is written as:', ['F = ma', 'E = mc²', 'V = IR', 'a = F/t'], 0, 'Force equals mass times acceleration.'),
+  q('science_g8_t1', 8, 'medium', 'For every action there is an equal and opposite:', ['Reaction', 'Distance', 'Mass', 'Charge'], 0, 'Newton\'s third law of motion.'),
+
+  // ── science_g8_t2 · Grade 8 · Energy & Waves ────────────────────────────────
+  q('science_g8_t2', 8, 'easy', 'Energy stored in a stretched spring is:', ['Kinetic', 'Potential', 'Thermal', 'Sound'], 1, 'Stored energy is potential energy.'),
+  q('science_g8_t2', 8, 'medium', 'The number of waves passing per second is the:', ['Amplitude', 'Frequency', 'Wavelength', 'Speed'], 1, 'Frequency counts waves per second.'),
+  q('science_g8_t2', 8, 'medium', 'Energy cannot be created or destroyed, only:', ['Transformed', 'Deleted', 'Doubled', 'Frozen'], 0, 'Conservation of energy: it transforms.'),
+
+  // ── science_g9_t1 · Grade 9 · Biology Foundations ───────────────────────────
+  q('science_g9_t1', 9, 'easy', 'Which molecule carries genetic information?', ['DNA', 'ATP', 'CO₂', 'H₂O'], 0, 'DNA stores genetic instructions.'),
+  q('science_g9_t1', 9, 'medium', 'The powerhouse of the cell is the:', ['Nucleus', 'Mitochondria', 'Ribosome', 'Vacuole'], 1, 'Mitochondria produce energy (ATP).'),
+  q('science_g9_t1', 9, 'medium', 'Organisms in a region plus their environment form an:', ['Ecosystem', 'Atom', 'Organ', 'Cell'], 0, 'An ecosystem includes living and nonliving parts.'),
+
+  // ── science_g9_t2 · Grade 9 · Chemistry Basics ──────────────────────────────
+  q('science_g9_t2', 9, 'easy', 'What is the chemical symbol for water?', ['CO₂', 'O₂', 'H₂O', 'NaCl'], 2, 'Water is H₂O — two hydrogen, one oxygen.'),
+  q('science_g9_t2', 9, 'medium', 'A substance made of two or more elements bonded is a:', ['Mixture', 'Compound', 'Atom', 'Isotope'], 1, 'A compound has elements chemically bonded.'),
+  q('science_g9_t2', 9, 'medium', 'Sand mixed with iron filings is a:', ['Compound', 'Mixture', 'Element', 'Solution'], 1, 'They are mixed but not chemically bonded.'),
+
+  // ── science_g10_t1 · Grade 10 · Chemical Reactions ──────────────────────────
+  q('science_g10_t1', 10, 'easy', 'In a chemical reaction, the starting substances are the:', ['Products', 'Reactants', 'Catalysts', 'Ions'], 1, 'Reactants are consumed to form products.'),
+  q('science_g10_t1', 10, 'medium', 'Balancing equations preserves the:', ['Number of atoms', 'Color', 'Temperature', 'Volume'], 0, 'Mass is conserved, so atoms must balance.'),
+  q('science_g10_t1', 10, 'medium', 'A reaction that releases heat is:', ['Endothermic', 'Exothermic', 'Neutral', 'Frozen'], 1, 'Exothermic reactions release heat.'),
+
+  // ── science_g10_t2 · Grade 10 · Genetics & Heredity ─────────────────────────
+  q('science_g10_t2', 10, 'easy', 'A gene is a section of:', ['Protein', 'DNA', 'Fat', 'Water'], 1, 'Genes are segments of DNA.'),
+  q('science_g10_t2', 10, 'medium', 'An allele that masks another is called:', ['Recessive', 'Dominant', 'Neutral', 'Mutant'], 1, 'Dominant alleles mask recessive ones.'),
+  q('science_g10_t2', 10, 'medium', 'A Punnett square is used to predict:', ['Weather', 'Offspring traits', 'Star paths', 'Reaction rates'], 1, 'It predicts the chances of inherited traits.'),
+
+  // ── science_g11_t1 · Grade 11 · Physics: Mechanics ──────────────────────────
+  q('science_g11_t1', 11, 'easy', 'Momentum is mass times:', ['Velocity', 'Time', 'Charge', 'Area'], 0, 'Momentum p = mass × velocity.'),
+  q('science_g11_t1', 11, 'medium', 'Work equals force times:', ['Mass', 'Distance', 'Time', 'Speed'], 1, 'Work = force × distance.'),
+  q('science_g11_t1', 11, 'hard', 'Kinetic energy depends on mass and:', ['Color', 'Velocity squared', 'Charge', 'Volume'], 1, 'KE = ½mv², depending on velocity squared.'),
+
+  // ── science_g11_t2 · Grade 11 · Organic & Acids/Bases ───────────────────────
+  q('science_g11_t2', 11, 'easy', 'Organic chemistry is the study of compounds containing:', ['Iron', 'Carbon', 'Gold', 'Helium'], 1, 'Organic compounds are built around carbon.'),
+  q('science_g11_t2', 11, 'medium', 'A solution with pH 2 is:', ['Acidic', 'Basic', 'Neutral', 'Salt'], 0, 'pH below 7 is acidic.'),
+  q('science_g11_t2', 11, 'medium', 'What is the pH of a neutral solution?', ['0', '7', '14', '1'], 1, 'Pure water is neutral at pH 7.'),
+
+  // ── science_g12_t1 · Grade 12 · Physics: Electromagnetism ───────────────────
+  q('science_g12_t1', 12, 'easy', 'Opposite electric charges:', ['Attract', 'Repel', 'Do nothing', 'Vanish'], 0, 'Opposite charges attract each other.'),
+  q('science_g12_t1', 12, 'medium', "Ohm's law is written as:", ['V = IR', 'F = ma', 'E = mc²', 'P = mv'], 0, 'Voltage = current × resistance.'),
+  q('science_g12_t1', 12, 'hard', 'Light is an example of a(n):', ['Sound wave', 'Electromagnetic wave', 'Water wave', 'Shock wave'], 1, 'Light is an electromagnetic wave.'),
+
+  // ── science_g12_t2 · Grade 12 · Molecular Biology ───────────────────────────
+  q('science_g12_t2', 12, 'easy', 'Proteins are built from:', ['Amino acids', 'Sugars', 'Fats', 'Minerals'], 0, 'Amino acids are the building blocks of proteins.'),
+  q('science_g12_t2', 12, 'medium', 'Enzymes work by lowering the:', ['Temperature', 'Activation energy', 'Mass', 'pH always'], 1, 'Enzymes speed reactions by lowering activation energy.'),
+  q('science_g12_t2', 12, 'hard', 'Messenger RNA carries instructions from DNA to the:', ['Nucleus', 'Ribosome', 'Membrane', 'Vacuole'], 1, 'mRNA delivers code to ribosomes for protein synthesis.'),
 ];

@@ -24,12 +24,11 @@ export interface Player {
   zone: string;
   position: PlayerPosition;
   lastMessageAt: number; // unix ms — used for chat rate-limiting
-  /** Cumulative correct learning answers (persisted) — every 5th awards a Skill Shard. */
-  correctAnswers: number;
-  /** Per-question correct-answer counts (persisted) — drives subcategory mastery. */
-  questionMastery: Record<string, number>;
-  /** Subcategories already mastered & rewarded with a Combat Shard (persisted). */
-  masteredSubcategories: string[];
+  /** Current grade per subject (persisted), 1..12, or 13 (MASTERED_GRADE) when
+   *  all 12 grades of a subject are complete. Subjects progress independently. */
+  subjectGrades: Record<Subject, number>;
+  /** topicId → number of quiz passes (persisted), 0..3. A topic is COMPLETE at 3. */
+  topicPasses: Record<string, number>;
   /** Skill ids purchased with Skill Shards (persisted). */
   unlockedSkills: string[];
   /** Combat strategy ids purchased with Combat Shards (persisted). */
@@ -61,15 +60,16 @@ export type Difficulty = 'easy' | 'medium' | 'hard';
 export interface Question {
   id: string;
   subject: Subject;
-  /** Curriculum subcategory id, e.g. 'math_fractions' — see game/data/curriculum.ts */
-  subcategory: string;
+  /** Grade 1–12 this question belongs to (matches its topic's grade). */
+  grade: number;
+  /** Curriculum topic id, e.g. 'math_g3_t1' — see game/data/curriculum.ts */
+  topic: string;
   question: string;
   /** Exactly 4 answer choices. */
   answers: [string, string, string, string];
   /** Index 0–3 of the correct answer — NEVER sent to the client before validation. */
   correctIndex: number;
   explanation: string;
-  gradeLevel: number;   // recommended grade (e.g. 2 = 2nd grade)
   difficulty: Difficulty;
 }
 
@@ -77,8 +77,10 @@ export interface Question {
 export interface ClientQuestion {
   id: string;
   subject: Subject;
-  /** Curriculum subcategory id — safe to expose (contains no answer data). */
-  subcategory: string;
+  /** Grade 1–12 — safe to expose. */
+  grade: number;
+  /** Curriculum topic id — safe to expose (contains no answer data). */
+  topic: string;
   question: string;
   answers: [string, string, string, string];
   difficulty: Difficulty;
@@ -120,10 +122,9 @@ export interface ChatMessagePayload {
 // ── Learning event payloads (Client → Server) ──────────────────────────────
 
 export interface LearningStartPayload {
-  subject: Subject;
-  difficulty: Difficulty;
-  /** Optional curriculum subcategory id (e.g. 'math_fractions'). Validated server-side. */
-  subcategory?: string;
+  /** Curriculum topic id (e.g. 'math_g3_t1'). Validated server-side; its grade
+   *  must equal the player's current grade for that subject. */
+  topicId: string;
 }
 
 export interface LearningAnswerPayload {
@@ -185,7 +186,7 @@ export interface LearningSessionStartedPayload {
   firstQuestion: ClientQuestion;
 }
 
-/** Sent after each answer submission. */
+/** Sent after each answer submission (mid-quiz — no reward fields). */
 export interface LearningAnswerResultPayload {
   correct: boolean;
   attemptsLeft: number;
@@ -195,11 +196,28 @@ export interface LearningAnswerResultPayload {
   perfectScore: boolean;
   /** Next question to present — correctIndex intentionally omitted. Present unless session is complete. */
   nextQuestion?: ClientQuestion;
-  /** Number of Skill Shards awarded by this answer (cumulative-correct milestones of 5). */
+}
+
+/**
+ * Sent once when a quiz session completes (emitted as `learning:complete`).
+ * All reward facts are computed server-side; the client only renders them.
+ */
+export interface LearningCompletePayload {
+  topicId: string;
+  /** Number correct out of the 5-question quiz. */
+  score: number;
+  /** True when score ≥ 4 (the pass threshold). */
+  passed: boolean;
+  /** This topic's pass count AFTER applying this result (0..3). */
+  topicPasses: number;
+  /** True when this pass completed BOTH topics of the subject's current grade. */
+  gradeCompleted: boolean;
+  /** The subject's grade AFTER any advancement (unchanged unless gradeCompleted). */
+  newGrade: number;
+  /** Skill Shards awarded by this completion (10 on grade completion, else 0). */
   skillShardsAwarded: number;
-  /** True when this answer completed MASTERY of a subcategory — every question
-   *  in it answered correctly at least 3 times (1 Combat Shard, once per topic). */
-  combatShardAwarded: boolean;
+  /** Combat Shards awarded by this completion (5 on grade completion, else 0). */
+  combatShardAwarded: number;
 }
 
 /** Sent in response to `shop:get_unlocks` and after successful purchases. */
@@ -210,6 +228,10 @@ export interface ShopUnlocksPayload {
   combatShards: number;
   /** Ordered strategy loadout saved at the Teacher (top = checked first). */
   strategyLoadout: string[];
+  /** Current grade per subject (1..12, or 13 = mastered). */
+  subjectGrades: Record<Subject, number>;
+  /** topicId → pass count (0..3) so the classroom can render progress. */
+  topicPasses: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------

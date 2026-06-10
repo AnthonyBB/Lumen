@@ -390,58 +390,46 @@ export class StrategyScene extends Phaser.Scene {
     )
 
     // ── Equip button ──────────────────────────────────────────────────────────
-    // Equipping requires OWNING the preset (every strategy in it purchased
-    // individually). Until then the button is a locked hint, not a purchase.
-    const equipX = RIGHT_PANEL_X + RIGHT_PANEL_W - 140
-    const equipY = PANEL_TOP + infoH / 2
-    const isEquipped = this.activePresetId === preset.id
+    // Only shown once the preset is owned (every strategy in it purchased
+    // individually). Until then the rule list below tells the story.
     const owned = this.isPresetOwned(preset)
-    const equipBg = this.add.graphics()
-    this.rightInfoContainer.add(equipBg)
+    if (owned) {
+      const equipX = RIGHT_PANEL_X + RIGHT_PANEL_W - 140
+      const equipY = PANEL_TOP + infoH / 2
+      const isEquipped = this.activePresetId === preset.id
+      const equipBg = this.add.graphics()
+      this.rightInfoContainer.add(equipBg)
 
-    const drawEquipBtn = (hover = false) => {
-      equipBg.clear()
-      let fillC: number, borderC: number
-      if (!owned) {
-        fillC = 0x1a1a2a
-        borderC = 0x444466
-      } else {
-        fillC = isEquipped ? 0x0a3a1a : (hover ? 0x2a3a1a : 0x1a2a1a)
-        borderC = isEquipped ? 0x44ff88 : (hover ? 0x88dd44 : 0x44aa44)
+      const drawEquipBtn = (hover = false) => {
+        equipBg.clear()
+        const fillC = isEquipped ? 0x0a3a1a : (hover ? 0x2a3a1a : 0x1a2a1a)
+        const borderC = isEquipped ? 0x44ff88 : (hover ? 0x88dd44 : 0x44aa44)
+        equipBg.fillStyle(fillC, 1)
+        equipBg.fillRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
+        equipBg.lineStyle(2, borderC, 1)
+        equipBg.strokeRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
       }
-      equipBg.fillStyle(fillC, 1)
-      equipBg.fillRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
-      equipBg.lineStyle(2, borderC, 1)
-      equipBg.strokeRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
+      drawEquipBtn()
+
+      const equipText = this.add.text(equipX, equipY, isEquipped ? '✓ Equipped' : 'Equip Preset', {
+        fontSize: '14px',
+        fontFamily: 'Arial, sans-serif',
+        color: isEquipped ? '#88ffaa' : '#aaffaa',
+        fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: !isEquipped })
+      this.rightInfoContainer.add(equipText)
+
+      equipText.on('pointerover', () => drawEquipBtn(true))
+      equipText.on('pointerout',  () => drawEquipBtn(false))
+      equipText.on('pointerdown', () => {
+        if (!isEquipped) {
+          this.registry.set('activeStrategyPreset', preset.id)
+          this.activePresetId = preset.id
+          this.drawLeftPanel()
+          this.drawRightPanel()
+        }
+      })
     }
-    drawEquipBtn()
-
-    const ownedCount = preset.strategies.filter(id => this.unlockedStrategies.has(id)).length
-    const equipLabel = !owned
-      ? `🔒 Own all rules (${ownedCount}/${preset.strategies.length})`
-      : isEquipped ? '✓ Equipped' : 'Equip Preset'
-    const equipText = this.add.text(equipX, equipY, equipLabel, {
-      fontSize: !owned ? '11px' : '14px',
-      fontFamily: 'Arial, sans-serif',
-      color: !owned ? '#8888aa' : isEquipped ? '#88ffaa' : '#aaffaa',
-      fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: owned && !isEquipped })
-    this.rightInfoContainer.add(equipText)
-
-    equipText.on('pointerover', () => drawEquipBtn(true))
-    equipText.on('pointerout',  () => drawEquipBtn(false))
-    equipText.on('pointerdown', () => {
-      if (!owned) {
-        this.showFeedback('Buy each rule below to unlock this preset.', '#ffcc77')
-        return
-      }
-      if (!isEquipped) {
-        this.registry.set('activeStrategyPreset', preset.id)
-        this.activePresetId = preset.id
-        this.drawLeftPanel()
-        this.drawRightPanel()
-      }
-    })
 
     // ── Bottom area: strategy list ─────────────────────────────────────────────
     const listY = PANEL_TOP + infoH + 12

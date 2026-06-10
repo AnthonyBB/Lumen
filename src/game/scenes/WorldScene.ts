@@ -720,6 +720,12 @@ export class WorldScene extends Phaser.Scene {
           this.scene.start('ClassroomScene')
           return
         }
+        if (nearBuilding.label === 'Combat Strategy') {
+          this.player.setVelocity(0, 0)
+          this.scene.pause('WorldScene')
+          this.scene.launch('StrategyScene')
+          return
+        }
         this.openPopup(nearBuilding.label)
       }
     } else if (this.nearChest && !this.popupOpen) {

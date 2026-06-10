@@ -8,6 +8,7 @@ import { EquipmentScene } from './scenes/EquipmentScene'
 import { ChestScene } from './scenes/ChestScene'
 import { BiomeScene } from './scenes/BiomeScene'
 import { BattleScene } from './scenes/BattleScene'
+import { StrategyScene } from './scenes/StrategyScene'
 import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
@@ -24,7 +25,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
       debug: false,
     },
   },
-  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene, ChestScene, BiomeScene, BattleScene],
+  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene, ChestScene, BiomeScene, BattleScene, StrategyScene],
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

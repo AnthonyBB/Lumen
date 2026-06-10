@@ -480,12 +480,15 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** Stamp a trail along a parametric centerline (t: 0→1) in two passes:
-   *  1. the fringed 48px blob every 16px — overlapping blobs fuse into a
+  /** Stamp a trail along a parametric centerline (t: 0→1) in three passes:
+   *  1. the fringed 48px blob every 8px — overlapping blobs fuse into a
    *     ribbon, but each blob's rim also braids over its neighbours;
    *  2. the solid dirt tile across the ribbon INTERIOR (3 stamps perpendicular
    *     to the tangent), erasing the braiding so the fringe survives only on
-   *     the outside edge. Verified against a rendered simulation. */
+   *     the outside edge;
+   *  3. grass-blade decals straddling both edges, so the dirt/grass boundary
+   *     is softened with overgrowth like the pack's demo map (rather than a
+   *     hard rim). All verified against a rendered simulation. */
   private stampTrail(
     rt: Phaser.GameObjects.RenderTexture,
     centerline: (t: number) => { x: number; y: number },
@@ -519,6 +522,26 @@ export class WorldScene extends Phaser.Scene {
       const ny = dx / len
       for (const o of [-8, 0, 8]) {
         rt.stamp('cp_ground', CP_DIRT, p.x + nx * o, p.y + ny * o, scale)
+      }
+    }
+
+    // Pass 3: grassy overgrowth on both edges (~22px out from centerline)
+    const edgeRand = this.rng(steps * 31 + 7)
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const p = centerline(t)
+      const ahead = centerline(Math.min(1, t + 0.01))
+      const dx = ahead.x - p.x
+      const dy = ahead.y - p.y
+      const len = Math.max(1, Math.hypot(dx, dy))
+      const nx = -dy / len
+      const ny = dx / len
+      for (const side of [-1, 1]) {
+        if (edgeRand() < 0.45) {
+          const o = side * (18 + edgeRand() * 8)
+          const frame = CPD_BLADES[Math.floor(edgeRand() * CPD_BLADES.length)]
+          rt.stamp('cp_details', frame, p.x + nx * o, p.y + ny * o, { scaleX: 2, scaleY: 2 })
+        }
       }
     }
   }

@@ -42,6 +42,10 @@ export class BootScene extends Phaser.Scene {
     this.load.spritesheet('cp_ground', '/assets/craftpix/grassland/Tiled/ground_grasss.png', {
       frameWidth: 16, frameHeight: 16,
     })
+    // Decal sheet stamped over the grass for texture (12 cols × 14 rows)
+    this.load.spritesheet('cp_details', '/assets/craftpix/grassland/PNG/Details.png', {
+      frameWidth: 16, frameHeight: 16,
+    })
     // Vegetation & props ship as individual alpha PNGs (shadows baked in) —
     // loaded as plain images, no frame math needed.
     const gObj = '/assets/craftpix/grassland/PNG/Objects_separated'

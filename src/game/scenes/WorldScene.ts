@@ -3,7 +3,10 @@ import type { Socket } from 'socket.io-client'
 import { TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
 import { Building } from '../objects/Building'
-import { CP_GRASS, CP_GRASS2, CP_DIRT, CP_DIRT_STONY } from '../data/tileFrames'
+import {
+  CP_GRASS, CP_GRASS2, CP_DIRT,
+  CPD_BLADES, CPD_SPECKS, CPD_MOUNDS, CPD_TUFTS, CPD_FLOWERS,
+} from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
@@ -109,9 +112,10 @@ export class WorldScene extends Phaser.Scene {
     groundFill.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
     groundFill.setDepth(0)
 
-    // Grass: 16px tiles stamped at 4× (64px cells) onto one RenderTexture.
-    // The two fills are near-identical by design — CraftPix grass reads as a
-    // calm carpet; variety comes from the scattered flowers/tufts below.
+    // Grass: 16px tiles stamped at 4× (64px cells) onto one RenderTexture,
+    // then textured with small decals from the Details sheet — the fill tiles
+    // are deliberately flat; the pack's own demo map gets its grassy look the
+    // same way (flat fill + dense decal scatter).
     {
       const groundRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
       groundRT.setDepth(0)
@@ -124,78 +128,76 @@ export class WorldScene extends Phaser.Scene {
           groundRT.stamp('cp_ground', frame, tx + tileW / 2, ty + tileW / 2, scale)
         }
       }
-    }
 
-    // Wildflowers and grass tufts as individual props (shadows baked in)
-    {
-      const rand = this.rng(7)
-      for (let i = 0; i < 110; i++) {
-        const x = 48 + rand() * (WORLD_WIDTH - 96)
-        const y = 48 + rand() * (WORLD_HEIGHT - 96)
-        if (rand() < 0.55) {
-          this.add.image(x, y, `cp_flower${1 + Math.floor(rand() * 6)}`).setScale(2).setDepth(1)
-        } else {
-          this.add.image(x, y, `cp_tuft${1 + Math.floor(rand() * 2)}`).setScale(2).setDepth(1)
+      // Texture decals — at most one per 64px cell, blades most common
+      const decals = [
+        { frames: CPD_BLADES,  chance: 0.30 },
+        { frames: CPD_SPECKS,  chance: 0.10 },
+        { frames: CPD_MOUNDS,  chance: 0.05 },
+        { frames: CPD_TUFTS,   chance: 0.04 },
+        { frames: CPD_FLOWERS, chance: 0.04 },
+      ]
+      for (let ty = 0; ty < WORLD_HEIGHT; ty += tileW) {
+        for (let tx = 0; tx < WORLD_WIDTH; tx += tileW) {
+          for (const d of decals) {
+            if (rand() < d.chance) {
+              const frame = d.frames[Math.floor(rand() * d.frames.length)]
+              const jx = tx + 16 + rand() * (tileW - 32)
+              const jy = ty + 16 + rand() * (tileW - 32)
+              groundRT.stamp('cp_details', frame, jx, jy, scale)
+              break
+            }
+          }
         }
       }
     }
 
-    // ── Path (road) ───────────────────────────────────────────────────────────
-    const centerX = WORLD_WIDTH / 2
+    // ── Trails (blob-brush ribbons) ───────────────────────────────────────────
+    // The atlas ships a rounded 3×3 dirt blob (48px, fringed rim, transparent
+    // outside). Stamping it densely along a smoothly-interpolated centerline
+    // merges the blobs into one organic ribbon — later interiors overdraw
+    // earlier rims, so fringe survives only on the OUTSIDE edge. This is how
+    // the pack's demo map gets its winding trails; per-cell autotiling of the
+    // same set leaves notches at staircase steps.
+    const groundTex = this.textures.get('cp_ground')
+    if (!groundTex.has('trail_blob')) {
+      groundTex.add('trail_blob', 0, 8 * 16, 7 * 16, 48, 48)  // atlas cols 8-10, rows 7-9
+    }
+    const trailRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
+    trailRT.setDepth(1)
+
     const centerY = WORLD_HEIGHT / 2
-    const pathHalfW = 3  // tiles either side
-    const pathHalfH = 3
+    const centerX = WORLD_WIDTH / 2
 
-    // ── Horizontal winding path (Desert ↔ Ocean) ──────────────────────────────
-    // Uses a RenderTexture for performance — stamps CraftPix dirt tiles
-    // (16px at 2× = 32px) at each tile position rather than creating sprites.
+    // Horizontal winding trail (Desert ↔ Ocean)
     {
-      const hRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
-      hRoadRT.setDepth(1)
       const rand = this.rng(42)
-      const totalTiles = WORLD_WIDTH / TILE_SIZE           // 80 tiles
-      const offsets = this.buildWindingOffsets(totalTiles, 4, 8, rand)
-      // Pin the centre segment (tiles 36–44, ±4 tiles around x=1280) to offset 0
-      // so the path runs straight through the town square
-      for (let i = 36; i <= 44; i++) offsets[i] = 0
-
-      for (let tx = 0; tx < totalTiles; tx++) {
-        const px = tx * TILE_SIZE
-        const baseY = centerY + offsets[tx] * TILE_SIZE
-        for (let ty = -pathHalfH; ty <= pathHalfH; ty++) {
-          const py = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, baseY + ty * TILE_SIZE))
-          hRoadRT.stamp('cp_ground', rand() < 0.94 ? CP_DIRT : CP_DIRT_STONY,
-            px + TILE_SIZE / 2, py + TILE_SIZE / 2, { scaleX: 2, scaleY: 2 })
-        }
-      }
+      const offsets = this.buildWindingOffsets(WORLD_WIDTH / TILE_SIZE + 1, 4, 8, rand)
+      for (let i = 36; i <= 44; i++) offsets[i] = 0   // straight through town
+      this.stampTrail(trailRT, (t) => {
+        const px = t * WORLD_WIDTH
+        const i = Math.min(offsets.length - 2, Math.floor(px / TILE_SIZE))
+        const frac = px / TILE_SIZE - i
+        const yOff = offsets[i] + (offsets[i + 1] - offsets[i]) * frac
+        return { x: px, y: centerY + yOff * TILE_SIZE + TILE_SIZE / 2 }
+      })
     }
 
-    // ── Vertical winding path (Snow ↔ Swamp) ─────────────────────────────────
+    // Vertical winding trail (Snow ↔ Swamp)
     {
-      const vRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
-      vRoadRT.setDepth(1)
       const rand = this.rng(137)
-      const totalTiles = WORLD_HEIGHT / TILE_SIZE
-      const offsets = this.buildWindingOffsets(totalTiles, 4, 8, rand)
-      // Pin the centre segment (tiles 36–44) to 0 so the path runs straight through town
+      const offsets = this.buildWindingOffsets(WORLD_HEIGHT / TILE_SIZE + 1, 4, 8, rand)
       for (let i = 36; i <= 44; i++) offsets[i] = 0
-
-      for (let ty = 0; ty < totalTiles; ty++) {
-        const py = ty * TILE_SIZE
-        const baseX = centerX + offsets[ty] * TILE_SIZE
-        for (let tx = -pathHalfW; tx <= pathHalfW; tx++) {
-          const px = Math.max(0, Math.min(WORLD_WIDTH - TILE_SIZE, baseX + tx * TILE_SIZE))
-          vRoadRT.stamp('cp_ground', rand() < 0.94 ? CP_DIRT : CP_DIRT_STONY,
-            px + TILE_SIZE / 2, py + TILE_SIZE / 2, { scaleX: 2, scaleY: 2 })
-        }
-      }
+      this.stampTrail(trailRT, (t) => {
+        const py = t * WORLD_HEIGHT
+        const i = Math.min(offsets.length - 2, Math.floor(py / TILE_SIZE))
+        const frac = py / TILE_SIZE - i
+        const xOff = offsets[i] + (offsets[i + 1] - offsets[i]) * frac
+        return { x: centerX + xOff * TILE_SIZE + TILE_SIZE / 2, y: py }
+      })
     }
 
-    // ── Diagonal branch paths to corner biomes ────────────────────────────────
-    // Each diagonal is 3 tiles wide and steps from the branch point to the biome entrance.
-    // A shared RenderTexture is used so we stamp road tiles rather than spawning objects.
-    const diagRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
-    diagRT.setDepth(1)
+    // Diagonal branch trails to the corner biomes (with perpendicular wander)
     const diagonalBranches = [
       // NW: from (960,960) to (640,640) — Pine Forest
       { fromX: 960, fromY: 960, toX: 640, toY: 640 },
@@ -206,9 +208,22 @@ export class WorldScene extends Phaser.Scene {
       // SE: from (1600,1600) to (1920,1920) — Tropical Rainforest
       { fromX: 1600, fromY: 1600, toX: 1920, toY: 1920 },
     ]
-
-    for (const branch of diagonalBranches) {
-      this.drawDiagonalPath(branch.fromX, branch.fromY, branch.toX, branch.toY, diagRT)
+    for (const b of diagonalBranches) {
+      const rand = this.rng(b.fromX ^ (b.fromY << 8))
+      const steps = Math.abs(b.toX - b.fromX) / TILE_SIZE
+      const offsets = this.buildWindingOffsets(steps + 1, 3, 4, rand)
+      const perpX = -Math.sign(b.toY - b.fromY)
+      const perpY = Math.sign(b.toX - b.fromX)
+      this.stampTrail(trailRT, (t) => {
+        const s = t * steps
+        const i = Math.min(offsets.length - 2, Math.floor(s))
+        const frac = s - i
+        const wander = (offsets[i] + (offsets[i + 1] - offsets[i]) * frac) * TILE_SIZE
+        return {
+          x: b.fromX + (b.toX - b.fromX) * t + perpX * wander,
+          y: b.fromY + (b.toY - b.fromY) * t + perpY * wander,
+        }
+      })
     }
 
     // ── Trees (CraftPix grassland + forest — full sprites, shadows baked in) ──
@@ -426,34 +441,43 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** Draw a winding diagonal path (3 tiles wide) stepping from (fromX,fromY) to (toX,toY).
-   *  Stamps road_tiles frame 0 onto the provided RenderTexture for performance. */
-  private drawDiagonalPath(
-    fromX: number, fromY: number,
-    toX: number, toY: number,
+  /** Stamp a trail along a parametric centerline (t: 0→1) in two passes:
+   *  1. the fringed 48px blob every 16px — overlapping blobs fuse into a
+   *     ribbon, but each blob's rim also braids over its neighbours;
+   *  2. the solid dirt tile across the ribbon INTERIOR (3 stamps perpendicular
+   *     to the tangent), erasing the braiding so the fringe survives only on
+   *     the outside edge. Verified against a rendered simulation. */
+  private stampTrail(
     rt: Phaser.GameObjects.RenderTexture,
+    centerline: (t: number) => { x: number; y: number },
   ) {
-    const dx = toX > fromX ? 1 : -1
-    const dy = toY > fromY ? 1 : -1
-    const steps = Math.abs(toX - fromX) / TILE_SIZE
+    // Estimate length from a coarse pass so step density stays uniform
+    let length = 0
+    let prev = centerline(0)
+    for (let i = 1; i <= 32; i++) {
+      const p = centerline(i / 32)
+      length += Math.hypot(p.x - prev.x, p.y - prev.y)
+      prev = p
+    }
+    const steps = Math.max(8, Math.ceil(length / 16))
+    const scale = { scaleX: 2, scaleY: 2 }
 
-    // Seed from the start corner so each branch has unique wandering
-    const rand = this.rng(fromX ^ (fromY << 8))
-    const offsets = this.buildWindingOffsets(steps + 1, 3, 4, rand)
+    for (let i = 0; i <= steps; i++) {
+      const p = centerline(i / steps)
+      rt.stamp('cp_ground', 'trail_blob', p.x, p.y, scale)
+    }
 
-    for (let s = 0; s <= steps; s++) {
-      const cx = fromX + s * dx * TILE_SIZE
-      const cy = fromY + s * dy * TILE_SIZE
-      const perp = offsets[s]  // perpendicular wander in tile units
-
-      for (let t = -1; t <= 1; t++) {
-        // Perpendicular direction: rotate (dx,dy) by 90° → (-dy, dx)
-        const ox = cx + (t + perp) * (-dy) * TILE_SIZE
-        const oy = cy + (t + perp) * ( dx) * TILE_SIZE
-        const clampedOx = Math.max(0, Math.min(WORLD_WIDTH  - TILE_SIZE, ox - TILE_SIZE / 2))
-        const clampedOy = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, oy - TILE_SIZE / 2))
-        rt.stamp('cp_ground', rand() < 0.94 ? CP_DIRT : CP_DIRT_STONY,
-          clampedOx + TILE_SIZE / 2, clampedOy + TILE_SIZE / 2, { scaleX: 2, scaleY: 2 })
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const p = centerline(t)
+      const ahead = centerline(Math.min(1, t + 0.01))
+      const dx = ahead.x - p.x
+      const dy = ahead.y - p.y
+      const len = Math.max(1, Math.hypot(dx, dy))
+      const nx = -dy / len
+      const ny = dx / len
+      for (const o of [-16, 0, 16]) {
+        rt.stamp('cp_ground', CP_DIRT, p.x + nx * o, p.y + ny * o, scale)
       }
     }
   }

@@ -95,6 +95,29 @@ export const CP_GRASS2     = cp(25, 1)  // (25,1) grass fill, slight variant
 export const CP_DIRT       = cp(9, 8)   // (9,8)  smooth dirt — path fill
 export const CP_DIRT_STONY = cp(12, 3)  // (12,3) stony dirt — path variant
 
+// Trail autotile — the rounded dirt blob drawn at atlas cols 8-13, rows 7-9:
+// a 3×3 blob (corners/edges/center, transparent outside the rounded rim so
+// grass shows through) plus the "donut" next to it whose ring provides the
+// inner (concave) corner tiles. Names are the side(s) where GRASS borders
+// the trail cell; I* = interior cell with a grass pocket on that diagonal.
+export const CP_PATH = {
+  C:   cp(9, 8),
+  N:   cp(9, 7),  S:   cp(9, 9),  W:   cp(8, 8),  E:   cp(10, 8),
+  NW:  cp(8, 7),  NE:  cp(10, 7), SW:  cp(8, 9),  SE:  cp(10, 9),
+  INW: cp(13, 9), INE: cp(11, 9), ISW: cp(13, 7), ISE: cp(11, 7),
+} as const
+
+// ── CraftPix grassland: Details.png decal sheet ─────────────────────────────
+// 192×224, 16px tiles, 12 cols × 14 rows. Small alpha decals stamped over the
+// flat grass fill — this is how the pack's own demo map gets its texture.
+export const CPD_COLS = 12
+const cpd = (col: number, row: number) => row * CPD_COLS + col
+export const CPD_BLADES  = [cpd(0, 13), cpd(1, 13), cpd(2, 13), cpd(3, 13), cpd(4, 13), cpd(5, 13)]
+export const CPD_SPECKS  = [cpd(1, 12), cpd(3, 12), cpd(4, 12), cpd(6, 12), cpd(8, 12), cpd(6, 11)]
+export const CPD_MOUNDS  = [cpd(0, 4), cpd(4, 4), cpd(9, 4), cpd(7, 6), cpd(2, 6)]
+export const CPD_TUFTS   = [cpd(10, 6), cpd(11, 6), cpd(9, 8)]
+export const CPD_FLOWERS = [cpd(10, 8), cpd(11, 8), cpd(0, 10), cpd(8, 10), cpd(10, 10), cpd(11, 10)]
+
 // ── Tiny Dungeon: monsters & creatures ──────────────────────────────────────
 // All nine frames pixel-verified by extracting upscaled tiles from the sheet.
 // Character block layout: row 7 = heroes + chests (mimic at col 8),

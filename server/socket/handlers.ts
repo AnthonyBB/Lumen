@@ -40,7 +40,7 @@ import type {
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
 import { CURRICULUM, SUBCATEGORY_MAP } from '../game/data/curriculum.js';
 import { SKILL_TREES, type CombatSkill } from '../game/data/skillTrees.js';
-import { STRATEGIES, STRATEGY_PRESETS, type CombatStrategy, type StrategyPreset } from '../game/data/combatStrategies.js';
+import { STRATEGIES, type CombatStrategy } from '../game/data/combatStrategies.js';
 
 // ---------------------------------------------------------------------------
 // Shop catalogs (server-authoritative — clients never supply prices or ids)
@@ -61,14 +61,9 @@ const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
   STRATEGIES.map((s) => [s.id, s] as const),
 );
 
-/** presetId → preset. */
-const PRESET_MAP: ReadonlyMap<string, StrategyPreset> = new Map(
-  STRATEGY_PRESETS.map((p) => [p.id, p] as const),
-);
-
-/** Combat Shard prices: individual strategy = 2, preset bundle = 8. */
+/** Combat Shard price per individual strategy (presets are not purchasable —
+ *  they unlock automatically once every rule in them is owned). */
 const STRATEGY_PRICE = 2;
-const PRESET_PRICE = 8;
 
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
 const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
@@ -805,11 +800,13 @@ export function registerHandlers(
 
   // ── shop:buy_strategy ────────────────────────────────────────────────────
   //
-  // Buys a combat strategy (2 🔶) or a whole preset bundle (8 🔶) with Combat
-  // Shards.  Server-authoritative validation:
+  // Buys a single combat strategy (2 🔶) with Combat Shards. Preset bundles
+  // are NOT purchasable — a preset unlocks by owning every rule in it, and
+  // accepting preset ids here would let a crafted client buy 10 rules at a
+  // discount the UI no longer offers.  Server-authoritative validation:
   //  1. The player must exist (joined).
-  //  2. strategyId must be a known strategy OR preset id (combatStrategies.ts).
-  //  3. It must not already be fully owned.
+  //  2. strategyId must be a known individual strategy (combatStrategies.ts).
+  //  3. It must not already be owned.
   //  4. The player must afford the price; the balance is deducted here.
   socket.on('shop:buy_strategy', (payload: ShopBuyStrategyPayload) => {
     if (typeof payload?.strategyId !== 'string') {
@@ -823,34 +820,18 @@ export function registerHandlers(
       return;
     }
 
-    // Resolve to the list of strategy ids this purchase unlocks + its price
-    let toUnlock: string[];
-    let price: number;
-    let label: string;
-
-    const preset = PRESET_MAP.get(payload.strategyId);
     const strategy = STRATEGY_MAP.get(payload.strategyId);
-
-    if (preset) {
-      toUnlock = preset.strategies.filter((id) => !player.unlockedStrategies.includes(id));
-      price = PRESET_PRICE;
-      label = `${preset.name} preset`;
-      if (toUnlock.length === 0) {
-        socket.emit('error', { message: 'You already own every strategy in that preset.' });
-        return;
-      }
-    } else if (strategy) {
-      if (player.unlockedStrategies.includes(strategy.id)) {
-        socket.emit('error', { message: 'You already know that strategy.' });
-        return;
-      }
-      toUnlock = [strategy.id];
-      price = STRATEGY_PRICE;
-      label = strategy.name;
-    } else {
+    if (!strategy) {
       socket.emit('error', { message: 'Unknown strategy.' });
       return;
     }
+    if (player.unlockedStrategies.includes(strategy.id)) {
+      socket.emit('error', { message: 'You already know that strategy.' });
+      return;
+    }
+    const toUnlock = [strategy.id];
+    const price = STRATEGY_PRICE;
+    const label = strategy.name;
 
     if (!inventoryManager.spendCurrency(socket.id, 'combat_shard', price)) {
       socket.emit('error', {

@@ -5,7 +5,6 @@ import { STRATEGIES, STRATEGY_PRESETS, CombatStrategy, StrategyPreset } from '..
 
 // Display copy of the server's Combat Shard pricing (server enforces the real price)
 const STRATEGY_PRICE = 2
-const PRESET_PRICE = 8
 
 interface ShopUnlocks {
   unlockedSkills: string[]
@@ -390,14 +389,13 @@ export class StrategyScene extends Phaser.Scene {
       }).setOrigin(0, 0)
     )
 
-    // ── Equip / Buy button ────────────────────────────────────────────────────
-    // Equipping requires OWNING the preset (every strategy in it purchased).
-    // Until then the button becomes "Buy Preset · 8 🔶" → shop:buy_strategy.
+    // ── Equip button ──────────────────────────────────────────────────────────
+    // Equipping requires OWNING the preset (every strategy in it purchased
+    // individually). Until then the button is a locked hint, not a purchase.
     const equipX = RIGHT_PANEL_X + RIGHT_PANEL_W - 140
     const equipY = PANEL_TOP + infoH / 2
     const isEquipped = this.activePresetId === preset.id
     const owned = this.isPresetOwned(preset)
-    const affordable = this.combatShards >= PRESET_PRICE
     const equipBg = this.add.graphics()
     this.rightInfoContainer.add(equipBg)
 
@@ -405,8 +403,8 @@ export class StrategyScene extends Phaser.Scene {
       equipBg.clear()
       let fillC: number, borderC: number
       if (!owned) {
-        fillC = affordable ? (hover ? 0x3a2a0a : 0x2a1f0a) : 0x2a1a1a
-        borderC = affordable ? (hover ? 0xffcc44 : 0xaa8833) : 0x664444
+        fillC = 0x1a1a2a
+        borderC = 0x444466
       } else {
         fillC = isEquipped ? 0x0a3a1a : (hover ? 0x2a3a1a : 0x1a2a1a)
         borderC = isEquipped ? 0x44ff88 : (hover ? 0x88dd44 : 0x44aa44)
@@ -418,27 +416,23 @@ export class StrategyScene extends Phaser.Scene {
     }
     drawEquipBtn()
 
+    const ownedCount = preset.strategies.filter(id => this.unlockedStrategies.has(id)).length
     const equipLabel = !owned
-      ? `Buy Preset · ${PRESET_PRICE} 🔶`
+      ? `🔒 Own all rules (${ownedCount}/${preset.strategies.length})`
       : isEquipped ? '✓ Equipped' : 'Equip Preset'
     const equipText = this.add.text(equipX, equipY, equipLabel, {
-      fontSize: '14px',
+      fontSize: !owned ? '11px' : '14px',
       fontFamily: 'Arial, sans-serif',
-      color: !owned ? (affordable ? '#ffcc77' : '#cc7766') : isEquipped ? '#88ffaa' : '#aaffaa',
+      color: !owned ? '#8888aa' : isEquipped ? '#88ffaa' : '#aaffaa',
       fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true })
+    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: owned && !isEquipped })
     this.rightInfoContainer.add(equipText)
 
     equipText.on('pointerover', () => drawEquipBtn(true))
     equipText.on('pointerout',  () => drawEquipBtn(false))
     equipText.on('pointerdown', () => {
       if (!owned) {
-        // Server validates ownership, pricing and balance
-        if (!this.socket?.connected) {
-          this.showFeedback('Not connected to the server.', '#ff8866')
-          return
-        }
-        this.socket.emit('shop:buy_strategy', { strategyId: preset.id })
+        this.showFeedback('Buy each rule below to unlock this preset.', '#ffcc77')
         return
       }
       if (!isEquipped) {
@@ -558,6 +552,33 @@ export class StrategyScene extends Phaser.Scene {
 
     container.add([bg, rankBadge, rankText, nameText, condText, actionText])
 
+    // Row hit zone — added BEFORE the Buy button so the button (added later,
+    // therefore on top) actually receives its clicks. Phaser routes input to
+    // the top-most interactive object; with the zone on top the Buy button
+    // could never be clicked.
+    const hit = this.add.zone(0, 0, w, h).setOrigin(0, 0)
+    hit.setInteractive({ useHandCursor: true })
+    hit.on('pointerover', () => {
+      if (this.selectedStrategy?.id !== strategy.id) {
+        bg.clear()
+        this.drawItemBg(bg, 0, 0, w, h, false, true)
+        nameText.setColor(COLOR_TEXT_GOLD)
+      }
+    })
+    hit.on('pointerout', () => {
+      if (this.selectedStrategy?.id !== strategy.id) {
+        bg.clear()
+        this.drawItemBg(bg, 0, 0, w, h, false, false)
+        nameText.setColor(COLOR_TEXT_WHITE)
+      }
+    })
+    hit.on('pointerdown', () => {
+      this.selectedStrategy = strategy
+      this.showTooltip(strategy)
+      this.drawRightPanel()
+    })
+    container.add(hit)
+
     if (owned) {
       container.add(this.add.text(w - 12, h / 2, '✓ Owned', {
         fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#88ffaa',
@@ -583,30 +604,6 @@ export class StrategyScene extends Phaser.Scene {
       })
       container.add(buyText)
     }
-
-    // Hit zone
-    const hit = this.add.zone(0, 0, w, h).setOrigin(0, 0)
-    hit.setInteractive({ useHandCursor: true })
-    hit.on('pointerover', () => {
-      if (this.selectedStrategy?.id !== strategy.id) {
-        bg.clear()
-        this.drawItemBg(bg, 0, 0, w, h, false, true)
-        nameText.setColor(COLOR_TEXT_GOLD)
-      }
-    })
-    hit.on('pointerout', () => {
-      if (this.selectedStrategy?.id !== strategy.id) {
-        bg.clear()
-        this.drawItemBg(bg, 0, 0, w, h, false, false)
-        nameText.setColor(COLOR_TEXT_WHITE)
-      }
-    })
-    hit.on('pointerdown', () => {
-      this.selectedStrategy = strategy
-      this.showTooltip(strategy)
-      this.drawRightPanel()
-    })
-    container.add(hit)
 
     return container
   }

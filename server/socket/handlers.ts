@@ -19,6 +19,7 @@ import type {
   PlayerMovePayload,
   ChatMessagePayload,
   EquipmentEquipPayload,
+  EquipmentUnequipPayload,
   EquipmentSlotKey,
   ChestTransferPayload,
   LearningStartPayload,
@@ -527,8 +528,9 @@ export function registerHandlers(
   });
 
   // NOTE: the legacy `inventory:equip` / `inventory:unequip` handlers were
-  // removed — EquipmentScene manages its local preview state and no client
-  // emits those events.  Server-side equipping happens via `equipment:equip`.
+  // removed.  Equipping happens via `equipment:equip` and unequipping via
+  // `equipment:unequip` below; EquipmentScene renders only the server-pushed
+  // inventory state.
 
   // ── equipment:equip ──────────────────────────────────────────────────────
   //
@@ -590,6 +592,33 @@ export function registerHandlers(
     console.log(
       `[equip] ${player.username} equipped ${catalogItem.name} (${catalogItem.id}) in ${slotKey}`,
     );
+  });
+
+  // ── equipment:unequip ────────────────────────────────────────────────────
+  //
+  // Moves the item in the named slot back into the player's bag.  The client
+  // sends only a slot name, which is validated against the known slot keys;
+  // the item itself always comes from server state.
+  socket.on('equipment:unequip', (payload: EquipmentUnequipPayload) => {
+    const VALID_SLOTS: EquipmentSlotKey[] = [
+      'mainHand', 'offHand', 'helm', 'earring', 'ring1', 'ring2',
+      'belt', 'shoes', 'gloves', 'necklace', 'chest', 'legs',
+    ];
+    if (typeof payload?.slot !== 'string' || !VALID_SLOTS.includes(payload.slot)) {
+      socket.emit('error', { message: 'Invalid unequip payload.' });
+      return;
+    }
+
+    const player = requireJoinedPlayer('You must join before unequipping items.');
+    if (!player) return;
+
+    if (!inventoryManager.unequipItem(socket.id, payload.slot)) {
+      socket.emit('error', { message: 'That slot is empty.' });
+      return;
+    }
+
+    pushInventoryUpdate();
+    console.log(`[equip] ${player.username} unequipped slot ${payload.slot}`);
   });
 
   // NOTE: the old `inventory:add_shard` handler was removed.  Shards are now

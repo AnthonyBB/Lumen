@@ -1,45 +1,31 @@
+// ============================================================
+// EquipmentScene — the paper-doll gear screen.
+//
+// SECURITY: this scene only RENDERS the server-pushed inventory
+// snapshot (InventoryStore, fed by 'inventory:data' /
+// 'inventory:updated') and requests mutations via
+// 'equipment:equip' / 'equipment:unequip'.  Ownership, XP gates
+// and slot assignment are all enforced server-side; nothing here
+// computes an equip result locally.
+// ============================================================
+
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import {
+  InventoryStore,
+  type ClientInventoryItem,
+  type ClientItemStats,
+  type ClientPlayerInventory,
+} from '../systems/InventoryStore'
+import { EQUIPMENT_MAP, type EquipSlot } from '../data/equipmentGen'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
-type IconType = 'sword' | 'shield' | 'helm' | 'ring' | 'boots' | 'necklace' | 'belt' | 'gloves' | 'earring'
-type SlotKey = 'mainHand' | 'offHand' | 'helm' | 'earring' | 'ring1' | 'ring2' | 'belt' | 'shoes' | 'gloves' | 'necklace'
-
-interface ItemStats {
-  attack?: number
-  defense?: number
-  spirit?: number
-  intelligence?: number
-  dexterity?: number
-}
-
-interface InventoryItem {
-  id: string
-  name: string
-  itemType: SlotKey
-  rarity: Rarity
-  stats: ItemStats
-  icon: IconType
-}
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
-
-const MOCK_INVENTORY: InventoryItem[] = [
-  { id: 'sword_001',    name: 'Worn Sword',       itemType: 'mainHand', rarity: 'common',   stats: { attack: 5 },                   icon: 'sword'    },
-  { id: 'shield_001',   name: 'Worn Shield',       itemType: 'offHand',  rarity: 'common',   stats: { defense: 5 },                  icon: 'shield'   },
-  { id: 'helm_001',     name: 'Leather Cap',       itemType: 'helm',     rarity: 'common',   stats: { defense: 2 },                  icon: 'helm'     },
-  { id: 'ring_001',     name: 'Silver Ring',       itemType: 'ring1',    rarity: 'uncommon', stats: { spirit: 3 },                   icon: 'ring'     },
-  { id: 'boots_001',    name: 'Traveler Boots',    itemType: 'shoes',    rarity: 'common',   stats: { dexterity: 2 },                icon: 'boots'    },
-  { id: 'necklace_001', name: 'Amulet of Lumen',   itemType: 'necklace', rarity: 'rare',     stats: { intelligence: 5, spirit: 2 },  icon: 'necklace' },
-]
-
-const INITIAL_EQUIPPED: Record<SlotKey, InventoryItem | null> = {
-  mainHand: null, offHand: null, helm: null, earring: null,
-  ring1: null,    ring2: null,   belt: null, shoes: null,
-  gloves: null,   necklace: null,
-}
+type SlotKey =
+  | 'mainHand' | 'offHand' | 'helm' | 'earring' | 'ring1' | 'ring2'
+  | 'belt' | 'shoes' | 'gloves' | 'necklace' | 'chest' | 'legs'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -55,7 +41,23 @@ const SLOT_LABELS: Record<SlotKey, string> = {
   mainHand: 'Main Hand', offHand: 'Off Hand', helm: 'Helm',
   earring:  'Earring',   ring1:   'Ring 1',   ring2: 'Ring 2',
   belt:     'Belt',      shoes:   'Shoes',    gloves: 'Gloves',
-  necklace: 'Necklace',
+  necklace: 'Necklace',  chest:   'Chest',    legs:   'Legs',
+}
+
+/**
+ * Display copy of the server's EquipSlot → slot-key mapping
+ * (server/socket/handlers.ts EQUIP_SLOT_TO_KEY).  Used only to show which
+ * slot a bag item would go to — the server derives the real slot itself.
+ */
+const EQUIP_SLOT_TO_KEY: Record<EquipSlot, SlotKey> = {
+  weapon: 'mainHand',
+  helmet: 'helm',
+  chest:  'chest',
+  legs:   'legs',
+  boots:  'shoes',
+  gloves: 'gloves',
+  ring:   'ring1',
+  amulet: 'necklace',
 }
 
 // Slot positions — paper doll center at ~190, 360
@@ -64,6 +66,8 @@ const DOLL_CY = 360
 const SLOT_POSITIONS: Record<SlotKey, { x: number; y: number }> = {
   helm:     { x: DOLL_CX,       y: DOLL_CY - 198 },
   earring:  { x: DOLL_CX + 90,  y: DOLL_CY - 165 },
+  legs:     { x: DOLL_CX - 110, y: DOLL_CY - 110 },
+  chest:    { x: DOLL_CX + 110, y: DOLL_CY - 110 },
   necklace: { x: DOLL_CX,       y: DOLL_CY - 118 },
   gloves:   { x: DOLL_CX - 110, y: DOLL_CY - 40  },
   mainHand: { x: DOLL_CX - 110, y: DOLL_CY + 30  },
@@ -74,11 +78,11 @@ const SLOT_POSITIONS: Record<SlotKey, { x: number; y: number }> = {
   shoes:    { x: DOLL_CX,       y: DOLL_CY + 178 },
 }
 
-const SLOT_ICON: Record<SlotKey, IconType> = {
-  mainHand: 'sword',   offHand: 'shield', helm: 'helm',
-  earring:  'earring', ring1:   'ring',   ring2: 'ring',
-  belt:     'belt',    shoes:   'boots',  gloves: 'gloves',
-  necklace: 'necklace',
+/** Dim placeholder glyph shown in an empty slot. */
+const SLOT_PLACEHOLDER: Record<SlotKey, string> = {
+  mainHand: '🗡️', offHand: '🛡️', helm: '🪖', earring: '💎',
+  ring1: '💍', ring2: '💍', belt: '🔗', shoes: '👟',
+  gloves: '🧤', necklace: '📿', chest: '🦺', legs: '👖',
 }
 
 // Layout
@@ -96,13 +100,19 @@ const ITEM_ROW_H    = 64
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
 export class EquipmentScene extends Phaser.Scene {
-  private equipped: Record<SlotKey, InventoryItem | null> = { ...INITIAL_EQUIPPED }
-  private inventory: InventoryItem[] = []
+  private socket: Socket | null = null
+
+  // Server-reported state — only ever replaced by InventoryStore pushes
+  private equipped: Partial<Record<SlotKey, ClientInventoryItem>> = {}
+  private gearItems: ClientInventoryItem[] = []
 
   private slotContainerMap: Map<SlotKey, Phaser.GameObjects.Container> = new Map()
+  private connectorGfx: Phaser.GameObjects.Graphics | null = null
   private inventoryContainer!: Phaser.GameObjects.Container
   private statsContainer!:     Phaser.GameObjects.Container
-  private selectedItem: InventoryItem | null = null
+  private feedbackText!:       Phaser.GameObjects.Text
+  private selectedItem: ClientInventoryItem | null = null
+  private scrollOffset = 0
 
   private iKey!:   Phaser.Input.Keyboard.Key
   private escKey!: Phaser.Input.Keyboard.Key
@@ -112,11 +122,11 @@ export class EquipmentScene extends Phaser.Scene {
   }
 
   create() {
-    // Reset state on each launch
-    this.equipped     = { ...INITIAL_EQUIPPED }
-    this.inventory    = MOCK_INVENTORY.map(i => ({ ...i, stats: { ...i.stats } }))
+    this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
     this.selectedItem = null
+    this.scrollOffset = 0
     this.slotContainerMap.clear()
+    this.connectorGfx = null
 
     this.drawBackground()
     this.drawHeader()
@@ -124,9 +134,32 @@ export class EquipmentScene extends Phaser.Scene {
     this.drawLeftPanel()
     this.drawMidPanel()
     this.drawRightPanel()
-    this.buildSlots()
-    this.buildInventoryList()
-    this.buildStatsPanel()
+
+    this.feedbackText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 44, '', {
+      fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#ff8866',
+      backgroundColor: '#000000aa', padding: { x: 10, y: 5 },
+    }).setOrigin(0.5, 0.5).setDepth(50).setVisible(false)
+
+    // ── Server state is the only source of truth ──────────────────────────
+    const unsubscribe = InventoryStore.onUpdate((inv) => this.applyInventory(inv))
+    const onError = (err: { message?: string }) => {
+      if (err?.message) this.showFeedback(err.message)
+    }
+    this.socket?.on('error', onError)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      unsubscribe()
+      this.socket?.off('error', onError)
+    })
+
+    // Render whatever snapshot we already have (onUpdate fires immediately
+    // when one exists); also ask the server for a fresh copy.
+    if (!InventoryStore.get()) this.rebuildDynamic()
+    this.socket?.emit('inventory:get')
+
+    this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
+      this.scrollOffset = Math.max(0, this.scrollOffset + Math.sign(dy))
+      this.buildInventoryList()
+    })
 
     this.iKey   = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.I)
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
@@ -147,6 +180,35 @@ export class EquipmentScene extends Phaser.Scene {
     if (!this.scene.isActive('UIScene')) {
       this.scene.launch('UIScene')
     }
+  }
+
+  // ── Server snapshot → render state ──────────────────────────────────────────
+
+  private applyInventory(inv: ClientPlayerInventory) {
+    this.equipped = (inv.equipment ?? {}) as Partial<Record<SlotKey, ClientInventoryItem>>
+    // Only generated gear (catalogued in equipmentGen) is equippable
+    this.gearItems = (inv.items ?? []).filter(i => EQUIPMENT_MAP[i.itemType])
+    if (this.selectedItem && !this.gearItems.some(i => i.id === this.selectedItem!.id)) {
+      this.selectedItem = null
+    }
+    this.rebuildDynamic()
+  }
+
+  private rebuildDynamic() {
+    this.buildSlots()
+    this.buildInventoryList()
+    this.buildStatsPanel()
+  }
+
+  private showFeedback(message: string) {
+    this.feedbackText.setText(message).setVisible(true)
+    this.time.delayedCall(2600, () => this.feedbackText.setVisible(false))
+  }
+
+  /** Display-only: which slot a bag item would land in (server decides the real one). */
+  private slotForItem(item: ClientInventoryItem): SlotKey | null {
+    const catalog = EQUIPMENT_MAP[item.itemType]
+    return catalog ? EQUIP_SLOT_TO_KEY[catalog.slot] : null
   }
 
   // ── Background ───────────────────────────────────────────────────────────────
@@ -220,7 +282,7 @@ export class EquipmentScene extends Phaser.Scene {
     g.fillRoundedRect(MID_PANEL_X, PANEL_Y, MID_PANEL_W, PANEL_H, 10)
     g.lineStyle(1, 0x2a2a5a, 1)
     g.strokeRoundedRect(MID_PANEL_X, PANEL_Y, MID_PANEL_W, PANEL_H, 10)
-    this.add.text(MID_PANEL_X + MID_PANEL_W / 2, PANEL_Y + 14, 'Inventory', {
+    this.add.text(MID_PANEL_X + MID_PANEL_W / 2, PANEL_Y + 14, 'Equippable Gear', {
       fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#7777aa',
     }).setOrigin(0.5, 0)
     const dg = this.add.graphics()
@@ -323,150 +385,13 @@ export class EquipmentScene extends Phaser.Scene {
     g.fillCircle(cx + 48, cy - 96, 3)
   }
 
-  // ── Draw item icon ────────────────────────────────────────────────────────────
-
-  private drawItemIcon(
-    gfx: Phaser.GameObjects.Graphics,
-    x: number,
-    y: number,
-    iconType: IconType,
-    color: number,
-    scale: number = 1
-  ) {
-    const s = scale
-    gfx.fillStyle(color, 1)
-
-    switch (iconType) {
-      case 'sword': {
-        // Blade diamond
-        gfx.fillTriangle(x, y - 18 * s, x - 5 * s, y, x + 5 * s, y)
-        gfx.fillTriangle(x, y + 8 * s,  x - 5 * s, y, x + 5 * s, y)
-        // Crossguard
-        gfx.fillStyle(0xccaa44, 1)
-        gfx.fillRect(x - 10 * s, y - 2 * s, 20 * s, 4 * s)
-        // Handle
-        gfx.fillStyle(0x886622, 1)
-        gfx.fillRect(x - 2.5 * s, y + 2 * s, 5 * s, 10 * s)
-        // Pommel
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y + 13 * s, 3.5 * s)
-        break
-      }
-      case 'shield': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 11 * s, y - 14 * s, 22 * s, 20 * s)
-        gfx.fillTriangle(x - 11 * s, y + 6 * s, x + 11 * s, y + 6 * s, x, y + 18 * s)
-        // Boss
-        gfx.fillStyle(0xccaa44, 1)
-        gfx.fillCircle(x, y - 2 * s, 5 * s)
-        gfx.lineStyle(1.5 * s, 0xccaa44, 0.7)
-        gfx.strokeRect(x - 11 * s, y - 14 * s, 22 * s, 20 * s)
-        break
-      }
-      case 'helm': {
-        // Dome: filled circle with lower half masked by a rect (simulate upper semicircle)
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y - 4 * s, 14 * s)
-        // Cover lower half
-        gfx.fillStyle(0x1a1a3a, 1)
-        gfx.fillRect(x - 15 * s, y - 4 * s, 30 * s, 15 * s)
-        // Side guards
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 14 * s, y - 4 * s, 5 * s, 12 * s)
-        gfx.fillRect(x + 9 * s,  y - 4 * s, 5 * s, 12 * s)
-        // Visor slit
-        gfx.fillStyle(0x000000, 0.45)
-        gfx.fillRect(x - 9 * s, y + 1 * s, 18 * s, 4 * s)
-        // Nose guard
-        gfx.fillStyle(0xaaaaaa, 0.5)
-        gfx.fillRect(x - 1.5 * s, y - 4 * s, 3 * s, 7 * s)
-        break
-      }
-      case 'ring': {
-        gfx.lineStyle(3 * s, color, 1)
-        gfx.strokeCircle(x, y + 3 * s, 10 * s)
-        gfx.fillStyle(0xffffff, 0.85)
-        gfx.fillCircle(x, y - 6 * s, 3.5 * s)
-        gfx.fillStyle(color, 0.7)
-        gfx.fillCircle(x, y - 6 * s, 2 * s)
-        break
-      }
-      case 'boots': {
-        gfx.fillStyle(color, 1)
-        // Shaft
-        gfx.fillRect(x - 7 * s, y - 15 * s, 13 * s, 18 * s)
-        // Foot
-        gfx.fillRect(x - 7 * s, y + 3 * s, 17 * s, 8 * s)
-        // Toe rounded tip
-        gfx.fillCircle(x + 9 * s, y + 7 * s, 4 * s)
-        // Highlight
-        gfx.fillStyle(0xffffff, 0.12)
-        gfx.fillRect(x - 6 * s, y - 13 * s, 4 * s, 13 * s)
-        break
-      }
-      case 'necklace': {
-        // Chain — use a thin circle partially covered to suggest an arc
-        gfx.lineStyle(2 * s, color, 0.85)
-        gfx.strokeCircle(x, y - 4 * s, 12 * s)
-        // Cover bottom of circle so only top arc shows
-        gfx.fillStyle(0x1a1a3a, 1)
-        gfx.fillRect(x - 14 * s, y - 4 * s, 28 * s, 16 * s)
-        // Pendant drop
-        gfx.fillStyle(color, 1)
-        gfx.fillTriangle(x, y + 4 * s, x - 5 * s, y - 2 * s, x + 5 * s, y - 2 * s)
-        // Gem on pendant
-        gfx.fillStyle(0xffffff, 0.75)
-        gfx.fillCircle(x, y + 1 * s, 3 * s)
-        break
-      }
-      case 'belt': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 18 * s, y - 5 * s, 36 * s, 10 * s)
-        gfx.fillStyle(0xffd700, 1)
-        gfx.fillRect(x - 5 * s, y - 6 * s, 10 * s, 12 * s)
-        gfx.lineStyle(1.5 * s, 0x886600, 1)
-        gfx.strokeRect(x - 5 * s, y - 6 * s, 10 * s, 12 * s)
-        gfx.lineStyle(1 * s, 0x886600, 0.8)
-        gfx.lineBetween(x, y - 6 * s, x, y + 6 * s)
-        break
-      }
-      case 'gloves': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 9 * s, y - 6 * s, 18 * s, 14 * s)
-        // Thumb
-        gfx.fillRect(x + 9 * s,  y - 8 * s,  6 * s, 8 * s)
-        // Fingers
-        gfx.fillRect(x - 9 * s,  y - 12 * s, 4 * s, 7 * s)
-        gfx.fillRect(x - 3.5 * s, y - 13 * s, 4 * s, 8 * s)
-        gfx.fillRect(x + 2 * s,  y - 12 * s, 4 * s, 7 * s)
-        // Cuff
-        gfx.fillStyle(0x888888, 0.35)
-        gfx.fillRect(x - 9 * s, y + 8 * s, 18 * s, 5 * s)
-        break
-      }
-      case 'earring': {
-        // Stud
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y - 8 * s, 5 * s)
-        gfx.fillStyle(0xffffff, 0.65)
-        gfx.fillCircle(x - 1 * s, y - 9 * s, 2 * s)
-        // Drop
-        gfx.fillStyle(color, 0.9)
-        gfx.fillCircle(x, y + 4 * s, 4 * s)
-        gfx.lineStyle(1.5 * s, color, 0.8)
-        gfx.lineBetween(x, y - 3 * s, x, y)
-        break
-      }
-    }
-  }
-
   // ── Equipment Slots ───────────────────────────────────────────────────────────
 
   private buildSlots() {
     this.slotContainerMap.forEach(c => c.destroy())
     this.slotContainerMap.clear()
 
-    this.drawConnectorLines()
+    if (!this.connectorGfx) this.drawConnectorLines()
 
     for (const slotKey of Object.keys(SLOT_POSITIONS) as SlotKey[]) {
       const pos = SLOT_POSITIONS[slotKey]
@@ -477,21 +402,18 @@ export class EquipmentScene extends Phaser.Scene {
   private createSlot(slotKey: SlotKey, cx: number, cy: number) {
     const container = this.add.container(cx, cy)
     const half      = SLOT_SIZE / 2
-    const item      = this.equipped[slotKey]
+    const item      = this.equipped[slotKey] ?? null
 
     // Slot background gfx
     const gfx = this.add.graphics()
     this.drawSlotGfx(gfx, item, false)
     container.add(gfx)
 
-    // Item icon
-    const iconGfx = this.add.graphics()
-    if (item) {
-      this.drawItemIcon(iconGfx, 0, -8, item.icon, RARITY_COLOR[item.rarity], 0.8)
-    } else {
-      this.drawItemIcon(iconGfx, 0, -10, SLOT_ICON[slotKey], 0x333355, 0.55)
-    }
-    container.add(iconGfx)
+    // Item icon (emoji from the server item, dim placeholder when empty)
+    const icon = this.add.text(0, -8, item ? item.icon : SLOT_PLACEHOLDER[slotKey], {
+      fontSize: '26px',
+    }).setOrigin(0.5, 0.5).setAlpha(item ? 1 : 0.25)
+    container.add(icon)
 
     // Label
     const labelStr = item ? this.truncate(item.name, 9) : SLOT_LABELS[slotKey]
@@ -506,15 +428,19 @@ export class EquipmentScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true })
 
     hit.on('pointerover', () => {
-      this.drawSlotGfx(gfx, this.equipped[slotKey], true)
+      this.drawSlotGfx(gfx, this.equipped[slotKey] ?? null, true)
     })
     hit.on('pointerout', () => {
-      this.drawSlotGfx(gfx, this.equipped[slotKey], false)
+      this.drawSlotGfx(gfx, this.equipped[slotKey] ?? null, false)
     })
     hit.on('pointerdown', () => {
-      if (this.equipped[slotKey]) {
-        this.unequipItem(slotKey)
+      // Request only — the server validates and pushes the updated inventory
+      if (!this.equipped[slotKey]) return
+      if (!this.socket?.connected) {
+        this.showFeedback('Not connected to the server.')
+        return
       }
+      this.socket.emit('equipment:unequip', { slot: slotKey })
     })
     container.add(hit)
 
@@ -523,7 +449,7 @@ export class EquipmentScene extends Phaser.Scene {
 
   private drawSlotGfx(
     gfx: Phaser.GameObjects.Graphics,
-    item: InventoryItem | null,
+    item: ClientInventoryItem | null,
     hovered: boolean
   ) {
     gfx.clear()
@@ -555,12 +481,15 @@ export class EquipmentScene extends Phaser.Scene {
     const lineGfx = this.add.graphics()
     lineGfx.lineStyle(1, 0x252550, 0.8)
     lineGfx.setDepth(-1)
+    this.connectorGfx = lineGfx
 
     // Body attachment points (where the line "leaves" the doll silhouette)
     const bodyPoints: Record<SlotKey, { x: number; y: number }> = {
       helm:     { x: DOLL_CX,      y: DOLL_CY - 110 },
       earring:  { x: DOLL_CX + 22, y: DOLL_CY - 65  },
       necklace: { x: DOLL_CX,      y: DOLL_CY - 65  },
+      legs:     { x: DOLL_CX - 22, y: DOLL_CY - 30  },
+      chest:    { x: DOLL_CX + 22, y: DOLL_CY - 30  },
       gloves:   { x: DOLL_CX - 32, y: DOLL_CY + 10  },
       mainHand: { x: DOLL_CX - 32, y: DOLL_CY + 50  },
       offHand:  { x: DOLL_CX + 32, y: DOLL_CY + 50  },
@@ -577,53 +506,47 @@ export class EquipmentScene extends Phaser.Scene {
     }
   }
 
-  private refreshSlot(slotKey: SlotKey) {
-    const old = this.slotContainerMap.get(slotKey)
-    if (old) old.destroy()
-    const pos = SLOT_POSITIONS[slotKey]
-    this.createSlot(slotKey, pos.x, pos.y)
-  }
-
-  private flashSlot(slotKey: SlotKey) {
-    const container = this.slotContainerMap.get(slotKey)
-    if (!container) return
-    this.tweens.add({
-      targets: container,
-      scaleX: 1.12,
-      scaleY: 1.12,
-      duration: 120,
-      yoyo: true,
-      ease: 'Quad.easeOut',
-      onComplete: () => { container.setScale(1) },
-    })
-  }
-
   // ── Inventory list ────────────────────────────────────────────────────────────
 
   private buildInventoryList() {
     if (this.inventoryContainer) this.inventoryContainer.destroy()
     this.inventoryContainer = this.add.container(0, 0)
 
-    if (this.inventory.length === 0) {
+    if (this.gearItems.length === 0) {
       this.inventoryContainer.add(
         this.add.text(
           MID_PANEL_X + MID_PANEL_W / 2,
           PANEL_Y + PANEL_H / 2,
-          'Inventory is empty',
+          InventoryStore.get() ? 'No equippable gear in your bag' : 'Loading…',
           { fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#333355' }
         ).setOrigin(0.5, 0.5)
       )
       return
     }
 
+    const listH        = PANEL_H - 50
+    const visibleCount = Math.floor(listH / (ITEM_ROW_H + 5))
+    const maxOffset    = Math.max(0, this.gearItems.length - visibleCount)
+    this.scrollOffset  = Math.min(this.scrollOffset, maxOffset)
+
+    const visible = this.gearItems.slice(this.scrollOffset, this.scrollOffset + visibleCount)
     let yOff = 0
-    for (const item of this.inventory) {
+    for (const item of visible) {
       this.createInventoryRow(item, yOff)
       yOff += ITEM_ROW_H + 5
     }
+
+    if (maxOffset > 0) {
+      this.inventoryContainer.add(
+        this.add.text(MID_PANEL_X + MID_PANEL_W / 2, PANEL_Y + PANEL_H - 8,
+          `▲▼  ${this.scrollOffset + 1}–${this.scrollOffset + visible.length} of ${this.gearItems.length}`, {
+          fontSize: '10px', fontFamily: 'Arial, sans-serif', color: '#555577',
+        }).setOrigin(0.5, 1)
+      )
+    }
   }
 
-  private createInventoryRow(item: InventoryItem, yOff: number) {
+  private createInventoryRow(item: ClientInventoryItem, yOff: number) {
     const rowX = MID_PANEL_X + 8
     const rowY = PANEL_Y + 40 + yOff
     const rowW = MID_PANEL_W - 16
@@ -652,17 +575,21 @@ export class EquipmentScene extends Phaser.Scene {
     iconBg.strokeRoundedRect(rowX + 8, rowY + 6, 52, 52, 5)
     this.inventoryContainer.add(iconBg)
 
-    const iconGfx = this.add.graphics()
-    this.drawItemIcon(iconGfx, rowX + 34, rowY + 32, item.icon, rarCol, 0.85)
-    this.inventoryContainer.add(iconGfx)
+    this.inventoryContainer.add(
+      this.add.text(rowX + 34, rowY + 32, item.icon, { fontSize: '26px' }).setOrigin(0.5, 0.5)
+    )
 
     // Text info
+    const catalog    = EQUIPMENT_MAP[item.itemType]
+    const slotKey    = this.slotForItem(item)
     const rarName    = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
     const rarHex     = rarCol.toString(16).padStart(6, '0')
+    const slotLabel  = slotKey ? SLOT_LABELS[slotKey] : item.itemType
+    const xpNote     = catalog && catalog.xpRequired > 0 ? `  ·  needs ${catalog.xpRequired} XP` : ''
     const nameText   = this.add.text(rowX + 70, rowY + 9,  item.name, {
       fontSize: '14px', fontFamily: 'Georgia, serif', color: '#dde0ff', fontStyle: 'bold',
     })
-    const typeText   = this.add.text(rowX + 70, rowY + 27, `${rarName}  ·  ${SLOT_LABELS[item.itemType]}`, {
+    const typeText   = this.add.text(rowX + 70, rowY + 27, `${rarName}  ·  ${slotLabel}${xpNote}`, {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: `#${rarHex}`,
     })
     const statsText  = this.add.text(rowX + 70, rowY + 43, this.formatStats(item.stats), {
@@ -714,48 +641,24 @@ export class EquipmentScene extends Phaser.Scene {
     })
     this.inventoryContainer.add(rowHit)
 
-    // Equip hit zone
+    // Equip hit zone — emits a request; the server validates ownership, the
+    // XP gate and the destination slot, then pushes the updated inventory.
     const equipHit = this.add.rectangle(btnX + btnW / 2, btnY + btnH / 2, btnW, btnH, 0, 0)
       .setInteractive({ useHandCursor: true })
     equipHit.on('pointerover', () => drawBtn(0x3a3a6a))
     equipHit.on('pointerout',  () => drawBtn(0x2a2a4a))
     equipHit.on('pointerdown', () => {
-      drawBtn(0x5555aa)
-      this.time.delayedCall(100, () => {
-        drawBtn(0x2a2a4a)
-        this.equipItem(item)
-      })
+      if (!this.socket?.connected) {
+        this.showFeedback('Not connected to the server.')
+        return
+      }
+      this.socket.emit('equipment:equip', { itemId: item.id })
     })
     this.inventoryContainer.add(equipHit)
   }
 
-  // ── Equip / Unequip ──────────────────────────────────────────────────────────
-
-  private equipItem(item: InventoryItem) {
-    const slot    = item.itemType
-    const current = this.equipped[slot]
-    if (current) this.inventory.push(current)
-    this.inventory    = this.inventory.filter(i => i.id !== item.id)
-    this.equipped[slot] = item
-    if (this.selectedItem?.id === item.id) this.selectedItem = null
-
-    this.refreshSlot(slot)
-    this.flashSlot(slot)
-    this.buildInventoryList()
-    this.buildStatsPanel()
-  }
-
-  private unequipItem(slot: SlotKey) {
-    const item = this.equipped[slot]
-    if (!item) return
-    this.inventory.push(item)
-    this.equipped[slot] = null
-    this.refreshSlot(slot)
-    this.buildInventoryList()
-    this.buildStatsPanel()
-  }
-
   // ── Stats panel ───────────────────────────────────────────────────────────────
+  // Display-only math over the server-reported snapshot — never sent back.
 
   private buildStatsPanel() {
     if (this.statsContainer) this.statsContainer.destroy()
@@ -778,9 +681,10 @@ export class EquipmentScene extends Phaser.Scene {
       )
       yOff += 24
 
+      const slotKey = this.slotForItem(selected)
       const rarName = selected.rarity.charAt(0).toUpperCase() + selected.rarity.slice(1)
       this.statsContainer.add(
-        this.add.text(panX + panW / 2, yOff, `${rarName}  ·  ${SLOT_LABELS[selected.itemType]}`, {
+        this.add.text(panX + panW / 2, yOff, `${rarName}  ·  ${slotKey ? SLOT_LABELS[slotKey] : selected.itemType}`, {
           fontSize: '11px', fontFamily: 'Arial, sans-serif', color: `#${rarHex}`,
         }).setOrigin(0.5, 0)
       )
@@ -799,14 +703,13 @@ export class EquipmentScene extends Phaser.Scene {
       )
       yOff += 20
 
-      const slotCurrent = this.equipped[selected.itemType]
-      const statKeys: (keyof ItemStats)[] = ['attack', 'defense', 'spirit', 'intelligence', 'dexterity']
+      const slotCurrent = slotKey ? this.equipped[slotKey] ?? null : null
       let shownAny = false
 
-      for (const sk of statKeys) {
-        const newVal  = selected.stats[sk]   ?? 0
+      for (const sk of this.statKeys(selected.stats, slotCurrent?.stats ?? {})) {
+        const newVal  = selected.stats[sk]     ?? 0
         const curVal  = slotCurrent?.stats[sk] ?? 0
-        const total   = totalStats[sk]        ?? 0
+        const total   = totalStats[sk]         ?? 0
         if (newVal === 0 && curVal === 0) continue
         shownAny = true
 
@@ -853,10 +756,9 @@ export class EquipmentScene extends Phaser.Scene {
       this.statsContainer.add(dv1)
       yOff += 14
 
-      const statKeys: (keyof ItemStats)[] = ['attack', 'defense', 'spirit', 'intelligence', 'dexterity']
       let anyStats = false
 
-      for (const sk of statKeys) {
+      for (const sk of this.statKeys(totalStats, {})) {
         const val = totalStats[sk] ?? 0
         if (val === 0) continue
         anyStats = true
@@ -903,8 +805,8 @@ export class EquipmentScene extends Phaser.Scene {
       yOff += 14
 
       // Slot fill count
-      const slots  = Object.keys(this.equipped) as SlotKey[]
-      const filled = slots.filter(s => this.equipped[s] !== null).length
+      const slots  = Object.keys(SLOT_POSITIONS) as SlotKey[]
+      const filled = slots.filter(s => this.equipped[s]).length
       this.statsContainer.add(
         this.add.text(panX + panW / 2, yOff, `Slots:  ${filled} / ${slots.length}  equipped`, {
           fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#556677',
@@ -925,19 +827,27 @@ export class EquipmentScene extends Phaser.Scene {
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
-  private computeTotalStats(): ItemStats {
-    const totals: ItemStats = {}
+  private statKeys(
+    a: ClientItemStats,
+    b: ClientItemStats,
+  ): (keyof ClientItemStats)[] {
+    return [...new Set([...Object.keys(a), ...Object.keys(b)])] as (keyof ClientItemStats)[]
+  }
+
+  private computeTotalStats(): Record<string, number> {
+    const totals: Record<string, number> = {}
     for (const item of Object.values(this.equipped)) {
       if (!item) continue
-      for (const [k, v] of Object.entries(item.stats) as [keyof ItemStats, number][]) {
-        totals[k] = (totals[k] ?? 0) + v
+      for (const [k, v] of Object.entries(item.stats)) {
+        if (typeof v === 'number') totals[k] = (totals[k] ?? 0) + v
       }
     }
     return totals
   }
 
-  private formatStats(stats: ItemStats): string {
+  private formatStats(stats: ClientItemStats | Record<string, number>): string {
     return Object.entries(stats)
+      .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)
       .map(([k, v]) => `+${v} ${k.charAt(0).toUpperCase() + k.slice(1)}`)
       .join('  ')
   }

@@ -1,19 +1,33 @@
+// ============================================================
+// ChestScene — the personal storage chest.
+//
+// SECURITY: this scene only RENDERS the state the server reports
+// ('chest:data' / 'chest:updated') and requests transfers via
+// 'chest:transfer'.  Dropping an item is a request — nothing
+// moves until the server validates ownership and capacity and
+// pushes the updated chest + inventory back.
+// ============================================================
+
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import type { ClientInventoryItem } from '../systems/InventoryStore'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Rarity   = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
-type IconType = 'sword' | 'shield' | 'helm' | 'ring' | 'boots' | 'necklace' | 'belt' | 'gloves' | 'earring' | 'potion' | 'book'
+type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
 
-interface ChestItem {
-  id:       string
-  name:     string
-  itemType: string
-  rarity:   Rarity
-  stats:    Record<string, number>
-  quantity: number
-  icon:     string
+/** Shape of the server's chest:data / chest:updated payloads. */
+interface ChestPayload {
+  chest: {
+    chestId: string
+    ownerId: string
+    items: ClientInventoryItem[]
+    maxSlots: number
+  }
+  inventory: {
+    items: ClientInventoryItem[]
+  }
 }
 
 // Logical slot descriptor — position + which panel it belongs to
@@ -23,19 +37,6 @@ interface Slot {
   panel:  'chest' | 'inventory'
   index:  number   // 0-based index within its panel's item array
 }
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
-
-const MOCK_CHEST_ITEMS: ChestItem[] = [
-  { id: 'chest_item_1', name: 'Health Potion', itemType: 'consumable', rarity: 'common',   stats: { hp: 30 },          quantity: 3, icon: 'potion' },
-  { id: 'chest_item_2', name: 'Scholar Tome',  itemType: 'offHand',    rarity: 'uncommon', stats: { intelligence: 4 }, quantity: 1, icon: 'book'   },
-]
-
-const MOCK_INVENTORY_ITEMS: ChestItem[] = [
-  { id: 'sword_001',  name: 'Worn Sword',  itemType: 'mainHand', rarity: 'common',   stats: { attack: 5 },  quantity: 1, icon: 'sword'  },
-  { id: 'shield_001', name: 'Worn Shield', itemType: 'offHand',  rarity: 'common',   stats: { defense: 5 }, quantity: 1, icon: 'shield' },
-  { id: 'ring_001',   name: 'Silver Ring', itemType: 'ring1',    rarity: 'uncommon', stats: { spirit: 3 },  quantity: 1, icon: 'ring'   },
-]
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -65,8 +66,13 @@ const RIGHT_W   = GAME_WIDTH - RIGHT_X - 20 // 600
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
 export class ChestScene extends Phaser.Scene {
-  private chestItems:     ChestItem[] = []
-  private inventoryItems: ChestItem[] = []
+  private socket: Socket | null = null
+
+  // Server-reported state — only ever replaced by chest:data / chest:updated
+  private chestId:        string | null = null
+  private chestItems:     ClientInventoryItem[] = []
+  private inventoryItems: ClientInventoryItem[] = []
+  private maxSlots = MAX_SLOTS
 
   // Pre-computed slot grid positions (set once in create, never change)
   private chestSlots:     Slot[] = []
@@ -77,13 +83,14 @@ export class ChestScene extends Phaser.Scene {
 
   // Drag state — managed entirely through scene pointer events (no Phaser drag system)
   private dragging   = false
-  private dragItem:  ChestItem | null = null
+  private dragItem:  ClientInventoryItem | null = null
   private dragFrom:  Slot | null = null
-  private dragGfx:   Phaser.GameObjects.Graphics | null = null
-  private dragLabel: Phaser.GameObjects.Text | null = null
+  private dragGfx:   Phaser.GameObjects.Container | null = null
 
   // Hover highlight (single reused graphics object)
   private hoverGfx!: Phaser.GameObjects.Graphics
+
+  private feedbackText!: Phaser.GameObjects.Text
 
   private escKey!: Phaser.Input.Keyboard.Key
 
@@ -92,9 +99,15 @@ export class ChestScene extends Phaser.Scene {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   create() {
-    // Deep-copy mock data
-    this.chestItems     = MOCK_CHEST_ITEMS.map(i => ({ ...i, stats: { ...i.stats } }))
-    this.inventoryItems = MOCK_INVENTORY_ITEMS.map(i => ({ ...i, stats: { ...i.stats } }))
+    this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
+
+    this.chestId        = null
+    this.chestItems     = []
+    this.inventoryItems = []
+    this.dragging       = false
+    this.dragItem       = null
+    this.dragFrom       = null
+    this.dragGfx        = null
 
     // Build fixed slot grids
     this.chestSlots     = this.buildSlotGrid('chest')
@@ -106,7 +119,31 @@ export class ChestScene extends Phaser.Scene {
     // Reusable hover-highlight object (on top of everything static)
     this.hoverGfx = this.add.graphics().setDepth(20)
 
-    // First draw of item visuals
+    this.feedbackText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 48, '', {
+      fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#ff8866',
+      backgroundColor: '#000000aa', padding: { x: 10, y: 5 },
+    }).setOrigin(0.5, 0.5).setDepth(60).setVisible(false)
+
+    // ── Server listeners (server state is the only source of truth) ──────────
+    const onChestData = (data: ChestPayload) => this.applyChestData(data)
+    const onError = (err: { message?: string }) => {
+      if (err?.message) this.showFeedback(err.message)
+    }
+    this.socket?.on('chest:data', onChestData)
+    this.socket?.on('chest:updated', onChestData)
+    this.socket?.on('error', onError)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.socket?.off('chest:data', onChestData)
+      this.socket?.off('chest:updated', onChestData)
+      this.socket?.off('error', onError)
+    })
+
+    // Ask the server for the personal chest.  The chestId in this request is
+    // a placeholder — the server resolves the player's own chest and returns
+    // its real id, which we use for transfers.
+    this.socket?.emit('chest:open', { chestId: 'personal' })
+
+    // First draw (empty until chest:data arrives)
     this.rebuildItemLayer()
 
     // Scene-level pointer events — the only input system we use
@@ -122,6 +159,21 @@ export class ChestScene extends Phaser.Scene {
       this.cleanupDrag()
       this.scene.start('WorldScene')
     }
+  }
+
+  // ── Server snapshot → render state ─────────────────────────────────────────
+
+  private applyChestData(data: ChestPayload) {
+    this.chestId        = data.chest.chestId
+    this.chestItems     = data.chest.items ?? []
+    this.inventoryItems = data.inventory.items ?? []
+    this.maxSlots       = data.chest.maxSlots ?? MAX_SLOTS
+    this.rebuildItemLayer()
+  }
+
+  private showFeedback(message: string) {
+    this.feedbackText.setText(message).setVisible(true)
+    this.time.delayedCall(2600, () => this.feedbackText.setVisible(false))
   }
 
   // ── Slot grid ──────────────────────────────────────────────────────────────
@@ -214,18 +266,21 @@ export class ChestScene extends Phaser.Scene {
   }
 
   // ── Dynamic item layer ─────────────────────────────────────────────────────
-  // Destroyed and redrawn on every inventory change.
+  // Destroyed and redrawn on every server push.
 
   private rebuildItemLayer() {
     this.itemLayer.forEach(o => o.destroy())
     this.itemLayer = []
+
+    const loaded = this.chestId !== null
 
     // Panel titles + counts (depth 2, above slot backgrounds)
     this.push(this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 16, 'Chest Storage', {
       fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0).setDepth(2))
 
-    this.push(this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 34, `${this.chestItems.length} / ${MAX_SLOTS}`, {
+    this.push(this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 34,
+      loaded ? `${this.chestItems.length} / ${this.maxSlots}` : 'Loading…', {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
     }).setOrigin(0.5, 0).setDepth(2))
 
@@ -233,7 +288,8 @@ export class ChestScene extends Phaser.Scene {
       fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0).setDepth(2))
 
-    this.push(this.add.text(RIGHT_X + RIGHT_W / 2, PANEL_Y + 34, `${this.inventoryItems.length} items`, {
+    this.push(this.add.text(RIGHT_X + RIGHT_W / 2, PANEL_Y + 34,
+      loaded ? `${this.inventoryItems.length} items` : 'Loading…', {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
     }).setOrigin(0.5, 0).setDepth(2))
 
@@ -256,9 +312,9 @@ export class ChestScene extends Phaser.Scene {
     return obj
   }
 
-  private drawItemInSlot(slot: Slot, item: ChestItem) {
+  private drawItemInSlot(slot: Slot, item: ClientInventoryItem) {
     const { x, y } = slot
-    const col = RARITY_COLOR[item.rarity]
+    const col = RARITY_COLOR[item.rarity] ?? RARITY_COLOR.common
 
     // Coloured slot highlight + rarity border
     const g = this.push(this.add.graphics().setDepth(2))
@@ -267,9 +323,10 @@ export class ChestScene extends Phaser.Scene {
     g.lineStyle(1.5, col, 1)
     g.strokeRoundedRect(x, y, SLOT_W, SLOT_H, 8)
 
-    // Icon
-    const ig = this.push(this.add.graphics().setDepth(3))
-    this.drawItemIcon(ig, x + SLOT_W / 2, y + 26, item.icon as IconType, col, 0.85)
+    // Icon (server-provided emoji)
+    this.push(this.add.text(x + SLOT_W / 2, y + 26, item.icon, {
+      fontSize: '24px',
+    }).setOrigin(0.5, 0.5).setDepth(3))
 
     // Name
     const nameStr = item.name.length > 10 ? item.name.slice(0, 9) + '…' : item.name
@@ -290,7 +347,7 @@ export class ChestScene extends Phaser.Scene {
   // ── Pointer helpers ────────────────────────────────────────────────────────
 
   /** Returns the slot and item under pointer coordinates, or null. */
-  private hitTest(px: number, py: number): { slot: Slot; item: ChestItem | null } | null {
+  private hitTest(px: number, py: number): { slot: Slot; item: ClientInventoryItem | null } | null {
     for (const slot of [...this.chestSlots, ...this.inventorySlots]) {
       if (px >= slot.x && px < slot.x + SLOT_W && py >= slot.y && py < slot.y + SLOT_H) {
         const item = slot.panel === 'chest'
@@ -319,23 +376,22 @@ export class ChestScene extends Phaser.Scene {
     this.dragFrom  = hit.slot
     this.dragItem  = hit.item
 
-    // Ghost graphics — drawn centred on the cursor, depth 50 (above everything)
-    const col = RARITY_COLOR[hit.item.rarity]
-    const gfx = this.add.graphics().setDepth(50)
+    // Ghost — drawn centred on the cursor, depth 50 (above everything)
+    const col = RARITY_COLOR[hit.item.rarity] ?? RARITY_COLOR.common
+    const hex = col.toString(16).padStart(6, '0')
+    const ghost = this.add.container(ptr.x, ptr.y).setDepth(50)
+    const gfx = this.add.graphics()
     gfx.fillStyle(0x0d0d28, 0.92)
     gfx.fillRoundedRect(-SLOT_W / 2, -SLOT_H / 2, SLOT_W, SLOT_H, 8)
     gfx.lineStyle(2, col, 1)
     gfx.strokeRoundedRect(-SLOT_W / 2, -SLOT_H / 2, SLOT_W, SLOT_H, 8)
-    this.drawItemIcon(gfx, 0, -4, hit.item.icon as IconType, col, 0.85)
-    gfx.setPosition(ptr.x, ptr.y)
-    this.dragGfx = gfx
-
-    // Ghost label
+    ghost.add(gfx)
+    ghost.add(this.add.text(0, -8, hit.item.icon, { fontSize: '24px' }).setOrigin(0.5, 0.5))
     const nameStr = hit.item.name.length > 10 ? hit.item.name.slice(0, 9) + '…' : hit.item.name
-    const hex = col.toString(16).padStart(6, '0')
-    this.dragLabel = this.add.text(ptr.x, ptr.y + SLOT_H / 2 - 10, nameStr, {
+    ghost.add(this.add.text(0, SLOT_H / 2 - 10, nameStr, {
       fontSize: '9px', fontFamily: 'Arial, sans-serif', color: `#${hex}`, fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5).setDepth(51)
+    }).setOrigin(0.5, 0.5))
+    this.dragGfx = ghost
 
     // Immediately redraw the item layer without the source slot so it visually
     // disappears from its origin the moment dragging begins.
@@ -352,7 +408,6 @@ export class ChestScene extends Phaser.Scene {
 
     // Move ghost
     this.dragGfx?.setPosition(ptr.x, ptr.y)
-    if (this.dragLabel) this.dragLabel.setPosition(ptr.x, ptr.y + SLOT_H / 2 - 10)
 
     // Highlight valid drop target
     const hit = this.hitTest(ptr.x, ptr.y)
@@ -367,167 +422,42 @@ export class ChestScene extends Phaser.Scene {
   private onUp(ptr: Phaser.Input.Pointer) {
     if (!this.dragging) return
 
+    const dragFrom = this.dragFrom
+    const dragItem = this.dragItem
+
     // Always clean up ghost first
     this.cleanupDrag()
+    this.dragFrom = null
+    this.dragItem = null
 
-    if (!this.dragFrom || !this.dragItem) return
+    // Redraw from the current server state — the dragged item snaps back to
+    // its source slot until (and unless) the server confirms the transfer.
+    this.rebuildItemLayer()
+
+    if (!dragFrom || !dragItem) return
 
     const hit = this.hitTest(ptr.x, ptr.y)
 
-    if (hit && hit.slot.panel !== this.dragFrom.panel) {
-      // Cross-panel transfer
-      const item = this.dragItem
-      if (this.dragFrom.panel === 'chest') {
-        // Chest → Inventory
-        this.chestItems     = this.chestItems.filter(i => i.id !== item.id)
-        this.inventoryItems = [...this.inventoryItems, item]
-      } else {
-        // Inventory → Chest
-        if (this.chestItems.length < MAX_SLOTS) {
-          this.inventoryItems = this.inventoryItems.filter(i => i.id !== item.id)
-          this.chestItems     = [...this.chestItems, item]
-        }
+    if (hit && hit.slot.panel !== dragFrom.panel) {
+      // Cross-panel transfer — a request only.  The server validates chest
+      // ownership, item ownership and capacity, then pushes 'chest:updated'.
+      if (!this.chestId || !this.socket?.connected) {
+        this.showFeedback('Not connected to the server.')
+        return
       }
+      this.socket.emit('chest:transfer', {
+        chestId:   this.chestId,
+        itemId:    dragItem.id,
+        direction: dragFrom.panel === 'chest' ? 'from_chest' : 'to_chest',
+      })
     }
-
-    this.dragFrom = null
-    this.dragItem = null
-    this.rebuildItemLayer()
   }
 
   // ── Drag cleanup ───────────────────────────────────────────────────────────
 
   private cleanupDrag() {
-    this.dragGfx?.destroy();   this.dragGfx   = null
-    this.dragLabel?.destroy(); this.dragLabel = null
+    this.dragGfx?.destroy(); this.dragGfx = null
     this.hoverGfx.clear()
     this.dragging = false
-  }
-
-  // ── Item icon drawing ──────────────────────────────────────────────────────
-
-  private drawItemIcon(
-    gfx:      Phaser.GameObjects.Graphics,
-    x:        number,
-    y:        number,
-    iconType: IconType,
-    color:    number,
-    scale:    number = 1,
-  ) {
-    const s = scale
-    gfx.fillStyle(color, 1)
-
-    switch (iconType) {
-      case 'sword': {
-        gfx.fillTriangle(x, y - 18 * s, x - 5 * s, y, x + 5 * s, y)
-        gfx.fillTriangle(x, y + 8 * s, x - 5 * s, y, x + 5 * s, y)
-        gfx.fillStyle(0xccaa44, 1)
-        gfx.fillRect(x - 10 * s, y - 2 * s, 20 * s, 4 * s)
-        gfx.fillStyle(0x886622, 1)
-        gfx.fillRect(x - 2.5 * s, y + 2 * s, 5 * s, 10 * s)
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y + 13 * s, 3.5 * s)
-        break
-      }
-      case 'shield': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 11 * s, y - 14 * s, 22 * s, 20 * s)
-        gfx.fillTriangle(x - 11 * s, y + 6 * s, x + 11 * s, y + 6 * s, x, y + 18 * s)
-        gfx.fillStyle(0xccaa44, 1)
-        gfx.fillCircle(x, y - 2 * s, 5 * s)
-        gfx.lineStyle(1.5 * s, 0xccaa44, 0.7)
-        gfx.strokeRect(x - 11 * s, y - 14 * s, 22 * s, 20 * s)
-        break
-      }
-      case 'helm': {
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y - 4 * s, 14 * s)
-        gfx.fillStyle(0x1a1a3a, 1)
-        gfx.fillRect(x - 15 * s, y - 4 * s, 30 * s, 15 * s)
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 14 * s, y - 4 * s, 5 * s, 12 * s)
-        gfx.fillRect(x + 9 * s, y - 4 * s, 5 * s, 12 * s)
-        gfx.fillStyle(0x000000, 0.45)
-        gfx.fillRect(x - 9 * s, y + 1 * s, 18 * s, 4 * s)
-        break
-      }
-      case 'ring': {
-        gfx.lineStyle(3 * s, color, 1)
-        gfx.strokeCircle(x, y + 3 * s, 10 * s)
-        gfx.fillStyle(0xffffff, 0.85)
-        gfx.fillCircle(x, y - 6 * s, 3.5 * s)
-        gfx.fillStyle(color, 0.7)
-        gfx.fillCircle(x, y - 6 * s, 2 * s)
-        break
-      }
-      case 'boots': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 7 * s, y - 15 * s, 13 * s, 18 * s)
-        gfx.fillRect(x - 7 * s, y + 3 * s, 17 * s, 8 * s)
-        gfx.fillCircle(x + 9 * s, y + 7 * s, 4 * s)
-        break
-      }
-      case 'necklace': {
-        gfx.lineStyle(2 * s, color, 0.85)
-        gfx.strokeCircle(x, y - 4 * s, 12 * s)
-        gfx.fillStyle(0x1a1a3a, 1)
-        gfx.fillRect(x - 14 * s, y - 4 * s, 28 * s, 16 * s)
-        gfx.fillStyle(color, 1)
-        gfx.fillTriangle(x, y + 4 * s, x - 5 * s, y - 2 * s, x + 5 * s, y - 2 * s)
-        gfx.fillStyle(0xffffff, 0.75)
-        gfx.fillCircle(x, y + 1 * s, 3 * s)
-        break
-      }
-      case 'belt': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 18 * s, y - 5 * s, 36 * s, 10 * s)
-        gfx.fillStyle(0xffd700, 1)
-        gfx.fillRect(x - 5 * s, y - 6 * s, 10 * s, 12 * s)
-        gfx.lineStyle(1.5 * s, 0x886600, 1)
-        gfx.strokeRect(x - 5 * s, y - 6 * s, 10 * s, 12 * s)
-        break
-      }
-      case 'gloves': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 9 * s, y - 6 * s, 18 * s, 14 * s)
-        gfx.fillRect(x + 9 * s, y - 8 * s, 6 * s, 8 * s)
-        gfx.fillRect(x - 9 * s, y - 12 * s, 4 * s, 7 * s)
-        gfx.fillRect(x - 3.5 * s, y - 13 * s, 4 * s, 8 * s)
-        gfx.fillRect(x + 2 * s, y - 12 * s, 4 * s, 7 * s)
-        break
-      }
-      case 'earring': {
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y - 8 * s, 5 * s)
-        gfx.fillStyle(0xffffff, 0.65)
-        gfx.fillCircle(x - 1 * s, y - 9 * s, 2 * s)
-        gfx.fillStyle(color, 0.9)
-        gfx.fillCircle(x, y + 4 * s, 4 * s)
-        gfx.lineStyle(1.5 * s, color, 0.8)
-        gfx.lineBetween(x, y - 3 * s, x, y)
-        break
-      }
-      case 'potion': {
-        gfx.fillStyle(color, 1)
-        gfx.fillCircle(x, y + 6 * s, 11 * s)
-        gfx.fillRect(x - 3 * s, y - 9 * s, 6 * s, 12 * s)
-        gfx.fillStyle(0x92400e, 1)
-        gfx.fillRect(x - 4 * s, y - 13 * s, 8 * s, 5 * s)
-        gfx.fillStyle(0xffffff, 0.3)
-        gfx.fillCircle(x - 4 * s, y + 2 * s, 4 * s)
-        break
-      }
-      case 'book': {
-        gfx.fillStyle(color, 1)
-        gfx.fillRect(x - 13 * s, y - 14 * s, 26 * s, 28 * s)
-        gfx.fillStyle(0x1a3080, 1)
-        gfx.fillRect(x - 13 * s, y - 14 * s, 5 * s, 28 * s)
-        gfx.fillStyle(0xf5f0e0, 0.9)
-        gfx.fillRect(x - 7 * s, y - 12 * s, 18 * s, 24 * s)
-        gfx.fillStyle(0x888888, 0.5)
-        for (let l = 0; l < 4; l++) gfx.fillRect(x - 5 * s, y - 8 * s + l * 6 * s, 14 * s, 2 * s)
-        break
-      }
-    }
   }
 }

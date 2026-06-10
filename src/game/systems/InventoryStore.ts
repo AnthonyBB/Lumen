@@ -6,7 +6,8 @@
  *  - Its contents are only ever updated when the server pushes `inventory:data`
  *    or `inventory:updated`.  Nothing here mutates data directly.
  *  - Never send item stats back to the server; always request mutations via
- *    the appropriate socket events (inventory:equip, inventory:unequip, etc.).
+ *    the appropriate socket events (equipment:equip, equipment:unequip,
+ *    chest:transfer, etc.) and wait for the server to push the result.
  */
 
 // ---------------------------------------------------------------------------

@@ -36,6 +36,29 @@ export class BootScene extends Phaser.Scene {
       frameWidth: 16, frameHeight: 16,
     })
 
+    // ── CRAFTPIX GRASSLAND/FOREST (purchased — see docs/GRAPHICS.md) ────────────
+    // Ground atlas: the Tiled/ copy is the FULL tileset (53 cols × 14 rows of
+    // 16px, per the pack's .tsx). Frame constants live in tileFrames.ts.
+    this.load.spritesheet('cp_ground', '/assets/craftpix/grassland/Tiled/ground_grasss.png', {
+      frameWidth: 16, frameHeight: 16,
+    })
+    // Vegetation & props ship as individual alpha PNGs (shadows baked in) —
+    // loaded as plain images, no frame math needed.
+    const gObj = '/assets/craftpix/grassland/PNG/Objects_separated'
+    const fObj = '/assets/craftpix/forest/PNG/Objects_separated'
+    for (let i = 1; i <= 4; i++) this.load.image(`cp_tree${i}`, `${gObj}/Tree${i}.png`)
+    for (const i of [1, 2, 3, 5, 6, 11]) this.load.image(`cp_ftree${i}`, `${fObj}/Tree${i}.png`)
+    for (let i = 1; i <= 6; i++) this.load.image(`cp_bush${i}`, `${gObj}/Bush${i}.png`)
+    for (let i = 1; i <= 6; i++) this.load.image(`cp_flower${i}`, `${gObj}/Flower${i}.png`)
+    this.load.image('cp_tuft1',  `${gObj}/grass_element2.png`)
+    this.load.image('cp_tuft2',  `${gObj}/grass_element3.png`)
+    this.load.image('cp_stone1', `${gObj}/Stone1_grass_shadow.png`)
+    this.load.image('cp_stone2', `${gObj}/Stone2_grass_shadow.png`)
+    this.load.image('cp_ruin1',  `${gObj}/Ruin1_grass_shadow.png`)
+    this.load.image('cp_ruin2',  `${gObj}/Ruin2_grass_shadow.png`)
+    this.load.image('cp_mushroom_red',   `${fObj}/Red_mushroom1.png`)
+    this.load.image('cp_mushroom_brown', `${fObj}/Brown_mushroom.png`)
+
     // ── BUILDINGS ───────────────────────────────────────────────────────────────
     // building_learning = purple house (magical / scholarly)
     // building_combat   = large stone house

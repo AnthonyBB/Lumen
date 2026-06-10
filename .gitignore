@@ -5,3 +5,15 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Purchased CraftPix assets — licensed for use in the game but NOT for
+# redistribution. This repo is public, so the raw assets must never be
+# committed. Deployments need these copied in as a separate build step.
+graphics/
+public/assets/craftpix/
+
+# Claude Code local files and session artifacts
+.claude/worktrees/
+.claude/launch.json
+.claude/settings.local.json
+.theme_*.png

@@ -83,6 +83,18 @@ export const TT_POPLAR_GREEN:  [number, number] = [tt(4, 0), tt(4, 1)]  // (4,0)
 export const TT_TREE_ROUND     = tt(5, 0)  // (5,0)  round green tree (single tile)
 export const TT_MUSHROOMS      = tt(5, 2)  // (5,2)  red mushrooms
 
+// ── CraftPix grassland: ground atlas ─────────────────────────────────────────
+// Sheet: public/assets/craftpix/grassland/Tiled/ground_grasss.png — the FULL
+// tileset (the PNG-folder copy is a condensed sampler). Geometry from the
+// pack's .tsx: 16×16 tiles, 53 columns × 14 rows. frame = row * 53 + col.
+// All four frames pixel-verified by extraction before use.
+export const CP_COLS = 53
+const cp = (col: number, row: number) => row * CP_COLS + col
+export const CP_GRASS      = cp(2, 1)   // (2,1)  solid grass fill
+export const CP_GRASS2     = cp(25, 1)  // (25,1) grass fill, slight variant
+export const CP_DIRT       = cp(9, 8)   // (9,8)  smooth dirt — path fill
+export const CP_DIRT_STONY = cp(12, 3)  // (12,3) stony dirt — path variant
+
 // ── Tiny Dungeon: monsters & creatures ──────────────────────────────────────
 // All nine frames pixel-verified by extracting upscaled tiles from the sheet.
 // Character block layout: row 7 = heroes + chests (mimic at col 8),

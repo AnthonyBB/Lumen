@@ -22,8 +22,9 @@ export class BootScene extends Phaser.Scene {
     })
 
     // ── GROUND TILES ────────────────────────────────────────────────────────────
-    this.load.image('ground', '/assets/tiles/tileset_ground.png')
-    this.load.image('path',   '/assets/tiles/tileset_road.png')
+    // Loaded as spritesheets so individual frames can be addressed (32×32 per tile)
+    this.load.spritesheet('ground_tiles', '/assets/tiles/tileset_ground.png', { frameWidth: 32, frameHeight: 32 })
+    this.load.spritesheet('road_tiles',   '/assets/tiles/tileset_road.png',   { frameWidth: 32, frameHeight: 32 })
 
     // ── BUILDINGS ───────────────────────────────────────────────────────────────
     // building_learning = purple house (magical / scholarly)
@@ -74,12 +75,6 @@ export class BootScene extends Phaser.Scene {
   }
 
   create() {
-    // Extract single grass tile from the ground tileset (col 1, row 4 = pixel 32,128)
-    this.textures.get('ground').add('grass_fill', 0, 32, 128, 32, 32)
-
-    // Extract single path tile from the road tileset (col 1, row 1 = pixel 32,32)
-    this.textures.get('path').add('road_fill', 0, 32, 32, 32, 32)
-
     this.scene.start('WorldScene')
   }
 }

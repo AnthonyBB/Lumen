@@ -45,12 +45,6 @@ type PathState = 'idle' | 'walking' | 'encounter_pause' | 'battling' | 'complete
 
 // ── Biome constants ─────────────────────────────────────────────────────────
 
-const BIOME_PATH_COLOR: Record<string, number> = {
-  'Desert': 0xc4904a, 'Pine Forest': 0x3a3a20, 'Deciduous Forest': 0x6a4a20,
-  'Swamp': 0x2a3a18, 'Snow': 0x8899bb, 'Grassland': 0x8a7a30,
-  'Tropical Rainforest': 0x2a4a10, 'Ocean': 0x3a5a7a,
-}
-
 const MOB_NAMES: Record<string, string> = {
   'Desert': 'Desert Scorpion', 'Pine Forest': 'Forest Wolf',
   'Deciduous Forest': 'Woodland Bear', 'Swamp': 'Swamp Serpent',
@@ -190,25 +184,28 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private drawPath() {
-    const pathColor = BIOME_PATH_COLOR[this.biomeData.biome] ?? 0x8a6a40
-    const pathGfx   = this.add.graphics().setDepth(3)
-
     for (let i = 0; i < this.pathNodes.length - 1; i++) {
       const a = this.pathNodes[i]
       const b = this.pathNodes[i + 1]
       if (a.x === b.x && a.y === b.y) continue
-      pathGfx.lineStyle(20, 0x000000, 0.2)
-      pathGfx.lineBetween(a.x + 5, a.y + 5, b.x + 5, b.y + 5)
-      pathGfx.lineStyle(16, pathColor, 0.85)
-      pathGfx.lineBetween(a.x, a.y, b.x, b.y)
-      pathGfx.lineStyle(5, 0xffffff, 0.07)
-      pathGfx.lineBetween(a.x, a.y, b.x, b.y)
+      this.drawPathBetweenWaypoints(a.x, a.y, b.x, b.y)
     }
 
     this.pathNodes.forEach((node, i) => {
       if (node.type === 'encounter') this.renderEncounterMarker(i)
       if (node.type === 'end')       this.renderEndMarker(node)
     })
+  }
+
+  private drawPathBetweenWaypoints(x1: number, y1: number, x2: number, y2: number) {
+    const dist = Phaser.Math.Distance.Between(x1, y1, x2, y2)
+    const steps = Math.floor(dist / 48)
+    for (let i = 0; i <= steps; i++) {
+      const t = steps === 0 ? 0 : i / steps
+      const px = Phaser.Math.Linear(x1, x2, t)
+      const py = Phaser.Math.Linear(y1, y2, t)
+      this.add.image(px, py, 'road_tiles', 0).setScale(2).setDepth(2)
+    }
   }
 
   private renderEncounterMarker(nodeIdx: number) {
@@ -486,6 +483,66 @@ export class BiomeScene extends Phaser.Scene {
   // Biome drawing — all at world scale (WORLD_W × WORLD_H)
   // ══════════════════════════════════════════════════════════════════════════
 
+  private drawBiomeGround(biomeType: string) {
+    const frameMap: Record<string, number> = {
+      'Desert':               6,
+      'Snow':                 0,
+      'Grassland':            0,
+      'Pine Forest':          1,
+      'Deciduous Forest':     2,
+      'Swamp':                3,
+      'Tropical Rainforest':  4,
+      'Ocean':                5,
+    }
+    const isRoad = biomeType === 'Desert'
+    const sheet  = isRoad ? 'road_tiles' : 'ground_tiles'
+    const frame  = frameMap[biomeType] ?? 0
+
+    // Check whether the texture has enough frames; fall back to frame 0
+    const tex = this.textures.get(sheet)
+    const safeFrame = tex && tex.frameTotal > frame ? frame : 0
+
+    const rt = this.add.renderTexture(0, 0, WORLD_W, WORLD_H).setDepth(0)
+    const tileSize = 64  // 32 * 2 scale
+    for (let ty = 0; ty < WORLD_H; ty += tileSize) {
+      for (let tx = 0; tx < WORLD_W; tx += tileSize) {
+        rt.stamp(sheet, safeFrame, tx + tileSize / 2, ty + tileSize / 2)
+      }
+    }
+  }
+
+  /** Scatter trees and rocks avoiding close proximity to waypoints. */
+  private scatterProps(
+    count: number,
+    minX: number, maxX: number,
+    minY: number, maxY: number,
+    rng: Phaser.Math.RandomDataGenerator,
+    treeRatio = 0.6,
+    tint?: number,
+  ) {
+    for (let i = 0; i < count; i++) {
+      const x = minX + rng.frac() * (maxX - minX)
+      const y = minY + rng.frac() * (maxY - minY)
+
+      const tooClose = this.pathNodes.some(wp =>
+        Math.abs(wp.x - x) < 120 && Math.abs(wp.y - y) < 120,
+      )
+      if (tooClose) continue
+
+      if (rng.frac() < treeRatio) {
+        const img = this.add.image(x, y, 'tree')
+          .setScale(1.5 + rng.frac())
+          .setDepth(10)
+        if (tint !== undefined) img.setTint(tint)
+      } else {
+        const img = this.add.image(x, y, 'rock')
+          .setScale(2 + rng.frac())
+          .setDepth(9)
+        if (tint !== undefined) img.setTint(tint)
+      }
+    }
+  }
+
   private drawBiome(biome: string, rng: Phaser.Math.RandomDataGenerator) {
     switch (biome) {
       case 'Desert':              this.drawDesert(rng);             break
@@ -501,19 +558,19 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private drawDesert(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
+    this.drawBiomeGround('Desert')
+    const g = this.add.graphics().setDepth(1)
     g.fillStyle(0x87ceeb, 1).fillRect(0, 0, WORLD_W, WORLD_H * 0.45)
-    g.fillStyle(0xf4c87a, 1).fillRect(0, WORLD_H * 0.45, WORLD_W, WORLD_H * 0.55)
     const sc = [0xe8b84b, 0xe8c060, 0xd4a040, 0xf0d080]
     for (let i = 0; i < 200; i++) {
-      g.fillStyle(sc[rng.integerInRange(0, 3)], 0.4)
+      g.fillStyle(sc[rng.integerInRange(0, 3)], 0.3)
       g.fillRect(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.3, WORLD_H),
         rng.integerInRange(60, 180), rng.integerInRange(20, 60))
     }
     g.fillStyle(0xffe040, 0.9).fillCircle(WORLD_W * 0.88, WORLD_H * 0.08, 90)
     g.fillStyle(0xfff080, 0.5).fillCircle(WORLD_W * 0.88, WORLD_H * 0.08, 120)
     for (let i = 0; i < 12; i++) {
-      g.fillStyle(0xd4a040, 0.55)
+      g.fillStyle(0xd4a040, 0.4)
       g.fillEllipse(rng.integerInRange(100, WORLD_W - 100), rng.integerInRange(WORLD_H * 0.35, WORLD_H * 0.8),
         rng.integerInRange(400, 900), rng.integerInRange(80, 200))
     }
@@ -521,10 +578,8 @@ export class BiomeScene extends Phaser.Scene {
       this.drawCactus(g, rng.integerInRange(60, WORLD_W - 60), rng.integerInRange(WORLD_H * 0.2, WORLD_H * 0.85),
         rng.integerInRange(60, 120))
     }
-    for (let i = 0; i < 30; i++) {
-      g.fillStyle(0xb0905a, 0.7)
-      g.fillCircle(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.3, WORLD_H), rng.integerInRange(12, 40))
-    }
+    // Rock scatter — no trees in desert
+    this.scatterProps(25, 0, WORLD_W, WORLD_H * 0.3, WORLD_H, rng, 0.0)
   }
 
   private drawCactus(g: Phaser.GameObjects.Graphics, x: number, y: number, h: number) {
@@ -537,18 +592,13 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private drawPineForest(rng: Phaser.Math.RandomDataGenerator) {
-    const g = this.add.graphics().setDepth(0)
-    g.fillStyle(0x0a1a0d, 1).fillRect(0, 0, WORLD_W, WORLD_H)
-    g.fillStyle(0x1a4a20, 1).fillRect(0, WORLD_H * 0.5, WORLD_W, WORLD_H * 0.5)
+    this.drawBiomeGround('Pine Forest')
+    const g = this.add.graphics().setDepth(1)
+    g.fillStyle(0x0a1a0d, 0.6).fillRect(0, 0, WORLD_W, WORLD_H * 0.5)
     for (let i = 0; i < 18; i++) {
       g.fillStyle(0xffffff, rng.realInRange(0.03, 0.12))
       g.fillEllipse(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.5, WORLD_H * 0.85),
         rng.integerInRange(300, 700), rng.integerInRange(50, 130))
-    }
-    for (let i = 0; i < 120; i++) {
-      g.fillStyle(0x0f3015, 1)
-      g.fillRect(rng.integerInRange(0, WORLD_W), rng.integerInRange(WORLD_H * 0.5, WORLD_H - 80),
-        rng.integerInRange(8, 30), rng.integerInRange(4, 12))
     }
     for (let i = 0; i < 80; i++) {
       this.drawPineTree(g, rng.integerInRange(40, WORLD_W - 40), rng.integerInRange(80, WORLD_H * 0.9),
@@ -561,10 +611,8 @@ export class BiomeScene extends Phaser.Scene {
       g.fillStyle(0xcc4444, 1).fillCircle(mx, my - 14, 14)
       g.fillStyle(0xffffff, 1).fillCircle(mx - 4, my - 16, 2).fillCircle(mx + 4, my - 13, 2)
     }
-    for (let i = 0; i < 25; i++) {
-      const br = rng.integerInRange(18, 50)
-      g.fillStyle(0x4a4a4a, 1).fillCircle(rng.integerInRange(60, WORLD_W - 60), rng.integerInRange(WORLD_H * 0.4, WORLD_H - 80), br)
-    }
+    // Dense tree + rock scatter for pine forest
+    this.scatterProps(60, 0, WORLD_W, 0, WORLD_H, rng, 0.75)
   }
 
   private drawPineTree(g: Phaser.GameObjects.Graphics, x: number, y: number, h: number) {

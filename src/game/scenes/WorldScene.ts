@@ -87,11 +87,27 @@ export class WorldScene extends Phaser.Scene {
 
   create() {
     // ── Ground ───────────────────────────────────────────────────────────────
-    // Uses a single grass tile extracted from tileset_ground.png (col 1, row 4).
-    // setTileScale(4,4) makes each repeat 128 game-px wide (~10 tiles visible
-    // across the 1280-wide viewport) for a pleasingly chunky pixel-art look.
-    const ground = this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 'ground', 'grass_fill').setOrigin(0, 0)
-    ground.setTileScale(4, 4)
+    // Solid grass fill using a colour that matches the tileset_ground palette.
+    const groundFill = this.add.graphics()
+    groundFill.fillStyle(0x5a8a3c, 1)
+    groundFill.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+    groundFill.setDepth(0)
+
+    // Scatter texture tiles from ground_tiles spritesheet for visual variety.
+    // Frames 0–3 are solid/variant grass tiles in the first row of the tileset.
+    // Each tile is stamped at 2× scale (64 px) every 128 px across the world.
+    {
+      const groundRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      groundRT.setDepth(0)
+      const tileW = 64  // 32 px tile at ×2 scale
+      const rand = this.rng(99)
+      for (let ty = 0; ty < WORLD_HEIGHT; ty += tileW) {
+        for (let tx = 0; tx < WORLD_WIDTH; tx += tileW) {
+          const frame = Math.floor(rand() * 4)  // frames 0-3: grass variants
+          groundRT.stamp('ground_tiles', frame, tx + tileW / 2, ty + tileW / 2, { scaleX: 2, scaleY: 2 })
+        }
+      }
+    }
 
     // ── Path (road) ───────────────────────────────────────────────────────────
     const centerX = WORLD_WIDTH / 2
@@ -100,9 +116,11 @@ export class WorldScene extends Phaser.Scene {
     const pathHalfH = 3
 
     // ── Horizontal winding path (Desert ↔ Ocean) ──────────────────────────────
-    // Each 32×32 tileSprite uses a road tile from tileset_road.png at 1:1 so
-    // the full tile pattern is visible without cropping or setTileScale distortion.
+    // Uses a RenderTexture for performance — stamps road_tiles frame 0 (sandy
+    // dirt fill) at each tile position rather than creating individual sprites.
     {
+      const hRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      hRoadRT.setDepth(1)
       const rand = this.rng(42)
       const totalTiles = WORLD_WIDTH / TILE_SIZE           // 80 tiles
       const offsets = this.buildWindingOffsets(totalTiles, 4, 8, rand)
@@ -115,13 +133,15 @@ export class WorldScene extends Phaser.Scene {
         const baseY = centerY + offsets[tx] * TILE_SIZE
         for (let ty = -pathHalfH; ty <= pathHalfH; ty++) {
           const py = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, baseY + ty * TILE_SIZE))
-          this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path', 'road_fill').setOrigin(0, 0)
+          hRoadRT.stamp('road_tiles', 0, px + TILE_SIZE / 2, py + TILE_SIZE / 2)
         }
       }
     }
 
     // ── Vertical winding path (Snow ↔ Swamp) ─────────────────────────────────
     {
+      const vRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      vRoadRT.setDepth(1)
       const rand = this.rng(137)
       const totalTiles = WORLD_HEIGHT / TILE_SIZE
       const offsets = this.buildWindingOffsets(totalTiles, 4, 8, rand)
@@ -133,13 +153,16 @@ export class WorldScene extends Phaser.Scene {
         const baseX = centerX + offsets[ty] * TILE_SIZE
         for (let tx = -pathHalfW; tx <= pathHalfW; tx++) {
           const px = Math.max(0, Math.min(WORLD_WIDTH - TILE_SIZE, baseX + tx * TILE_SIZE))
-          this.add.tileSprite(px, py, TILE_SIZE, TILE_SIZE, 'path', 'road_fill').setOrigin(0, 0)
+          vRoadRT.stamp('road_tiles', 0, px + TILE_SIZE / 2, py + TILE_SIZE / 2)
         }
       }
     }
 
     // ── Diagonal branch paths to corner biomes ────────────────────────────────
-    // Each diagonal is 3 tiles wide and steps from the branch point to the biome entrance
+    // Each diagonal is 3 tiles wide and steps from the branch point to the biome entrance.
+    // A shared RenderTexture is used so we stamp road tiles rather than spawning objects.
+    const diagRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+    diagRT.setDepth(1)
     const diagonalBranches = [
       // NW: from (960,960) to (640,640) — Pine Forest
       { fromX: 960, fromY: 960, toX: 640, toY: 640 },
@@ -152,7 +175,7 @@ export class WorldScene extends Phaser.Scene {
     ]
 
     for (const branch of diagonalBranches) {
-      this.drawDiagonalPath(branch.fromX, branch.fromY, branch.toX, branch.toY)
+      this.drawDiagonalPath(branch.fromX, branch.fromY, branch.toX, branch.toY, diagRT)
     }
 
     // ── Trees ────────────────────────────────────────────────────────────────
@@ -210,6 +233,20 @@ export class WorldScene extends Phaser.Scene {
       this.drawBiomeGate(gate.x, gate.y, gate.name, gate.color)
     }
 
+    // ── Rock accents around each biome gate ───────────────────────────────────
+    for (const gate of this.biomeGates) {
+      this.add.image(gate.x - 40, gate.y, 'rock').setScale(2.5).setDepth(3)
+      this.add.image(gate.x + 40, gate.y, 'rock').setScale(2.5).setDepth(3)
+    }
+
+    // ── Benches near the town square ──────────────────────────────────────────
+    const benchPositions: [number, number][] = [
+      [1100, 1250], [1460, 1250], [1130, 1390], [1430, 1390],
+    ]
+    for (const [bx, by] of benchPositions) {
+      this.add.image(bx, by, 'bench').setScale(2.5).setDepth(3)
+    }
+
     // ── Player ────────────────────────────────────────────────────────────────
     this.player = new Player(this, this.spawnX, this.spawnY)
 
@@ -259,8 +296,13 @@ export class WorldScene extends Phaser.Scene {
     this.scene.launch('UIScene')
   }
 
-  /** Draw a winding diagonal path (3 tiles wide) stepping from (fromX,fromY) to (toX,toY) */
-  private drawDiagonalPath(fromX: number, fromY: number, toX: number, toY: number) {
+  /** Draw a winding diagonal path (3 tiles wide) stepping from (fromX,fromY) to (toX,toY).
+   *  Stamps road_tiles frame 0 onto the provided RenderTexture for performance. */
+  private drawDiagonalPath(
+    fromX: number, fromY: number,
+    toX: number, toY: number,
+    rt: Phaser.GameObjects.RenderTexture,
+  ) {
     const dx = toX > fromX ? 1 : -1
     const dy = toY > fromY ? 1 : -1
     const steps = Math.abs(toX - fromX) / TILE_SIZE
@@ -280,7 +322,7 @@ export class WorldScene extends Phaser.Scene {
         const oy = cy + (t + perp) * ( dx) * TILE_SIZE
         const clampedOx = Math.max(0, Math.min(WORLD_WIDTH  - TILE_SIZE, ox - TILE_SIZE / 2))
         const clampedOy = Math.max(0, Math.min(WORLD_HEIGHT - TILE_SIZE, oy - TILE_SIZE / 2))
-        this.add.tileSprite(clampedOx, clampedOy, TILE_SIZE, TILE_SIZE, 'path', 'road_fill').setOrigin(0, 0)
+        rt.stamp('road_tiles', 0, clampedOx + TILE_SIZE / 2, clampedOy + TILE_SIZE / 2)
       }
     }
   }

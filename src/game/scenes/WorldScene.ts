@@ -406,50 +406,84 @@ export class WorldScene extends Phaser.Scene {
     return offsets
   }
 
-  /** Draw a biome entrance gate at world position (x,y) */
+  /** Draw a biome entrance portal at world position (x,y) — an animated
+   *  magical vortex in the biome's color that reads as "step in to travel". */
   private drawBiomeGate(x: number, y: number, name: string, color: number) {
-    const g = this.add.graphics()
-    g.setDepth(4)
+    // Stone platform base grounding the portal
+    const base = this.add.graphics().setDepth(3)
+    base.fillStyle(0x4a4a55, 1)
+    base.fillEllipse(x, y + 8, 76, 22)
+    base.fillStyle(0x5d5d6a, 1)
+    base.fillEllipse(x, y + 5, 76, 22)
+    base.fillStyle(0x44444f, 1)
+    base.fillEllipse(x, y + 5, 58, 15)
 
-    // Stone pillars (dark gray rectangles, 16×48)
-    g.fillStyle(0x555566, 1)
-    g.fillRect(x - 28, y - 40, 16, 48)
-    g.fillRect(x + 12, y - 40, 16, 48)
+    // Soft colored halo behind the vortex
+    const halo = this.add.graphics().setDepth(4)
+    for (let i = 4; i >= 1; i--) {
+      halo.fillStyle(color, 0.05 * i)
+      halo.fillEllipse(x, y - 32, 30 + i * 14, 60 + i * 16)
+    }
 
-    // Pillar highlights
-    g.fillStyle(0x777788, 1)
-    g.fillRect(x - 28, y - 40, 3, 48)
-    g.fillRect(x + 12, y - 40, 3, 48)
+    // The vortex: nested ellipses, bright rim → deep center
+    const vortex = this.add.graphics().setDepth(5)
+    vortex.fillStyle(color, 0.95)
+    vortex.fillEllipse(0, 0, 44, 72)
+    vortex.fillStyle(0xffffff, 0.55)
+    vortex.fillEllipse(0, 0, 34, 58)
+    vortex.fillStyle(color, 0.9)
+    vortex.fillEllipse(0, 0, 26, 46)
+    vortex.fillStyle(0x16162a, 0.85)
+    vortex.fillEllipse(0, 0, 14, 28)
+    vortex.setPosition(x, y - 32)
 
-    // Lintel (horizontal bar)
-    g.fillStyle(0x555566, 1)
-    g.fillRect(x - 32, y - 44, 64, 8)
+    // Slow breathing pulse on the vortex
+    this.tweens.add({
+      targets: vortex,
+      scaleX: 1.12, scaleY: 1.06,
+      duration: 1400,
+      yoyo: true, repeat: -1,
+      ease: 'Sine.easeInOut',
+    })
+    // Halo pulses opposite for shimmer
+    this.tweens.add({
+      targets: halo,
+      alpha: 0.55,
+      duration: 1400,
+      yoyo: true, repeat: -1,
+      ease: 'Sine.easeInOut',
+    })
 
-    // Lintel highlight
-    g.fillStyle(0x777788, 1)
-    g.fillRect(x - 32, y - 44, 64, 2)
-
-    // Banner / flag (small colored rectangle above arch)
-    g.fillStyle(color, 1)
-    g.fillRect(x - 12, y - 64, 24, 14)
-    g.fillStyle(0x333344, 1)
-    g.fillRect(x - 12, y - 66, 24, 3)
-
-    // Glowing orb at center top of arch
-    g.fillStyle(color, 0.8)
-    g.fillCircle(x, y - 56, 6)
-    // Orb inner highlight
-    g.fillStyle(0xffffff, 0.4)
-    g.fillCircle(x - 2, y - 58, 2)
+    // Rising sparkles around the portal mouth
+    for (let i = 0; i < 5; i++) {
+      const sp = this.add.graphics().setDepth(6)
+      sp.fillStyle(0xffffff, 0.9)
+      sp.fillCircle(0, 0, 2)
+      sp.fillStyle(color, 0.6)
+      sp.fillCircle(0, 0, 4)
+      const sx = x + (i - 2) * 12 + (i % 2 === 0 ? 4 : -4)
+      sp.setPosition(sx, y - 8)
+      sp.setAlpha(0)
+      this.tweens.add({
+        targets: sp,
+        y: y - 76,
+        alpha: { from: 0.9, to: 0 },
+        duration: 1800,
+        delay: i * 360,
+        repeat: -1,
+        ease: 'Sine.easeOut',
+        onRepeat: () => { sp.setPosition(sx, y - 8) },
+      })
+    }
 
     // Label underneath
-    this.add.text(x, y + 16, name, {
+    this.add.text(x, y + 20, name, {
       fontSize: '12px',
       fontFamily: 'Georgia, serif',
       color: '#ffd700',
       backgroundColor: '#00000099',
       padding: { x: 4, y: 2 },
-    }).setOrigin(0.5, 0).setDepth(4)
+    }).setOrigin(0.5, 0).setDepth(6)
   }
 
   private generateTreePositions(count: number): [number, number][] {

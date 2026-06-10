@@ -141,16 +141,21 @@ export function registerHandlers(
   } = game;
 
   // ── player:join ──────────────────────────────────────────────────────────
-  socket.on('player:join', async (payload: PlayerJoinPayload) => {
-    if (typeof payload?.username !== 'string') {
-      socket.emit('error', { message: 'Invalid join payload.' });
+  socket.on('player:join', async (_payload: PlayerJoinPayload) => {
+    // SECURITY: identity comes from the verified JWT (socket.data, set by the
+    // auth middleware) — NEVER from the payload. Trusting a client-supplied
+    // username here would let anyone join as another player and load (and
+    // spend) that player's inventory and progress.
+    if (!socket.data.authenticated || typeof socket.data.username !== 'string') {
+      socket.emit('error', { message: 'You must be logged in to join the game.' });
       return;
     }
+    const username = socket.data.username as string;
 
     // Load persisted inventory, chest, and XP progress from MongoDB before
     // creating the in-memory player record.
     // Uses the username as the stable userId for DB lookups.
-    const userId = payload.username;
+    const userId = username;
     // Pass socket.id so the in-memory record is keyed by socket ID — all
     // subsequent handler calls use socket.id for lookups and addShard() will
     // find the correct inventory.  The userId→socketId mapping is recorded
@@ -160,7 +165,7 @@ export function registerHandlers(
     await chestManager.loadChest(userId);
     const savedProgress = await playerManager.loadProgress(userId);
 
-    const result = game.playerJoin(socket.id, payload.username);
+    const result = game.playerJoin(socket.id, username);
 
     if ('error' in result) {
       socket.emit('error', { message: result.error });

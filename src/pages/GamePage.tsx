@@ -29,6 +29,11 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
     })
 
     s.on('connect', () => {
+      // (Re)join on every connect — including reconnects after a server
+      // restart. Without this the server has no player record for the socket
+      // and every shop/learning/inventory action fails with "You must join...".
+      // The server derives identity from the JWT; the payload is informational.
+      s.emit('player:join', { username: user?.username ?? '' })
       s.emit('players:get_online')
     })
 
@@ -44,7 +49,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
     return () => {
       s.disconnect()
     }
-  }, [token, needsContentMode])
+  }, [token, needsContentMode, user?.username])
 
   useEffect(() => {
     if (needsContentMode) return // don't start Phaser until mode is chosen

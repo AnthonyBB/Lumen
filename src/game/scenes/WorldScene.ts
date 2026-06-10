@@ -103,7 +103,7 @@ export class WorldScene extends Phaser.Scene {
     // Varied roguelike grass: 16px tiles stamped at 4× scale (64px cells).
     // ~85% plain grass, the rest pebbled/tufted, plus scattered flower patches.
     {
-      const groundRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      const groundRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
       groundRT.setDepth(0)
       const tileW = 64  // 16 px tile at ×4 scale
       const rand = this.rng(99)
@@ -143,7 +143,7 @@ export class WorldScene extends Phaser.Scene {
     // Uses a RenderTexture for performance — stamps roguelike dirt tiles
     // (16px at 2× = 32px) at each tile position rather than creating sprites.
     {
-      const hRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      const hRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
       hRoadRT.setDepth(1)
       const rand = this.rng(42)
       const totalTiles = WORLD_WIDTH / TILE_SIZE           // 80 tiles
@@ -165,7 +165,7 @@ export class WorldScene extends Phaser.Scene {
 
     // ── Vertical winding path (Snow ↔ Swamp) ─────────────────────────────────
     {
-      const vRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      const vRoadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
       vRoadRT.setDepth(1)
       const rand = this.rng(137)
       const totalTiles = WORLD_HEIGHT / TILE_SIZE
@@ -187,7 +187,7 @@ export class WorldScene extends Phaser.Scene {
     // ── Diagonal branch paths to corner biomes ────────────────────────────────
     // Each diagonal is 3 tiles wide and steps from the branch point to the biome entrance.
     // A shared RenderTexture is used so we stamp road tiles rather than spawning objects.
-    const diagRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+    const diagRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
     diagRT.setDepth(1)
     const diagonalBranches = [
       // NW: from (960,960) to (640,640) — Pine Forest

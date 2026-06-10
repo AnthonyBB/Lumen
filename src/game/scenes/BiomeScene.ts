@@ -540,7 +540,7 @@ export class BiomeScene extends Phaser.Scene {
     }
     const spec = SPECS[biomeType] ?? SPECS['Grassland']
 
-    const rt = this.add.renderTexture(0, 0, WORLD_W, WORLD_H).setDepth(0)
+    const rt = this.add.renderTexture(0, 0, WORLD_W, WORLD_H).setOrigin(0).setDepth(0)
     const tileSize = 64  // 16 px tile at ×4 scale
     const cfg = { scaleX: 4, scaleY: 4, tint: spec.tint ?? 0xffffff }
     for (let ty = 0; ty < WORLD_H; ty += tileSize) {

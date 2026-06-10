@@ -43,11 +43,8 @@ const td = (col: number, row: number) => row * 12 + col
 const TD_TEACHER_NPC  = td(0, 7)
 /** (1,7) villager-like human — pixel-verified character row. */
 const TD_MERCHANT_NPC = td(1, 7)
-/** Checkered banquet table, 3 wide × 2 tall, at (6..8, 5..6) in the furniture
- *  block (rows 5-6). Inferred from the sheet's 12-column grid — shell access
- *  for per-tile pixel extraction was unavailable. */
-const TD_TABLE_TOP    = [td(6, 5), td(7, 5), td(8, 5)]
-const TD_TABLE_BOTTOM = [td(6, 6), td(7, 6), td(8, 6)]
+// Station tables are drawn with Graphics (drawCounter) — the tile pack's
+// furniture frames turned out to be fence/cart pieces, not tables.
 
 type HallView = 'room' | 'merchant' | 'teacher'
 
@@ -328,15 +325,15 @@ export class StrategyScene extends Phaser.Scene {
     rug.fillCircle(GAME_WIDTH / 2, rugY + rugH / 2, 26)
     c.add(rug)
 
-    // Stations
+    // Stations — merchant on the LEFT side, teacher on the RIGHT side
     const stationY = floorTop + 200
     c.add(this.createStation(
-      GAME_WIDTH * 0.32, stationY,
+      GAME_WIDTH * 0.18, stationY,
       TD_MERCHANT_NPC, 'Merchant', 'Buy combat strategies',
       () => this.openMerchant(),
     ))
     c.add(this.createStation(
-      GAME_WIDTH * 0.68, stationY,
+      GAME_WIDTH * 0.82, stationY,
       TD_TEACHER_NPC, 'Teacher', 'Arrange your strategy order',
       () => this.openTeacher(),
     ))
@@ -362,18 +359,13 @@ export class StrategyScene extends Phaser.Scene {
     glow.setAlpha(0)
     station.add(glow)
 
-    // NPC behind the table (~5× of 16px)
-    const npc = this.add.sprite(0, -52, 'tiny_dungeon', npcFrame).setScale(5)
+    // NPC standing behind the counter (~5× of 16px); the tabletop overlaps
+    // their feet so they read as standing at the table
+    const npc = this.add.sprite(0, -48, 'tiny_dungeon', npcFrame).setScale(5)
     station.add(npc)
 
-    // Table: tiny_dungeon banquet table, 3 wide × 2 tall, ~3× scale
-    const tileS = 16 * 3
-    TD_TABLE_TOP.forEach((frame, i) => {
-      station.add(this.add.sprite((i - 1) * tileS, 16, 'tiny_dungeon', frame).setScale(3))
-    })
-    TD_TABLE_BOTTOM.forEach((frame, i) => {
-      station.add(this.add.sprite((i - 1) * tileS, 16 + tileS, 'tiny_dungeon', frame).setScale(3))
-    })
+    // Wooden counter (drawn — see note at TD frame constants)
+    station.add(this.drawCounter(name === 'Merchant'))
 
     // Name plate
     const plateG = this.add.graphics()
@@ -407,6 +399,61 @@ export class StrategyScene extends Phaser.Scene {
     station.add(hit)
 
     return station
+  }
+
+  /**
+   * A wooden counter for a station, drawn with Graphics: plank front panel,
+   * highlighted tabletop with a faint gold trim, plus a small tabletop prop —
+   * a coin pouch for the Merchant, an open book for the Teacher.
+   */
+  private drawCounter(isMerchant: boolean): Phaser.GameObjects.Graphics {
+    const g = this.add.graphics()
+
+    // Front panel (below the tabletop) with vertical plank seams
+    g.fillStyle(0x4a2f1d, 1)
+    g.fillRoundedRect(-110, 8, 220, 76, { tl: 0, tr: 0, bl: 10, br: 10 })
+    g.lineStyle(1, 0x2e1c10, 1)
+    for (let px = -88; px < 110; px += 22) g.lineBetween(px, 10, px, 80)
+    // Side shading so the panel reads as 3D
+    g.fillStyle(0x000000, 0.18)
+    g.fillRect(-110, 8, 10, 72)
+    g.fillRect(100, 8, 10, 72)
+
+    // Tabletop (slightly wider than the panel, light edge on top)
+    g.fillStyle(0x6e4a2c, 1)
+    g.fillRoundedRect(-122, -12, 244, 28, 8)
+    g.fillStyle(0x7d563a, 1)
+    g.fillRoundedRect(-122, -12, 244, 11, { tl: 8, tr: 8, bl: 0, br: 0 })
+    g.lineStyle(2, 0x3a2412, 1)
+    g.strokeRoundedRect(-122, -12, 244, 28, 8)
+    g.lineStyle(1, COLOR_BORDER, 0.22)
+    g.strokeRoundedRect(-118, -9, 236, 22, 6)
+
+    if (isMerchant) {
+      // Coin pouch + loose coins
+      g.fillStyle(0x5b3a23, 1)
+      g.fillEllipse(58, -8, 22, 18)
+      g.fillStyle(0x8a5c36, 1)
+      g.fillEllipse(58, -13, 12, 7)
+      g.fillStyle(0xffd700, 0.95)
+      g.fillCircle(36, -5, 4)
+      g.fillCircle(44, -2, 4)
+      g.fillCircle(30, -1, 4)
+    } else {
+      // Open book
+      g.fillStyle(0x2a1a40, 1)
+      g.fillRoundedRect(-76, -12, 44, 16, 3)
+      g.fillStyle(0xf0e8d8, 1)
+      g.fillRect(-73, -10, 18, 11)
+      g.fillRect(-53, -10, 18, 11)
+      g.lineStyle(1, 0xbbb09a, 1)
+      g.lineBetween(-54, -10, -54, 1)
+      g.lineStyle(1, 0xcfc6b2, 0.9)
+      g.lineBetween(-70, -6, -58, -6)
+      g.lineBetween(-50, -6, -38, -6)
+    }
+
+    return g
   }
 
   // ── Merchant: left panel (preset browser) ──────────────────────────────────

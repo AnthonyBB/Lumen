@@ -24,9 +24,14 @@ import type { BiomeScene } from './BiomeScene'
 // ── Public types (used by BiomeScene) ─────────────────────────────────────
 
 export interface MobDef {
-  name: string
+  name: string             // archetype name ('Frost Troll', 'Sand Scorpion', ...)
   level: number
   maxHp: number
+  attack: number           // base damage per hit (derived from archetype stats)
+  defense: number          // reserved for player skill mitigation
+  speed: number            // drives initiative + enemy act order
+  /** Archetype tint applied to the sprite (0xffffff / undefined = untinted). */
+  tint?: number
   /** Optional tiny_dungeon frame chosen by BiomeScene so the map marker and
    *  battle enemy show the same creature. Falls back to the difficulty pool. */
   frame?: number
@@ -50,8 +55,11 @@ export interface BattleResult {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const MOB_DAMAGE: Record<string, number> = { easy: 8, medium: 15, hard: 24 }
-const XP_PER_MOB:  Record<string, number> = { easy: 18, medium: 30, hard: 50 }
+/** XP for defeating a mob scales with its level — higher biomes pay more. */
+const xpForMob = (level: number) => 10 + level * 2
+
+/** Fallback player initiative speed when no equipment-derived speed is set. */
+const DEFAULT_PLAYER_SPEED = 25
 
 // Sprite scale per difficulty (16px source tile → 64/72/80 px on screen)
 const MOB_SCALE: Record<string, number> = { easy: 4, medium: 4.5, hard: 5 }
@@ -97,6 +105,8 @@ export class BattleScene extends Phaser.Scene {
   private selectedSkill: Skill | null = null
   private playerHp = 100
   private playerMaxHp = 100
+  private playerSpeed = DEFAULT_PLAYER_SPEED
+  private playerDefense = 0   // equipment-derived defense will feed this later
   private xpGained = 0
 
   // ── HUD refs ─────────────────────────────────────────────────────────────
@@ -123,13 +133,59 @@ export class BattleScene extends Phaser.Scene {
   }
 
   create() {
+    // Player initiative speed.  TODO: the equipment system should write its
+    // derived speed stat into registry key 'speed' so battles pick it up here.
+    this.playerSpeed   = (this.registry.get('speed') as number) ?? DEFAULT_PLAYER_SPEED
+    this.playerDefense = (this.registry.get('defense') as number) ?? 0
+
     this.buildMobs()
     this.drawBackground()
     this.placeMobs()
     this.buildLogBar()
     this.buildSkillPanel()
     this.buildPlayerPanel()
-    this.setLog('Choose a skill, then select a target.')
+    this.rollInitiative()
+  }
+
+  // ── Initiative ────────────────────────────────────────────────────────────
+
+  /** Compare player speed vs the fastest alive mob: faster side acts first. */
+  private rollInitiative() {
+    const fastestMob = Math.max(...this.mobs.filter(m => m.alive).map(m => m.speed), 0)
+    const playerFirst = this.playerSpeed >= fastestMob
+
+    this.phase = 'animating'   // block input while the banner shows
+    this.showInitiativeBanner(playerFirst)
+
+    if (playerFirst) {
+      this.setLog('Choose a skill, then select a target.')
+      this.time.delayedCall(1100, () => {
+        if (this.phase === 'animating') this.phase = 'player_turn'
+      })
+    } else {
+      this.setLog('The enemy moves first — brace yourself!', '#ff8888')
+      this.time.delayedCall(1300, () => this.doEnemyTurn())
+    }
+  }
+
+  private showInitiativeBanner(playerFirst: boolean) {
+    const banner = this.add.text(
+      GAME_WIDTH / 2, (HEADER_H + ENEMY_BOTTOM) / 2,
+      playerFirst ? '⚡ You strike first!' : '⚠️ The enemy is faster!',
+      {
+        fontSize: '26px', fontFamily: 'Georgia, serif', fontStyle: 'bold',
+        color: playerFirst ? '#ffe066' : '#ff7755',
+        backgroundColor: '#000000bb', padding: { x: 26, y: 12 },
+      },
+    ).setOrigin(0.5, 0.5).setDepth(40).setAlpha(0)
+
+    this.tweens.add({
+      targets: banner, alpha: 1, duration: 200,
+      onComplete: () => this.tweens.add({
+        targets: banner, alpha: 0, delay: 800, duration: 300,
+        onComplete: () => banner.destroy(),
+      }),
+    })
   }
 
   // ── Mob setup ─────────────────────────────────────────────────────────────
@@ -258,7 +314,8 @@ export class BattleScene extends Phaser.Scene {
     mob.shadow = this.add.ellipse(px + 3, py + 28, 52, 12, 0x000000, alive ? 0.4 : 0.15)
       .setDepth(4)
 
-    // Monster sprite (Kenney Tiny Dungeon, frame chosen per difficulty tier)
+    // Monster sprite (Kenney Tiny Dungeon, archetype frame + tint)
+    const baseTint = mob.tint ?? 0xffffff
     const sprite = this.add.sprite(px, py - 4, 'tiny_dungeon', mob.monsterFrame)
       .setScale(scale)
       .setDepth(5)
@@ -266,6 +323,8 @@ export class BattleScene extends Phaser.Scene {
     if (!alive) {
       // Death state: darkened, faded
       sprite.setTint(0x444444).setAlpha(0.4)
+    } else if (baseTint !== 0xffffff) {
+      sprite.setTint(baseTint)
     }
 
     // HP bar
@@ -307,7 +366,7 @@ export class BattleScene extends Phaser.Scene {
         }
       })
       hit.on('pointerout', () => {
-        if (mob.alive) sprite.clearTint()
+        if (mob.alive) sprite.setTint(baseTint)   // restore archetype tint
       })
       hit.on('pointerdown', () => {
         if (this.phase === 'target_select' && mob.alive) this.fireSkilOnMob(idx)
@@ -476,8 +535,9 @@ export class BattleScene extends Phaser.Scene {
 
     if (mob.hp <= 0) {
       mob.alive = false
-      this.xpGained += XP_PER_MOB[this.battleData.difficulty]
-      this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg}!  Enemy defeated! (+${XP_PER_MOB[this.battleData.difficulty]} XP)`, '#44ff88')
+      const xp = xpForMob(mob.level)
+      this.xpGained += xp
+      this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg}!  Enemy defeated! (+${xp} XP)`, '#44ff88')
     } else {
       this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg} damage!`, '#44ffcc')
     }
@@ -512,18 +572,20 @@ export class BattleScene extends Phaser.Scene {
 
   private doEnemyTurn() {
     this.phase = 'enemy_turn'
-    const alive = this.mobs.filter(m => m.alive)
+    // Mobs act in descending speed order — the quickest strike first.
+    const alive = this.mobs.filter(m => m.alive).sort((a, b) => b.speed - a.speed)
     if (alive.length === 0) { this.doVictory(); return }
 
-    const baseDmg = MOB_DAMAGE[this.battleData.difficulty]
     let delay = 0
 
     alive.forEach((mob, _i) => {
       this.time.delayedCall(delay, () => {
-        const dmg = Math.max(1, Phaser.Math.Between(
-          Math.floor(baseDmg * 0.7),
-          Math.ceil(baseDmg * 1.3),
-        ))
+        // Damage = mob's stat-derived attack ± 15%, reduced by player defense.
+        const raw = Phaser.Math.Between(
+          Math.floor(mob.attack * 0.85),
+          Math.ceil(mob.attack * 1.15),
+        )
+        const dmg = Math.max(1, raw - this.playerDefense)
         this.playerHp = Math.max(0, this.playerHp - dmg)
         this.refreshPlayerPanel()
         this.cameras.main.shake(80, 0.003)

@@ -27,6 +27,7 @@ import {
   RL_ROCKS_BROWN, RL_ROCKS_BROWN_MOSS, RL_ROCKS_GRAY, RL_ROCKS_GRAY_MOSS, RL_ROCKS_WATER,
   TT_MUSHROOMS, TD_MONSTERS,
 } from '../data/tileFrames'
+import { MOBS_BY_BIOME, TIER_LEVEL_BANDS, spawnMob } from '../data/mobs'
 
 // ── World dimensions ────────────────────────────────────────────────────────
 
@@ -58,19 +59,8 @@ type PathState = 'idle' | 'walking' | 'encounter_pause' | 'battling' | 'complete
 
 // ── Biome constants ─────────────────────────────────────────────────────────
 
-const MOB_NAMES: Record<string, string> = {
-  'Desert': 'Desert Scorpion', 'Pine Forest': 'Forest Wolf',
-  'Deciduous Forest': 'Woodland Bear', 'Swamp': 'Swamp Serpent',
-  'Snow': 'Frost Yeti', 'Grassland': 'Wild Boar',
-  'Tropical Rainforest': 'Shadow Panther', 'Ocean': 'Deep Shark',
-}
-
 const MOB_COUNTS: Record<string, [number, number]> = {
   easy: [4, 5], medium: [5, 7], hard: [7, 10],
-}
-const MOB_HP:   Record<string, number> = { easy: 60, medium: 100, hard: 150 }
-const MOB_LVLS: Record<string, [number, number]> = {
-  easy: [2, 5], medium: [8, 14], hard: [20, 30],
 }
 
 const WALK_SPEED = 180  // world-px per second
@@ -172,11 +162,13 @@ export class BiomeScene extends Phaser.Scene {
   private buildPath() {
     const { difficulty, biome } = this.biomeData
     const [minMobs, maxMobs] = MOB_COUNTS[difficulty]
-    const [minLv,   maxLv]  = MOB_LVLS[difficulty]
-    const mobHp  = MOB_HP[difficulty]
-    const mobName = MOB_NAMES[biome] ?? 'Enemy'
+    const [bandMin, bandMax] = TIER_LEVEL_BANDS[difficulty]
 
-    const framePool = TD_MONSTERS[difficulty]
+    // Bestiary pool for this biome + difficulty.  Falls back to ANY archetype
+    // of this tier if a biome has no themed entries (shouldn't happen — every
+    // biome ships with 5+).
+    const pool = MOBS_BY_BIOME[biome]?.[difficulty] ?? []
+    const totalEncounters = WP_DEFS.filter(wp => wp.type === 'encounter').length
     let encounterNo = 0
 
     this.pathNodes = WP_DEFS.map(wp => {
@@ -188,17 +180,37 @@ export class BiomeScene extends Phaser.Scene {
         markerGfx: null, markerLabel: null, markerSprite: null,
       }
       if (wp.type === 'encounter') {
-        const count = Phaser.Math.Between(minMobs, maxMobs)
-        const level = Phaser.Math.Between(minLv, maxLv)
-        // One creature look per encounter, deterministic per encounter index,
-        // shared with BattleScene via MobDef.frame so map + battle match.
-        const frame = framePool[encounterNo++ % framePool.length]
-        node.mobs = Array.from({ length: count }, (_, j) => ({
-          name: mobName,
-          level: level + Math.floor(j / 2),
-          maxHp: mobHp,
-          frame,
-        }))
+        const encIdx = encounterNo++
+        // One archetype per encounter, picked by the scene's seeded rng so a
+        // given biome+difficulty path is deterministic.  The same archetype
+        // drives the map marker (frame + tint) and the battle mobs.
+        const arch = pool.length > 0 ? this.rng.pick(pool) : null
+
+        // Level band rises with encounter index: encounter 0 spawns from the
+        // bottom slice of the difficulty band, the last encounter from the top.
+        const span    = bandMax - bandMin
+        const sliceLo = bandMin + Math.floor(span * (encIdx / totalEncounters))
+        const sliceHi = bandMin + Math.floor(span * ((encIdx + 1) / totalEncounters))
+
+        const count = this.rng.integerInRange(minMobs, maxMobs)
+        node.mobs = Array.from({ length: count }, () => {
+          const level = this.rng.integerInRange(sliceLo, sliceHi)
+          if (arch) {
+            const inst = spawnMob(arch.id, level)
+            return {
+              name: inst.name, level: inst.level, maxHp: inst.maxHp,
+              attack: inst.attack, defense: inst.defense, speed: inst.speed,
+              frame: inst.frame, tint: inst.tint,
+            }
+          }
+          // Legacy fallback (no bestiary entry): generic enemy stats.
+          return {
+            name: 'Enemy', level, maxHp: 20 + level * 6,
+            attack: 4 + Math.round(level * 1.2), defense: level,
+            speed: 10 + Math.round(level * 0.5),
+            frame: TD_MONSTERS[difficulty][encIdx % TD_MONSTERS[difficulty].length],
+          }
+        })
       }
       return node
     })
@@ -255,10 +267,12 @@ export class BiomeScene extends Phaser.Scene {
       g.lineStyle(4, 0xff4444, 0.85).strokeCircle(node.x, node.y, 48)
 
       // Tiny Dungeon monster sprite matching the encounter's creatures,
-      // with a subtle idle bob.
+      // tinted per archetype, with a subtle idle bob.
       const frame = node.mobs?.[0]?.frame ?? TD_MONSTERS[this.biomeData.difficulty][0]
+      const tint  = node.mobs?.[0]?.tint ?? 0xffffff
       node.markerSprite = this.add.sprite(node.x, node.y, 'tiny_dungeon', frame)
         .setScale(3).setDepth(7)
+      if (tint !== 0xffffff) node.markerSprite.setTint(tint)
       this.tweens.add({
         targets: node.markerSprite,
         y: { from: node.y - 3, to: node.y + 3 },

@@ -24,6 +24,12 @@ export interface Player {
   zone: string;
   position: PlayerPosition;
   lastMessageAt: number; // unix ms — used for chat rate-limiting
+  /** Cumulative correct learning answers (persisted) — every 5th awards a Skill Shard. */
+  correctAnswers: number;
+  /** Skill ids purchased with Skill Shards (persisted). */
+  unlockedSkills: string[];
+  /** Combat strategy ids purchased with Combat Shards (persisted). */
+  unlockedStrategies: string[];
 }
 
 /** Safe subset of a player that can be broadcast to other clients. */
@@ -191,6 +197,21 @@ export interface LearningEndPayload {
   sessionId: string;
 }
 
+// ── Shop event payloads (Client → Server) ──────────────────────────────────
+
+/** Payload for `shop:buy_skill` — only the skill id; everything else is validated server-side. */
+export interface ShopBuySkillPayload {
+  skillId: string;
+}
+
+/**
+ * Payload for `shop:buy_strategy` — accepts either an individual strategy id
+ * (2 Combat Shards) or a preset id (8 Combat Shards, unlocks all its strategies).
+ */
+export interface ShopBuyStrategyPayload {
+  strategyId: string;
+}
+
 // ---------------------------------------------------------------------------
 // Socket event payloads — Server → Client
 // ---------------------------------------------------------------------------
@@ -242,6 +263,18 @@ export interface LearningAnswerResultPayload {
   perfectScore: boolean;
   /** Next question to present — correctIndex intentionally omitted. Present unless session is complete. */
   nextQuestion?: ClientQuestion;
+  /** Number of Skill Shards awarded by this answer (cumulative-correct milestones of 5). */
+  skillShardsAwarded: number;
+  /** True when this answer completed a subcategory session with a perfect score (1 Combat Shard). */
+  combatShardAwarded: boolean;
+}
+
+/** Sent in response to `shop:get_unlocks` and after successful purchases. */
+export interface ShopUnlocksPayload {
+  unlockedSkills: string[];
+  unlockedStrategies: string[];
+  skillShards: number;
+  combatShards: number;
 }
 
 // ---------------------------------------------------------------------------

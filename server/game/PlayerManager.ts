@@ -64,6 +64,9 @@ export class PlayerManager {
       ...INITIAL_STATS,
       position: { ...INITIAL_STATS.position },
       lastMessageAt: 0,
+      correctAnswers: 0,
+      unlockedSkills: [],
+      unlockedStrategies: [],
     };
 
     this.players.set(socketId, player);
@@ -145,33 +148,57 @@ export class PlayerManager {
    * Load saved XP and level from MongoDB for a given userId (= username).
    * Returns default values if no record exists yet.
    */
-  async loadProgress(userId: string): Promise<{ xp: number; level: number }> {
+  async loadProgress(userId: string): Promise<{
+    xp: number;
+    level: number;
+    correctAnswers: number;
+    unlockedSkills: string[];
+    unlockedStrategies: string[];
+  }> {
     try {
       const doc = await PlayerProgress.findOne({ userId }).lean();
       if (doc) {
-        return { xp: doc.xp, level: doc.level };
+        return {
+          xp: doc.xp,
+          level: doc.level,
+          correctAnswers: doc.correctAnswers ?? 0,
+          unlockedSkills: doc.unlockedSkills ?? [],
+          unlockedStrategies: doc.unlockedStrategies ?? [],
+        };
       }
     } catch (err) {
       console.error('[PlayerManager] loadProgress error:', err);
     }
-    return { xp: 0, level: 1 };
+    return { xp: 0, level: 1, correctAnswers: 0, unlockedSkills: [], unlockedStrategies: [] };
   }
 
   /**
-   * Apply previously-loaded XP/level to a player who has already been
+   * Apply previously-loaded progress to a player who has already been
    * registered with addPlayer().
    */
-  applyProgress(socketId: string, xp: number, level: number): void {
+  applyProgress(
+    socketId: string,
+    progress: {
+      xp: number;
+      level: number;
+      correctAnswers?: number;
+      unlockedSkills?: string[];
+      unlockedStrategies?: string[];
+    },
+  ): void {
     const player = this.players.get(socketId);
     if (!player) return;
-    player.xp = Math.max(0, xp);
-    player.level = Math.min(50, Math.max(1, level));
+    player.xp = Math.max(0, progress.xp);
+    player.level = Math.min(50, Math.max(1, progress.level));
     player.maxHp = 100 + (player.level - 1) * 20;
     player.hp = player.maxHp;
+    player.correctAnswers = Math.max(0, progress.correctAnswers ?? 0);
+    player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
+    player.unlockedStrategies = [...(progress.unlockedStrategies ?? [])];
   }
 
   /**
-   * Fire-and-forget write of the player's current XP/level to MongoDB.
+   * Fire-and-forget write of the player's current progress to MongoDB.
    * Uses the player's username as the stable userId key.
    */
   persistProgress(socketId: string): void {
@@ -180,11 +207,45 @@ export class PlayerManager {
 
     PlayerProgress.findOneAndUpdate(
       { userId: player.username },
-      { xp: player.xp, level: player.level },
+      {
+        xp: player.xp,
+        level: player.level,
+        correctAnswers: player.correctAnswers,
+        unlockedSkills: player.unlockedSkills,
+        unlockedStrategies: player.unlockedStrategies,
+      },
       { upsert: true, new: true },
     ).catch((err) => {
       console.error('[PlayerManager] persistProgress error:', err);
     });
+  }
+
+  /**
+   * Record one correct learning answer (server-validated) and return how many
+   * Skill Shards this crossing earns: 1 for every multiple of 5 cumulative
+   * correct answers reached.
+   */
+  recordCorrectAnswer(socketId: string): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    player.correctAnswers += 1;
+    return player.correctAnswers % 5 === 0 ? 1 : 0;
+  }
+
+  /** Add a purchased skill id to the player's unlocks (idempotent). */
+  unlockSkill(socketId: string, skillId: string): void {
+    const player = this.players.get(socketId);
+    if (!player) return;
+    if (!player.unlockedSkills.includes(skillId)) player.unlockedSkills.push(skillId);
+  }
+
+  /** Add purchased strategy ids to the player's unlocks (idempotent). */
+  unlockStrategies(socketId: string, strategyIds: string[]): void {
+    const player = this.players.get(socketId);
+    if (!player) return;
+    for (const id of strategyIds) {
+      if (!player.unlockedStrategies.includes(id)) player.unlockedStrategies.push(id);
+    }
   }
 
   /** Apply damage to a player's HP (server-side only). */

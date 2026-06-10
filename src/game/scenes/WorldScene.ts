@@ -796,6 +796,12 @@ export class WorldScene extends Phaser.Scene {
           this.scene.launch('StrategyScene')
           return
         }
+        if (nearBuilding.label === 'Combat Training') {
+          this.player.setVelocity(0, 0)
+          this.scene.pause('WorldScene')
+          this.scene.launch('SkillShopScene')
+          return
+        }
         this.openPopup(nearBuilding.label)
       }
     } else if (this.nearChest && !this.popupOpen) {

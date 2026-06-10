@@ -624,7 +624,7 @@ export class BattleScene extends Phaser.Scene {
     // Award XP
     if (this.xpGained > 0) {
       const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-      socket?.emit('player:award_xp', { xp: Math.min(this.xpGained, 500), awardShard: false })
+      socket?.emit('player:award_xp', { xp: Math.min(this.xpGained, 500) })
     }
 
     this.cameras.main.flash(600, 1, 0.84, 0)

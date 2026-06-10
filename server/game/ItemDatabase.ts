@@ -121,6 +121,8 @@ const ITEM_CATALOGUE: Record<string, ItemTemplate> = {
     stackable: false,
     icon: '👟',
   },
+  // Legacy currency — kept only so old inventories can be migrated to
+  // skill_shard on load (see InventoryManager.loadInventory).  No longer awarded.
   shard_of_knowledge: {
     itemType: 'shard_of_knowledge',
     name: 'Shard of Knowledge',
@@ -129,6 +131,24 @@ const ITEM_CATALOGUE: Record<string, ItemTemplate> = {
     stats: { xp: 50 },
     stackable: true,
     icon: '🔮',
+  },
+  skill_shard: {
+    itemType: 'skill_shard',
+    name: 'Skill Shard',
+    description: 'A glowing blue shard earned by answering questions correctly. Spend it at Combat Training to learn new skills.',
+    rarity: 'epic',
+    stats: {},
+    stackable: true,
+    icon: '🔷',
+  },
+  combat_shard: {
+    itemType: 'combat_shard',
+    name: 'Combat Shard',
+    description: 'A fiery orange shard earned by mastering a learning topic. Spend it at the Strategy Hall to learn combat strategies.',
+    rarity: 'epic',
+    stats: {},
+    stackable: true,
+    icon: '🔶',
   },
 };
 

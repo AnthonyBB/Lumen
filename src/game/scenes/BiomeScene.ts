@@ -456,7 +456,7 @@ export class BiomeScene extends Phaser.Scene {
   private showVictoryScreen() {
     if (this.totalXpGained > 0) {
       const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-      socket?.emit('player:award_xp', { xp: Math.min(this.totalXpGained, 500), awardShard: false })
+      socket?.emit('player:award_xp', { xp: Math.min(this.totalXpGained, 500) })
     }
     this.cameras.main.flash(700, 255, 215, 0)
 

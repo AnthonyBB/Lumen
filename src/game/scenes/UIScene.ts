@@ -124,39 +124,30 @@ export class UIScene extends Phaser.Scene {
     invBg.lineStyle(1, 0xffd700, 0.5)
     invBg.strokeRoundedRect(6, GAME_HEIGHT - 60, 180, 50, 8)
 
-    this.add.text(14, GAME_HEIGHT - 54, '🔮  Shards of Knowledge', {
+    this.add.text(14, GAME_HEIGHT - 54, 'Shards', {
       fontSize: '11px', fontFamily: 'Arial', color: '#88eeff', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
-    // Shard count — prefers InventoryStore (server-authoritative) with
-    // registry as fallback so ClassroomScene works before a player is connected.
-    const shardCount = this.add.text(14, GAME_HEIGHT - 36, 'x 0', {
-      fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    // Shard counters — server-authoritative, read from InventoryStore which
+    // is only ever populated by inventory:data / inventory:updated pushes.
+    const skillShardCount = this.add.text(12, GAME_HEIGHT - 36, '🔷 Skill x0', {
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
+    }).setOrigin(0, 0)
+    const combatShardCount = this.add.text(92, GAME_HEIGHT - 36, '🔶 Combat x0', {
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
     const refreshShards = () => {
       const inv = InventoryStore.get()
-      if (inv) {
-        // Server-authoritative: sum all shard stacks in the bag
-        const shardItem = inv.items.find(i => i.itemType === 'shard_of_knowledge')
-        shardCount.setText(`x ${shardItem ? shardItem.quantity : 0}`)
-      } else {
-        // Fallback: registry value written by ClassroomScene
-        const n = (this.registry.get('shards') as number) || 0
-        shardCount.setText(`x ${n}`)
-      }
+      const count = (itemType: string) =>
+        inv ? inv.items.filter(i => i.itemType === itemType).reduce((s, i) => s + i.quantity, 0) : 0
+      skillShardCount.setText(`🔷 Skill x${count('skill_shard')}`)
+      combatShardCount.setText(`🔶 Combat x${count('combat_shard')}`)
     }
+    refreshShards()
 
     // Listen for server inventory updates (immediate, no polling lag)
     const unsubscribe = InventoryStore.onUpdate(() => refreshShards())
-
-    // Also poll registry every 500 ms — keeps ClassroomScene in sync before
-    // the player connects to the multiplayer server.
-    this.time.addEvent({
-      delay: 500,
-      loop: true,
-      callback: refreshShards,
-    })
 
     // Clean up the InventoryStore listener when this scene shuts down
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => unsubscribe())

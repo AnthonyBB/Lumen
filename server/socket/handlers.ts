@@ -30,11 +30,45 @@ import type {
   LearningStartPayload,
   LearningAnswerPayload,
   LearningEndPayload,
+  ShopBuySkillPayload,
+  ShopBuyStrategyPayload,
+  ShopUnlocksPayload,
+  Player,
   Subject,
   Difficulty,
 } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
 import { CURRICULUM, SUBCATEGORY_MAP } from '../game/data/curriculum.js';
+import { SKILL_TREES, type CombatSkill } from '../game/data/skillTrees.js';
+import { STRATEGIES, STRATEGY_PRESETS, type CombatStrategy, type StrategyPreset } from '../game/data/combatStrategies.js';
+
+// ---------------------------------------------------------------------------
+// Shop catalogs (server-authoritative — clients never supply prices or ids)
+// ---------------------------------------------------------------------------
+
+/** skillId → skill, across all 13 class trees. */
+const SKILL_MAP: ReadonlyMap<string, CombatSkill> = new Map(
+  SKILL_TREES.flatMap((tree) => tree.skills.map((s) => [s.id, s] as const)),
+);
+
+/** Skill price in Skill Shards, by tier. */
+const SKILL_PRICE_BY_TIER: Record<1 | 2 | 3 | 4 | 5, number> = {
+  1: 1, 2: 2, 3: 3, 4: 5, 5: 8,
+};
+
+/** strategyId → strategy. */
+const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
+  STRATEGIES.map((s) => [s.id, s] as const),
+);
+
+/** presetId → preset. */
+const PRESET_MAP: ReadonlyMap<string, StrategyPreset> = new Map(
+  STRATEGY_PRESETS.map((p) => [p.id, p] as const),
+);
+
+/** Combat Shard prices: individual strategy = 2, preset bundle = 8. */
+const STRATEGY_PRICE = 2;
+const PRESET_PRICE = 8;
 
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
 const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
@@ -140,8 +174,8 @@ export function registerHandlers(
 
     const { player, zonePlayers } = result;
 
-    // Restore persisted XP / level now that the player record exists
-    playerManager.applyProgress(socket.id, savedProgress.xp, savedProgress.level);
+    // Restore persisted XP / level / shard-progress / shop unlocks
+    playerManager.applyProgress(socket.id, savedProgress);
 
     // Join the Socket.io room for this zone
     socket.join(player.zone);
@@ -311,12 +345,16 @@ export function registerHandlers(
 
   // ── player:award_xp ─────────────────────────────────────────────────────
   //
-  // Emitted by ClassroomScene after a learning session completes.
-  // The client reports how much XP was earned and whether a perfect score
-  // warrants a Shard of Knowledge.  The server caps the XP to a safe
-  // maximum (5 questions × 35 XP = 175) to prevent inflated payloads.
-  socket.on('player:award_xp', async (payload: { xp: unknown; awardShard: unknown }) => {
-    if (!isSafeNumber(payload?.xp, 0, 175) || typeof payload?.awardShard !== 'boolean') {
+  // Emitted by BattleScene / BiomeScene after exploration combat.
+  // The XP amount is capped server-side to limit inflated payloads.
+  //
+  // NOTE: shard awarding was REMOVED from this client-reported path.  All
+  // shard currency (skill_shard / combat_shard) is now awarded exclusively
+  // by the server-validated learning session flow (see learning:answer).
+  // Learning XP also no longer flows through here — ClassroomScene uses
+  // server learning sessions, which award XP via LearningSessionManager.
+  socket.on('player:award_xp', async (payload: { xp: unknown }) => {
+    if (!isSafeNumber(payload?.xp, 0, 500)) {
       socket.emit('error', { message: 'Invalid award_xp payload.' });
       return;
     }
@@ -330,15 +368,6 @@ export function registerHandlers(
     const xpAmount = Math.floor(payload.xp as number); // ensure integer
     const { newXp, newLevel, leveledUp } = playerManager.addXp(socket.id, xpAmount);
     playerManager.persistProgress(socket.id);
-
-    if (payload.awardShard) {
-      inventoryManager.addShard(socket.id);
-      const inventory = inventoryManager.getInventory(socket.id);
-      if (inventory) {
-        socket.emit('inventory:updated', inventory);
-      }
-      console.log(`[award_xp] ${player.username} awarded a Shard of Knowledge`);
-    }
 
     socket.emit('player:xp_updated', {
       newXp,
@@ -440,6 +469,10 @@ export function registerHandlers(
       return;
     }
 
+    // Capture the session BEFORE submitting — we need its subcategory for
+    // the Combat Shard award after completion.
+    const session = learningSessionManager.getSession(payload.sessionId);
+
     const result = learningSessionManager.submitAnswer(
       payload.sessionId,
       socket.id,
@@ -454,6 +487,32 @@ export function registerHandlers(
 
     const { correct, attemptsLeft, explanation, xpEarned, sessionComplete, perfectScore, nextQuestion } = result;
 
+    // ── Server-authoritative shard awards ────────────────────────────────────
+    // 🔷 Skill Shard: 1 per 5 cumulative correct answers (persisted per user).
+    // 🔶 Combat Shard: completing a subcategory session with a perfect score.
+    let skillShardsAwarded = 0;
+    let combatShardAwarded = false;
+
+    if (correct) {
+      skillShardsAwarded = playerManager.recordCorrectAnswer(socket.id);
+      if (skillShardsAwarded > 0) {
+        inventoryManager.addCurrency(socket.id, 'skill_shard', skillShardsAwarded);
+        console.log(`[learning] ${socket.id} reached a 5-correct milestone — skill shard awarded`);
+      }
+    }
+
+    if (sessionComplete && perfectScore && session?.subcategory) {
+      combatShardAwarded = true;
+      inventoryManager.addCurrency(socket.id, 'combat_shard', 1);
+      console.log(`[learning] ${socket.id} completed subcategory "${session.subcategory}" — combat shard awarded`);
+    }
+
+    // Persist XP / level / cumulative-correct progress on every correct
+    // answer and at session end (XP is added inside LearningSessionManager).
+    if (correct || sessionComplete) {
+      playerManager.persistProgress(socket.id);
+    }
+
     socket.emit('learning:answer_result', {
       correct,
       attemptsLeft,
@@ -462,16 +521,27 @@ export function registerHandlers(
       sessionComplete,
       perfectScore,
       nextQuestion,
+      skillShardsAwarded,
+      combatShardAwarded,
     });
 
-    // Award a Knowledge Shard for a perfect score
-    if (perfectScore) {
-      inventoryManager.addShard(socket.id);
+    // Push the updated inventory whenever shard currency changed
+    if (skillShardsAwarded > 0 || combatShardAwarded) {
       const inventory = inventoryManager.getInventory(socket.id);
-      if (inventory) {
-        socket.emit('inventory:updated', inventory);
+      if (inventory) socket.emit('inventory:updated', inventory);
+    }
+
+    // Let the HUD refresh XP / level after the session wraps up
+    if (sessionComplete) {
+      const player = playerManager.getPlayer(socket.id);
+      if (player) {
+        socket.emit('player:xp_updated', {
+          newXp: player.xp,
+          newLevel: player.level,
+          leveledUp: false,
+          xpAwarded: 0,
+        });
       }
-      console.log(`[learning] ${socket.id} achieved perfect score — shard awarded`);
     }
   });
 
@@ -644,18 +714,162 @@ export function registerHandlers(
     );
   });
 
-  // ── inventory:add_shard ──────────────────────────────────────────────────
-  socket.on('inventory:add_shard', () => {
+  // NOTE: the old `inventory:add_shard` handler was removed.  Shards are now
+  // spendable currency, so a client-triggered "give me a shard" event would be
+  // a direct economy exploit.  All shard awards happen in learning:answer.
+
+  // ── Shop helpers ─────────────────────────────────────────────────────────
+
+  /** Build the unlock/balance snapshot sent to shop UIs. */
+  const buildUnlocksPayload = (player: Player): ShopUnlocksPayload => ({
+    unlockedSkills: [...player.unlockedSkills],
+    unlockedStrategies: [...player.unlockedStrategies],
+    skillShards: inventoryManager.getCurrencyCount(socket.id, 'skill_shard'),
+    combatShards: inventoryManager.getCurrencyCount(socket.id, 'combat_shard'),
+  });
+
+  // ── shop:get_unlocks ─────────────────────────────────────────────────────
+  //
+  // Returns the player's purchased skills/strategies and shard balances so
+  // the shop scenes can render owned / affordable states.  Read-only.
+  socket.on('shop:get_unlocks', () => {
     const player = playerManager.getPlayer(socket.id);
     if (!player) {
-      socket.emit('error', { message: 'You must join before collecting shards.' });
+      socket.emit('error', { message: 'You must join before visiting shops.' });
+      return;
+    }
+    socket.emit('shop:unlocks', buildUnlocksPayload(player));
+  });
+
+  // ── shop:buy_skill ───────────────────────────────────────────────────────
+  //
+  // Buys a combat skill with Skill Shards.  Server-authoritative validation:
+  //  1. The player must exist (joined).
+  //  2. skillId must exist in the server-side skill catalog (skillTrees.ts).
+  //  3. The skill must not already be owned.
+  //  4. ALL prerequisite skills (requires[]) must already be unlocked.
+  //  5. The player must afford the tier price (T1=1, T2=2, T3=3, T4=5, T5=8);
+  //     the balance lives in the server inventory and is deducted here.
+  socket.on('shop:buy_skill', (payload: ShopBuySkillPayload) => {
+    if (typeof payload?.skillId !== 'string') {
+      socket.emit('error', { message: 'Invalid skill purchase payload.' });
       return;
     }
 
-    inventoryManager.addShard(socket.id);
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before buying skills.' });
+      return;
+    }
 
-    const inventory = inventoryManager.getInventory(socket.id)!;
-    socket.emit('inventory:updated', inventory);
+    const skill = SKILL_MAP.get(payload.skillId);
+    if (!skill) {
+      socket.emit('error', { message: 'Unknown skill.' });
+      return;
+    }
+
+    if (player.unlockedSkills.includes(skill.id)) {
+      socket.emit('error', { message: 'You already know that skill.' });
+      return;
+    }
+
+    const missingPrereq = skill.requires.find((req) => !player.unlockedSkills.includes(req));
+    if (missingPrereq) {
+      const prereq = SKILL_MAP.get(missingPrereq);
+      socket.emit('error', {
+        message: `You must learn ${prereq?.name ?? missingPrereq} first.`,
+      });
+      return;
+    }
+
+    const price = SKILL_PRICE_BY_TIER[skill.tier];
+    if (!inventoryManager.spendCurrency(socket.id, 'skill_shard', price)) {
+      socket.emit('error', {
+        message: `Not enough Skill Shards — ${skill.name} costs ${price} 🔷. Answer more questions to earn shards!`,
+      });
+      return;
+    }
+
+    playerManager.unlockSkill(socket.id, skill.id);
+    playerManager.persistProgress(socket.id);
+
+    socket.emit('shop:skill_purchased', {
+      skillId: skill.id,
+      ...buildUnlocksPayload(player),
+    });
+    const inventory = inventoryManager.getInventory(socket.id);
+    if (inventory) socket.emit('inventory:updated', inventory);
+
+    console.log(`[shop] ${player.username} bought skill ${skill.id} for ${price} skill shard(s)`);
+  });
+
+  // ── shop:buy_strategy ────────────────────────────────────────────────────
+  //
+  // Buys a combat strategy (2 🔶) or a whole preset bundle (8 🔶) with Combat
+  // Shards.  Server-authoritative validation:
+  //  1. The player must exist (joined).
+  //  2. strategyId must be a known strategy OR preset id (combatStrategies.ts).
+  //  3. It must not already be fully owned.
+  //  4. The player must afford the price; the balance is deducted here.
+  socket.on('shop:buy_strategy', (payload: ShopBuyStrategyPayload) => {
+    if (typeof payload?.strategyId !== 'string') {
+      socket.emit('error', { message: 'Invalid strategy purchase payload.' });
+      return;
+    }
+
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before buying strategies.' });
+      return;
+    }
+
+    // Resolve to the list of strategy ids this purchase unlocks + its price
+    let toUnlock: string[];
+    let price: number;
+    let label: string;
+
+    const preset = PRESET_MAP.get(payload.strategyId);
+    const strategy = STRATEGY_MAP.get(payload.strategyId);
+
+    if (preset) {
+      toUnlock = preset.strategies.filter((id) => !player.unlockedStrategies.includes(id));
+      price = PRESET_PRICE;
+      label = `${preset.name} preset`;
+      if (toUnlock.length === 0) {
+        socket.emit('error', { message: 'You already own every strategy in that preset.' });
+        return;
+      }
+    } else if (strategy) {
+      if (player.unlockedStrategies.includes(strategy.id)) {
+        socket.emit('error', { message: 'You already know that strategy.' });
+        return;
+      }
+      toUnlock = [strategy.id];
+      price = STRATEGY_PRICE;
+      label = strategy.name;
+    } else {
+      socket.emit('error', { message: 'Unknown strategy.' });
+      return;
+    }
+
+    if (!inventoryManager.spendCurrency(socket.id, 'combat_shard', price)) {
+      socket.emit('error', {
+        message: `Not enough Combat Shards — ${label} costs ${price} 🔶. Complete learning topics to earn shards!`,
+      });
+      return;
+    }
+
+    playerManager.unlockStrategies(socket.id, toUnlock);
+    playerManager.persistProgress(socket.id);
+
+    socket.emit('shop:strategy_purchased', {
+      strategyId: payload.strategyId,
+      ...buildUnlocksPayload(player),
+    });
+    const inventory = inventoryManager.getInventory(socket.id);
+    if (inventory) socket.emit('inventory:updated', inventory);
+
+    console.log(`[shop] ${player.username} bought ${label} for ${price} combat shard(s)`);
   });
 
   // ── chest:open ───────────────────────────────────────────────────────────

@@ -10,6 +10,12 @@ export interface IPlayerProgress extends Document {
   userId: string
   xp: number
   level: number
+  /** Cumulative correct learning answers — every 5th awards a Skill Shard. */
+  correctAnswers: number
+  /** Skill ids purchased at Combat Training (see game/data/skillTrees.ts). */
+  unlockedSkills: string[]
+  /** Strategy ids purchased at the Strategy Hall (see game/data/combatStrategies.ts). */
+  unlockedStrategies: string[]
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -30,6 +36,19 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       default: 1,
       min: 1,
       max: 50,
+    },
+    correctAnswers: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    unlockedSkills: {
+      type: [String],
+      default: [],
+    },
+    unlockedStrategies: {
+      type: [String],
+      default: [],
     },
   },
   { timestamps: true },

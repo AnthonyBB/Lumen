@@ -1,16 +1,47 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT, PLAYER_SPEED } from '../constants'
-import type { Subject, Difficulty, Question } from '../../engine/types'
-import { QUESTIONS_BY_SUBJECT } from '../../engine/questions'
+import type { Subject, Difficulty } from '../../engine/types'
 import {
   CURRICULUM_BY_SUBJECT,
   gradeRangeLabel,
-  questionSubcategory,
   type Subcategory,
 } from '../data/curriculum'
 
 type ClassroomState = 'exploring' | 'teacher_dialog' | 'subcategory_select' | 'seated' | 'questioning' | 'results'
+
+// ---------------------------------------------------------------------------
+// Server-session types — mirror the server's client-safe payloads.
+// SECURITY: questions arrive WITHOUT correctIndex; answers are validated by
+// the server and only the boolean outcome + explanation come back.
+// ---------------------------------------------------------------------------
+
+interface ServerQuestion {
+  id: string
+  subject: Subject
+  subcategory: string
+  question: string
+  answers: [string, string, string, string]
+  difficulty: Difficulty
+  timeLimit: number
+}
+
+interface AnswerResult {
+  correct: boolean
+  attemptsLeft: number
+  explanation: string
+  xpEarned: number
+  sessionComplete: boolean
+  perfectScore: boolean
+  nextQuestion?: ServerQuestion
+  skillShardsAwarded: number
+  combatShardAwarded: boolean
+}
+
+/** XP per correct answer by difficulty — display only; the server computes the real award. */
+const XP_BY_DIFFICULTY: Record<Difficulty, number> = { easy: 10, medium: 20, hard: 35 }
+
+const QUESTIONS_PER_SESSION = 5
 
 const SUBJECT_CONFIG = [
   { key: 'math'     as Subject, label: 'Mathematics',  icon: '➕', color: 0x1a3a8a, hover: 0x2a4aaa },
@@ -65,13 +96,22 @@ export class ClassroomScene extends Phaser.Scene {
   private sessionSubject!: Subject
   private sessionSubcategory: Subcategory | null = null
   private sessionDifficulty!: Difficulty
-  private sessionQuestions: Question[] = []
-  private currentQuestionIdx = 0
+
+  // Server-driven session state — everything below is populated exclusively
+  // from server responses (learning:session_started / learning:answer_result).
+  private sessionId: string | null = null
+  private currentQuestion: ServerQuestion | null = null
+  private questionNumber = 1          // 1-based, for display
   private attemptsLeft = 3
   private correctCount = 0
   private xpEarned = 0
-  private questionResults: boolean[] = []
+  private questionResults: { text: string; correct: boolean }[] = []
+  private skillShardsEarned = 0
+  private combatShardEarned = false
+  private sessionWasPerfect = false
   private questionLocked = false
+  private socket: Socket | null = null
+  private onAnswerResult: ((res: AnswerResult) => void) | null = null
 
   constructor() { super({ key: 'ClassroomScene' }) }
 
@@ -79,6 +119,32 @@ export class ClassroomScene extends Phaser.Scene {
     this.state = 'exploring'
     this.questionLocked = false
     this.sessionSubcategory = null
+    this.sessionId = null
+    this.currentQuestion = null
+
+    // Socket is attached to window by GamePage.tsx
+    this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
+
+    // Persistent listener for answer results — routed to the active handler
+    this.onAnswerResult = (res: AnswerResult) => this.handleAnswerResult(res)
+    this.socket?.on('learning:answer_result', this.onAnswerResult)
+
+    // Keep the registry in sync with the server's confirmed XP / level
+    // (the server pushes player:xp_updated when a learning session completes).
+    const onXpUpdated = (data: { newXp: number; newLevel: number }) => {
+      this.registry.set('xp', data.newXp)
+      this.registry.set('level', data.newLevel)
+    }
+    this.socket?.on('player:xp_updated', onXpUpdated)
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      if (this.onAnswerResult) this.socket?.off('learning:answer_result', this.onAnswerResult)
+      this.socket?.off('player:xp_updated', onXpUpdated)
+      // End any in-flight session so the server can free it
+      if (this.sessionId && this.state === 'questioning') {
+        this.socket?.emit('learning:end', { sessionId: this.sessionId })
+      }
+    })
 
     this.drawRoom()
     this.createDesks()
@@ -558,30 +624,71 @@ export class ClassroomScene extends Phaser.Scene {
     this.sessionDifficulty = difficulty
     this.difficultyModal.setVisible(false)
 
-    // Build the question pool: prefer the chosen subcategory at the chosen
-    // difficulty, then pad with same-topic questions at other difficulties,
-    // then with subject-wide questions — so a session always fills 5 slots.
-    const subjectPool = QUESTIONS_BY_SUBJECT[this.sessionSubject]
-    const subId = this.sessionSubcategory?.id
-    const topicPool = subId ? subjectPool.filter(q => questionSubcategory(q) === subId) : subjectPool
-    const shuffle = (arr: Question[]) => Phaser.Utils.Array.Shuffle([...arr]) as Question[]
-    const tiers = [
-      shuffle(topicPool.filter(q => q.difficulty === difficulty)),
-      shuffle(topicPool.filter(q => q.difficulty !== difficulty)),
-      shuffle(subjectPool.filter(q => !topicPool.includes(q) && q.difficulty === difficulty)),
-    ]
-    const combined: Question[] = []
-    for (const tier of tiers) for (const q of tier) if (combined.length < 5) combined.push(q)
-    this.sessionQuestions = combined
-    this.currentQuestionIdx = 0
+    // SECURITY: questions, answers and rewards all come from the server.
+    // The local question bank is no longer used — without a connection the
+    // lesson cannot start (no client-trusted XP or shard paths remain).
+    if (!this.socket?.connected) {
+      this.showOfflineNotice()
+      return
+    }
+
+    // Reset session accumulators (populated by server responses only)
+    this.sessionId = null
+    this.currentQuestion = null
+    this.questionNumber = 1
     this.attemptsLeft = 3
     this.correctCount = 0
     this.xpEarned = 0
     this.questionResults = []
+    this.skillShardsEarned = 0
+    this.combatShardEarned = false
+    this.sessionWasPerfect = false
     this.questionLocked = false
 
-    this.state = 'questioning'
-    this.buildQuestion()
+    const onStarted = (data: { sessionId: string; firstQuestion: ServerQuestion }) => {
+      this.socket?.off('error', onError)
+      if (!this.scene.isActive()) return
+      this.sessionId = data.sessionId
+      this.currentQuestion = data.firstQuestion
+      this.state = 'questioning'
+      this.buildQuestion()
+    }
+    const onError = (err: { message?: string }) => {
+      this.socket?.off('learning:session_started', onStarted)
+      if (!this.scene.isActive()) return
+      this.showOfflineNotice(err?.message ?? 'Could not start the lesson. Please try again.')
+    }
+    this.socket.once('learning:session_started', onStarted)
+    this.socket.once('error', onError)
+
+    this.socket.emit('learning:start', {
+      subject: this.sessionSubject,
+      difficulty,
+      ...(this.sessionSubcategory ? { subcategory: this.sessionSubcategory.id } : {}),
+    })
+  }
+
+  /** Shown when there is no server connection — lessons require the server. */
+  private showOfflineNotice(message = 'You are not connected to the server. Lessons (and shard rewards) need a live connection — please try again in a moment.') {
+    const W = 560, H = 260
+    const panel = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(120)
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0c0c24, 0.98)
+    bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
+    bg.lineStyle(2, 0xaa4433, 1)
+    bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
+    panel.add(bg)
+    panel.add(this.add.text(0, -H / 2 + 40, '⚠  Cannot Start Lesson', {
+      fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ff9977', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+    panel.add(this.add.text(0, -16, message, {
+      fontSize: '15px', fontFamily: 'Arial', color: '#cccccc',
+      align: 'center', wordWrap: { width: W - 70 },
+    }).setOrigin(0.5, 0.5))
+    const back = this.makeButton('← Return to World', '', 230, 44, 0x2a2a44, 0x3a3a60, () => this.returnToWorld())
+    back.setPosition(0, H / 2 - 42)
+    panel.add(back)
+    this.state = 'results' // block movement / re-entry while notice is up
   }
 
   // ─── QUESTION PANEL ────────────────────────────────────────────────────────
@@ -596,7 +703,8 @@ export class ClassroomScene extends Phaser.Scene {
     this.questionPanel.setVisible(true)
     this.questionLocked = false
 
-    const q = this.sessionQuestions[this.currentQuestionIdx]
+    const q = this.currentQuestion
+    if (!q) return
     const W = 920, H = 510
 
     // Panel bg
@@ -617,7 +725,7 @@ export class ClassroomScene extends Phaser.Scene {
     this.questionPanel.add(this.add.text(-W / 2 + 20, -H / 2 + 14, `${subj.icon}  ${subj.label}${topic ? `  ·  ${topic.icon} ${topic.name}` : ''}  ·  ${diff.label}`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#bbaaff',
     }).setOrigin(0, 0.5))
-    this.questionPanel.add(this.add.text(W / 2 - 20, -H / 2 + 14, `Question  ${this.currentQuestionIdx + 1}  of  ${this.sessionQuestions.length}`, {
+    this.questionPanel.add(this.add.text(W / 2 - 20, -H / 2 + 14, `Question  ${this.questionNumber}  of  ${QUESTIONS_PER_SESSION}`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(1, 0.5))
 
@@ -631,7 +739,7 @@ export class ClassroomScene extends Phaser.Scene {
     this.questionPanel.add(this.add.text(42, hy, `${this.attemptsLeft} attempt${this.attemptsLeft !== 1 ? 's' : ''} left`, {
       fontSize: '13px', fontFamily: 'Arial', color: '#999999',
     }).setOrigin(0, 0.5))
-    this.questionPanel.add(this.add.text(W / 2 - 20, hy, `+${q.xpReward} XP`, {
+    this.questionPanel.add(this.add.text(W / 2 - 20, hy, `+${XP_BY_DIFFICULTY[q.difficulty]} XP`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#44ffaa', fontStyle: 'bold',
     }).setOrigin(1, 0.5))
 
@@ -674,40 +782,65 @@ export class ClassroomScene extends Phaser.Scene {
 
   private handleAnswer(idx: number) {
     if (this.state !== 'questioning' || this.questionLocked) return
+    const q = this.currentQuestion
+    if (!q || !this.sessionId || !this.socket?.connected) return
     this.questionLocked = true
 
-    const q = this.sessionQuestions[this.currentQuestionIdx]
-    const fb = this.questionPanel.getByName('feedback') as Phaser.GameObjects.Text
-    fb.setVisible(true)
-
-    if (idx === q.correctIndex) {
-      this.correctCount++
-      this.xpEarned += q.xpReward
-      this.questionResults.push(true)
-      fb.setText(`✓  Correct!  +${q.xpReward} XP`).setColor('#44ff88')
-      this.time.delayedCall(1400, () => this.advance())
-    } else {
-      this.attemptsLeft--
-      if (this.attemptsLeft <= 0) {
-        this.questionResults.push(false)
-        fb.setText(`✗  Out of attempts!  Answer: ${q.answers[q.correctIndex]}`).setColor('#ff6644')
-        this.time.delayedCall(2200, () => this.advance())
-      } else {
-        fb.setText(`✗  Incorrect — ${this.attemptsLeft} attempt${this.attemptsLeft > 1 ? 's' : ''} remaining`).setColor('#ffaa44')
-        this.time.delayedCall(1300, () => { fb.setVisible(false); this.buildQuestion() })
-      }
-    }
+    // The server validates the answer (it alone knows correctIndex) and
+    // replies via 'learning:answer_result' → handleAnswerResult().
+    this.socket.emit('learning:answer', {
+      sessionId: this.sessionId,
+      questionId: q.id,
+      answerIndex: idx,
+    })
   }
 
-  private advance() {
-    this.currentQuestionIdx++
-    if (this.currentQuestionIdx >= this.sessionQuestions.length) {
-      this.state = 'results'
-      this.questionPanel.setVisible(false)
-      this.showResults()
+  /** Process the server's verdict for the answer we just submitted. */
+  private handleAnswerResult(res: AnswerResult) {
+    if (this.state !== 'questioning' || !this.questionLocked) return
+    const q = this.currentQuestion
+    if (!q) return
+
+    const fb = this.questionPanel.getByName('feedback') as Phaser.GameObjects.Text | null
+    fb?.setVisible(true)
+
+    // Accumulate server-reported rewards (display only — server holds truth)
+    this.xpEarned += res.xpEarned
+    this.skillShardsEarned += res.skillShardsAwarded
+    if (res.combatShardAwarded) this.combatShardEarned = true
+    if (res.sessionComplete) this.sessionWasPerfect = res.perfectScore
+
+    const shortText = q.question.length > 60 ? q.question.slice(0, 60) + '…' : q.question
+
+    const advance = () => {
+      if (res.sessionComplete) {
+        this.state = 'results'
+        this.questionPanel.setVisible(false)
+        this.showResults()
+      } else if (res.nextQuestion) {
+        this.currentQuestion = res.nextQuestion
+        this.questionNumber++
+        this.attemptsLeft = res.attemptsLeft
+        this.buildQuestion()
+      }
+    }
+
+    if (res.correct) {
+      this.correctCount++
+      this.questionResults.push({ text: shortText, correct: true })
+      const shardNote = res.skillShardsAwarded > 0 ? '   🔷 Skill Shard earned!' : ''
+      fb?.setText(`✓  Correct!  +${res.xpEarned} XP${shardNote}`).setColor('#44ff88')
+      this.time.delayedCall(res.skillShardsAwarded > 0 ? 1800 : 1400, advance)
+    } else if (res.attemptsLeft <= 0 || res.sessionComplete || res.nextQuestion) {
+      // Out of attempts — the server has moved on to the next question
+      this.questionResults.push({ text: shortText, correct: false })
+      fb?.setText(`✗  Out of attempts!  ${res.explanation}`).setColor('#ff6644')
+      this.time.delayedCall(2600, advance)
     } else {
-      this.attemptsLeft = 3
-      this.buildQuestion()
+      // Wrong, but attempts remain — retry the same question
+      this.attemptsLeft = res.attemptsLeft
+      fb?.setText(`✗  Incorrect — ${res.attemptsLeft} attempt${res.attemptsLeft > 1 ? 's' : ''} remaining`).setColor('#ffaa44')
+      this.time.delayedCall(1300, () => { fb?.setVisible(false); this.buildQuestion() })
     }
   }
 
@@ -722,8 +855,10 @@ export class ClassroomScene extends Phaser.Scene {
     this.resultsPanel.removeAll(true)
     this.resultsPanel.setVisible(true)
 
-    const perfect = this.correctCount === this.sessionQuestions.length
-    const W = 720, H = perfect ? 540 : 470
+    // All reward facts below were reported by the server — never computed here.
+    const perfect = this.sessionWasPerfect
+    const shardLines = (this.skillShardsEarned > 0 ? 1 : 0) + (this.combatShardEarned ? 1 : 0)
+    const W = 720, H = 470 + shardLines * 60
     const bg = this.add.graphics()
     bg.fillStyle(0x0c0c24, 0.98)
     bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
@@ -752,66 +887,41 @@ export class ClassroomScene extends Phaser.Scene {
     dv.lineBetween(-W / 2 + 40, -H / 2 + 90, W / 2 - 40, -H / 2 + 90)
     this.resultsPanel.add(dv)
 
-    // Per-question rows
-    this.questionResults.forEach((correct, i) => {
-      const q = this.sessionQuestions[i]
-      const short = q.question.length > 60 ? q.question.slice(0, 60) + '…' : q.question
+    // Per-question rows (question text captured as the server presented it)
+    this.questionResults.forEach((row, i) => {
       this.resultsPanel.add(this.add.text(
         0, -H / 2 + 124 + i * 38,
-        `${correct ? '✓' : '✗'}  Q${i + 1}:  ${short}`,
-        { fontSize: '14px', fontFamily: 'Arial', color: correct ? '#44ff88' : '#ff6655', wordWrap: { width: W - 60 } }
+        `${row.correct ? '✓' : '✗'}  Q${i + 1}:  ${row.text}`,
+        { fontSize: '14px', fontFamily: 'Arial', color: row.correct ? '#44ff88' : '#ff6655', wordWrap: { width: W - 60 } }
       ).setOrigin(0.5, 0.5))
     })
 
-    // Score tally
+    // Score tally (correctness counted from per-answer server verdicts)
     this.resultsPanel.add(this.add.text(
-      0, -H / 2 + 130 + this.sessionQuestions.length * 38,
-      `Score:  ${this.correctCount} / ${this.sessionQuestions.length}    ·    +${this.xpEarned} XP earned`,
+      0, -H / 2 + 130 + this.questionResults.length * 38,
+      `Score:  ${this.correctCount} / ${this.questionResults.length}    ·    +${this.xpEarned} XP earned`,
       { fontSize: '19px', fontFamily: 'Georgia, serif', color: '#44ffaa', fontStyle: 'bold' }
     ).setOrigin(0.5, 0.5))
 
-    // Shard award
-    if (perfect) {
-      const sy = H / 2 - 140
-      // Glowing orb
-      const orb = this.add.graphics()
-      orb.fillStyle(0x0044aa, 0.28); orb.fillCircle(0, sy, 32)
-      orb.fillStyle(0x2288dd, 0.55); orb.fillCircle(0, sy, 22)
-      orb.fillStyle(0x88ddff, 1);    orb.fillCircle(0, sy, 13)
-      orb.fillStyle(0xffffff, 0.8);  orb.fillTriangle(-6, sy - 8, 0, sy - 16, 6, sy - 8)
-      this.resultsPanel.add(orb)
-      this.tweens.add({ targets: orb, scaleX: 1.18, scaleY: 1.18, duration: 750, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' })
-
-      this.resultsPanel.add(this.add.text(0, sy + 46, '🔮  Shard of Knowledge Awarded!', {
-        fontSize: '20px', fontFamily: 'Georgia, serif', color: '#88eeff', fontStyle: 'bold',
+    // ── Shard awards — rendered ONLY from what the server reported ──────────
+    let sy = -H / 2 + 170 + this.questionResults.length * 38
+    if (this.skillShardsEarned > 0) {
+      this.resultsPanel.add(this.add.text(0, sy,
+        `🔷  Skill Shard earned!${this.skillShardsEarned > 1 ? `  x${this.skillShardsEarned}` : ''}`, {
+        fontSize: '19px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
       }).setOrigin(0.5, 0.5))
-      this.resultsPanel.add(this.add.text(0, sy + 76, 'Added to your inventory', {
-        fontSize: '13px', fontFamily: 'Arial', color: '#aaaaaa',
-        backgroundColor: '#ffffff11', padding: { x: 10, y: 4 },
+      this.resultsPanel.add(this.add.text(0, sy + 24, 'Every 5 correct answers — spend it at Combat Training', {
+        fontSize: '12px', fontFamily: 'Arial', color: '#aaaaaa',
       }).setOrigin(0.5, 0.5))
-
+      sy += 60
     }
-
-    // Persist XP (and shard if perfect) to MongoDB via the server.
-    // The socket is attached to window by GamePage.tsx as __lumenSocket.
-    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-    if (socket?.connected) {
-      socket.emit('player:award_xp', { xp: this.xpEarned, awardShard: perfect })
-
-      // Update the Phaser registry when the server confirms the new XP/level
-      socket.once('player:xp_updated', (data: { newXp: number; newLevel: number; leveledUp: boolean }) => {
-        this.registry.set('xp', data.newXp)
-        this.registry.set('level', data.newLevel)
-        if (data.leveledUp) {
-          console.log(`[ClassroomScene] Level up! Now level ${data.newLevel}`)
-        }
-      })
-    } else {
-      // Fallback: update registry locally if the socket is not available
-      this.registry.set('xp', ((this.registry.get('xp') as number) || 0) + this.xpEarned)
-      if (perfect) {
-        this.registry.set('shards', ((this.registry.get('shards') as number) || 0) + 1)
-      }
+    if (this.combatShardEarned) {
+      this.resultsPanel.add(this.add.text(0, sy, '🔶  Combat Shard earned — topic complete!', {
+        fontSize: '19px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5))
+      this.resultsPanel.add(this.add.text(0, sy + 24, 'Spend it at the Combat Strategy Hall', {
+        fontSize: '12px', fontFamily: 'Arial', color: '#aaaaaa',
+      }).setOrigin(0.5, 0.5))
     }
 
     // Return button

@@ -1,6 +1,18 @@
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { STRATEGIES, STRATEGY_PRESETS, CombatStrategy, StrategyPreset } from '../data/combatStrategies'
+
+// Display copy of the server's Combat Shard pricing (server enforces the real price)
+const STRATEGY_PRICE = 2
+const PRESET_PRICE = 8
+
+interface ShopUnlocks {
+  unlockedSkills: string[]
+  unlockedStrategies: string[]
+  skillShards: number
+  combatShards: number
+}
 
 const COLOR_BG        = 0x0d0d1a
 const COLOR_PANEL     = 0x12122a
@@ -26,6 +38,14 @@ export class StrategyScene extends Phaser.Scene {
   private selectedStrategy: CombatStrategy | null = null
   private activePresetId: string | null = null
 
+  // Server-reported shop state — only ever updated from 'shop:unlocks' /
+  // 'shop:strategy_purchased' pushes.  Purchases go through shop:buy_strategy.
+  private socket: Socket | null = null
+  private unlockedStrategies: Set<string> = new Set()
+  private combatShards = 0
+  private balanceText!: Phaser.GameObjects.Text
+  private feedbackText!: Phaser.GameObjects.Text
+
   // Left panel
   private leftContainer!: Phaser.GameObjects.Container
   private presetButtons: Phaser.GameObjects.Container[] = []
@@ -47,6 +67,27 @@ export class StrategyScene extends Phaser.Scene {
   create() {
     // ── Load active preset from registry ──────────────────────────────────────
     this.activePresetId = this.registry.get('activeStrategyPreset') ?? null
+
+    // ── Server shop state ─────────────────────────────────────────────────────
+    this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
+
+    const onUnlocks = (data: ShopUnlocks) => this.applyUnlocks(data)
+    const onPurchased = (data: ShopUnlocks & { strategyId: string }) => {
+      this.applyUnlocks(data)
+      this.showFeedback('✓ Purchase complete!', '#88ffaa')
+    }
+    const onError = (err: { message?: string }) => {
+      if (err?.message) this.showFeedback(err.message, '#ff8866')
+    }
+    this.socket?.on('shop:unlocks', onUnlocks)
+    this.socket?.on('shop:strategy_purchased', onPurchased)
+    this.socket?.on('error', onError)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.socket?.off('shop:unlocks', onUnlocks)
+      this.socket?.off('shop:strategy_purchased', onPurchased)
+      this.socket?.off('error', onError)
+    })
+    this.socket?.emit('shop:get_unlocks')
 
     // ── Background ────────────────────────────────────────────────────────────
     const bg = this.add.graphics()
@@ -80,6 +121,12 @@ export class StrategyScene extends Phaser.Scene {
     this.tooltipContainer = this.add.container(0, 0).setDepth(200)
     this.tooltipContainer.setVisible(false)
 
+    // ── Purchase feedback toast ───────────────────────────────────────────────
+    this.feedbackText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 34, '', {
+      fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#88ffaa',
+      backgroundColor: '#000000aa', padding: { x: 10, y: 5 },
+    }).setOrigin(0.5, 0.5).setDepth(250).setVisible(false)
+
     // ── Keyboard ESC ─────────────────────────────────────────────────────────
     this.input.keyboard!.once('keydown-ESC', () => this.closeScene())
 
@@ -106,6 +153,11 @@ export class StrategyScene extends Phaser.Scene {
       color: COLOR_TEXT_GOLD,
       fontStyle: 'bold',
     }).setOrigin(0, 0.5).setDepth(6)
+
+    // Combat Shard balance (server-reported)
+    this.balanceText = this.add.text(GAME_WIDTH - 170, PANEL_TOP / 2, '🔶 Combat Shards:  …', {
+      fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
+    }).setOrigin(1, 0.5).setDepth(6)
 
     // ESC close button
     const closeBtnX = GAME_WIDTH - 100
@@ -338,29 +390,41 @@ export class StrategyScene extends Phaser.Scene {
       }).setOrigin(0, 0)
     )
 
-    // ── Equip button ──────────────────────────────────────────────────────────
+    // ── Equip / Buy button ────────────────────────────────────────────────────
+    // Equipping requires OWNING the preset (every strategy in it purchased).
+    // Until then the button becomes "Buy Preset · 8 🔶" → shop:buy_strategy.
     const equipX = RIGHT_PANEL_X + RIGHT_PANEL_W - 140
     const equipY = PANEL_TOP + infoH / 2
     const isEquipped = this.activePresetId === preset.id
+    const owned = this.isPresetOwned(preset)
+    const affordable = this.combatShards >= PRESET_PRICE
     const equipBg = this.add.graphics()
     this.rightInfoContainer.add(equipBg)
 
     const drawEquipBtn = (hover = false) => {
       equipBg.clear()
-      const fillC = isEquipped ? 0x0a3a1a : (hover ? 0x2a3a1a : 0x1a2a1a)
-      const borderC = isEquipped ? 0x44ff88 : (hover ? 0x88dd44 : 0x44aa44)
+      let fillC: number, borderC: number
+      if (!owned) {
+        fillC = affordable ? (hover ? 0x3a2a0a : 0x2a1f0a) : 0x2a1a1a
+        borderC = affordable ? (hover ? 0xffcc44 : 0xaa8833) : 0x664444
+      } else {
+        fillC = isEquipped ? 0x0a3a1a : (hover ? 0x2a3a1a : 0x1a2a1a)
+        borderC = isEquipped ? 0x44ff88 : (hover ? 0x88dd44 : 0x44aa44)
+      }
       equipBg.fillStyle(fillC, 1)
-      equipBg.fillRoundedRect(equipX - 60, equipY - 18, 120, 36, 8)
+      equipBg.fillRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
       equipBg.lineStyle(2, borderC, 1)
-      equipBg.strokeRoundedRect(equipX - 60, equipY - 18, 120, 36, 8)
+      equipBg.strokeRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
     }
     drawEquipBtn()
 
-    const equipLabel = isEquipped ? '✓ Equipped' : 'Equip Preset'
+    const equipLabel = !owned
+      ? `Buy Preset · ${PRESET_PRICE} 🔶`
+      : isEquipped ? '✓ Equipped' : 'Equip Preset'
     const equipText = this.add.text(equipX, equipY, equipLabel, {
       fontSize: '14px',
       fontFamily: 'Arial, sans-serif',
-      color: isEquipped ? '#88ffaa' : '#aaffaa',
+      color: !owned ? (affordable ? '#ffcc77' : '#cc7766') : isEquipped ? '#88ffaa' : '#aaffaa',
       fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true })
     this.rightInfoContainer.add(equipText)
@@ -368,6 +432,15 @@ export class StrategyScene extends Phaser.Scene {
     equipText.on('pointerover', () => drawEquipBtn(true))
     equipText.on('pointerout',  () => drawEquipBtn(false))
     equipText.on('pointerdown', () => {
+      if (!owned) {
+        // Server validates ownership, pricing and balance
+        if (!this.socket?.connected) {
+          this.showFeedback('Not connected to the server.', '#ff8866')
+          return
+        }
+        this.socket.emit('shop:buy_strategy', { strategyId: preset.id })
+        return
+      }
       if (!isEquipped) {
         this.registry.set('activeStrategyPreset', preset.id)
         this.activePresetId = preset.id
@@ -469,9 +542,13 @@ export class StrategyScene extends Phaser.Scene {
       color: COLOR_TEXT_DIM,
     }).setOrigin(0, 0.5)
 
-    // Action badge
+    // Ownership badge (server-reported): owned ✓ or a Buy button (2 🔶)
+    const owned = this.unlockedStrategies.has(strategy.id)
+    const badgeW = 74
+
+    // Action badge (shifted left to make room for the ownership badge)
     const actionLabel = this.formatAction(strategy)
-    const actionText = this.add.text(w - 12, h / 2, actionLabel, {
+    const actionText = this.add.text(w - badgeW - 20, h / 2, actionLabel, {
       fontSize: '11px',
       fontFamily: 'Arial, sans-serif',
       color: this.actionColor(strategy.action),
@@ -480,6 +557,32 @@ export class StrategyScene extends Phaser.Scene {
     }).setOrigin(1, 0.5)
 
     container.add([bg, rankBadge, rankText, nameText, condText, actionText])
+
+    if (owned) {
+      container.add(this.add.text(w - 12, h / 2, '✓ Owned', {
+        fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#88ffaa',
+        backgroundColor: '#0a2a1a', padding: { x: 6, y: 4 }, fontStyle: 'bold',
+      }).setOrigin(1, 0.5))
+    } else {
+      const affordable = this.combatShards >= STRATEGY_PRICE
+      const buyText = this.add.text(w - 12, h / 2, `Buy ${STRATEGY_PRICE} 🔶`, {
+        fontSize: '11px', fontFamily: 'Arial, sans-serif',
+        color: affordable ? '#ffcc77' : '#cc7766',
+        backgroundColor: '#2a1f0a', padding: { x: 6, y: 4 }, fontStyle: 'bold',
+      }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true })
+      buyText.on('pointerover', () => buyText.setColor('#ffee99'))
+      buyText.on('pointerout',  () => buyText.setColor(affordable ? '#ffcc77' : '#cc7766'))
+      buyText.on('pointerdown', (_p: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+        event.stopPropagation()
+        // Server validates ownership, pricing and balance
+        if (!this.socket?.connected) {
+          this.showFeedback('Not connected to the server.', '#ff8866')
+          return
+        }
+        this.socket.emit('shop:buy_strategy', { strategyId: strategy.id })
+      })
+      container.add(buyText)
+    }
 
     // Hit zone
     const hit = this.add.zone(0, 0, w, h).setOrigin(0, 0)
@@ -611,6 +714,26 @@ export class StrategyScene extends Phaser.Scene {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /** Apply a server-pushed unlock/balance snapshot and re-render. */
+  private applyUnlocks(data: ShopUnlocks) {
+    this.unlockedStrategies = new Set(data.unlockedStrategies ?? [])
+    this.combatShards = data.combatShards ?? 0
+    this.balanceText.setText(`🔶 Combat Shards:  ${this.combatShards}`)
+    this.drawLeftPanel()
+    this.drawRightPanel()
+  }
+
+  /** A preset is owned when every strategy in it has been purchased. */
+  private isPresetOwned(preset: StrategyPreset): boolean {
+    return preset.strategies.every(id => this.unlockedStrategies.has(id))
+  }
+
+  private showFeedback(message: string, color: string) {
+    this.feedbackText.setText(message).setColor(color).setVisible(true)
+    this.time.delayedCall(2600, () => this.feedbackText.setVisible(false))
+  }
+
   private selectPreset(preset: StrategyPreset) {
     this.selectedPreset = preset
     this.selectedStrategy = null

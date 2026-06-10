@@ -3,10 +3,7 @@ import type { Socket } from 'socket.io-client'
 import { TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
 import { Building } from '../objects/Building'
-import {
-  CP_GRASS, CP_GRASS2, CP_DIRT,
-  CPD_BLADES, CPD_SPECKS, CPD_MOUNDS, CPD_TUFTS, CPD_FLOWERS,
-} from '../data/tileFrames'
+import { CP_GRASS, CP_GRASS2, CP_DIRT, CPD_BLADES, CPD_SPECKS } from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
@@ -129,13 +126,14 @@ export class WorldScene extends Phaser.Scene {
         }
       }
 
-      // Texture decals — at most one per 64px cell, blades most common
+      // Texture decals — at most one per 64px cell. ONLY the single-tile
+      // decal rows are safe here: the sheet's mounds/bushes/flowers are
+      // multi-tile clusters, and stamping one 16px slice of them renders
+      // visibly cut-off chunks. Flowers/tufts are placed as complete
+      // standalone PNG props below instead.
       const decals = [
-        { frames: CPD_BLADES,  chance: 0.30 },
-        { frames: CPD_SPECKS,  chance: 0.10 },
-        { frames: CPD_MOUNDS,  chance: 0.05 },
-        { frames: CPD_TUFTS,   chance: 0.04 },
-        { frames: CPD_FLOWERS, chance: 0.04 },
+        { frames: CPD_BLADES, chance: 0.30 },
+        { frames: CPD_SPECKS, chance: 0.12 },
       ]
       for (let ty = 0; ty < WORLD_HEIGHT; ty += tileW) {
         for (let tx = 0; tx < WORLD_WIDTH; tx += tileW) {
@@ -149,6 +147,45 @@ export class WorldScene extends Phaser.Scene {
             }
           }
         }
+      }
+    }
+
+    // ── Flower/tuft props (complete standalone sprites, never clipped) ────────
+    {
+      const rand = this.rng(7)
+      const cX = WORLD_WIDTH / 2
+      const cY = WORLD_HEIGHT / 2
+      // Keep props off the trail corridors: the two main roads run along the
+      // world center lines (wander ≤ ±2 tiles + half ribbon ≈ 112px) and the
+      // four diagonal branches connect fixed points (see diagonalBranches).
+      const diags: [number, number, number, number][] = [
+        [960, 960, 640, 640], [1600, 960, 1920, 640],
+        [960, 1600, 640, 1920], [1600, 1600, 1920, 1920],
+      ]
+      const nearTrail = (x: number, y: number): boolean => {
+        if (Math.abs(y - cY) < 140 || Math.abs(x - cX) < 140) return true
+        for (const [x1, y1, x2, y2] of diags) {
+          const dx = x2 - x1
+          const dy = y2 - y1
+          const t = Phaser.Math.Clamp(((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy), 0, 1)
+          if (Math.hypot(x - (x1 + dx * t), y - (y1 + dy * t)) < 140) return true
+        }
+        return false
+      }
+
+      let placed = 0
+      let attempts = 0
+      while (placed < 70 && attempts < 700) {
+        attempts++
+        const x = 60 + rand() * (WORLD_WIDTH - 120)
+        const y = 60 + rand() * (WORLD_HEIGHT - 120)
+        if (nearTrail(x, y)) continue
+        if (rand() < 0.6) {
+          this.add.image(x, y, `cp_flower${1 + Math.floor(rand() * 6)}`).setScale(3).setDepth(1)
+        } else {
+          this.add.image(x, y, `cp_tuft${1 + Math.floor(rand() * 2)}`).setScale(2).setDepth(1)
+        }
+        placed++
       }
     }
 
@@ -172,7 +209,9 @@ export class WorldScene extends Phaser.Scene {
     // Horizontal winding trail (Desert ↔ Ocean)
     {
       const rand = this.rng(42)
-      const offsets = this.buildWindingOffsets(WORLD_WIDTH / TILE_SIZE + 1, 4, 8, rand)
+      // Gentle wander (±2 tiles over long 16-cell segments) — higher
+      // amplitudes read as wobbly "intestines" rather than a country road
+      const offsets = this.buildWindingOffsets(WORLD_WIDTH / TILE_SIZE + 1, 2, 16, rand)
       for (let i = 36; i <= 44; i++) offsets[i] = 0   // straight through town
       this.stampTrail(trailRT, (t) => {
         const px = t * WORLD_WIDTH
@@ -186,7 +225,7 @@ export class WorldScene extends Phaser.Scene {
     // Vertical winding trail (Snow ↔ Swamp)
     {
       const rand = this.rng(137)
-      const offsets = this.buildWindingOffsets(WORLD_HEIGHT / TILE_SIZE + 1, 4, 8, rand)
+      const offsets = this.buildWindingOffsets(WORLD_HEIGHT / TILE_SIZE + 1, 2, 16, rand)
       for (let i = 36; i <= 44; i++) offsets[i] = 0
       this.stampTrail(trailRT, (t) => {
         const py = t * WORLD_HEIGHT
@@ -211,7 +250,7 @@ export class WorldScene extends Phaser.Scene {
     for (const b of diagonalBranches) {
       const rand = this.rng(b.fromX ^ (b.fromY << 8))
       const steps = Math.abs(b.toX - b.fromX) / TILE_SIZE
-      const offsets = this.buildWindingOffsets(steps + 1, 3, 4, rand)
+      const offsets = this.buildWindingOffsets(steps + 1, 1, 12, rand)
       const perpX = -Math.sign(b.toY - b.fromY)
       const perpY = Math.sign(b.toX - b.fromX)
       this.stampTrail(trailRT, (t) => {
@@ -621,12 +660,17 @@ export class WorldScene extends Phaser.Scene {
       { xMin: WORLD_WIDTH - 400, xMax: WORLD_WIDTH - margin, yMin: 400, yMax: WORLD_HEIGHT - 400 },
     ]
 
-    for (let i = 0; i < count; i++) {
-      const zone = zones[i % zones.length]
-      positions.push([
-        Phaser.Math.Between(zone.xMin, zone.xMax),
-        Phaser.Math.Between(zone.yMin, zone.yMax),
-      ])
+    // Rejection sampling with a minimum spacing — the tree sprites are
+    // 128-192px wide, so anything closer than ~190px visibly stacks.
+    const rand = this.rng(3131)
+    let attempts = 0
+    while (positions.length < count && attempts < count * 40) {
+      attempts++
+      const zone = zones[attempts % zones.length]
+      const x = zone.xMin + rand() * (zone.xMax - zone.xMin)
+      const y = zone.yMin + rand() * (zone.yMax - zone.yMin)
+      if (positions.some(([px, py]) => Math.hypot(px - x, py - y) < 190)) continue
+      positions.push([x, y])
     }
     return positions
   }

@@ -252,6 +252,26 @@ export class InventoryManager {
     return true;
   }
 
+  /**
+   * Unequip the item in `slot` back into the player's bag.
+   * Returns false if the player is unknown or the slot is already empty.
+   * The caller (the `equipment:unequip` socket handler) validates that `slot`
+   * is a known EquipmentSlotKey before calling.
+   */
+  unequipItem(playerId: string, slot: EquipmentSlotKey): boolean {
+    const inv = this.inventories.get(playerId);
+    if (!inv) return false;
+
+    const item = inv.equipment[slot];
+    if (!item) return false;
+
+    inv.items.push(item);
+    delete inv.equipment[slot];
+
+    this.persistInventory(playerId);
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Special items
   // -------------------------------------------------------------------------

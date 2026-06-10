@@ -304,6 +304,15 @@ export interface EquipmentEquipPayload {
   itemId: string;
 }
 
+/**
+ * Payload for `equipment:unequip` — moves the item in the named slot back to
+ * the player's bag.  The slot name is validated server-side against the known
+ * EquipmentSlotKey set; the item itself never comes from the client.
+ */
+export interface EquipmentUnequipPayload {
+  slot: EquipmentSlotKey;
+}
+
 // ---------------------------------------------------------------------------
 // Chest Storage
 // ---------------------------------------------------------------------------

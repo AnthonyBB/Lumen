@@ -8,4 +8,5 @@ I am a highly educated game designer and software engineer with an interest in m
 
 # Rules
 
-- Keep all content safe for children over the age of 7. Educational questions that could be considered inappropriate for younger audiences should be limited by a user provided age verification.
+- Educational questions that could be considered inappropriate for younger audiences should be limited by a user provided age verification.
+- All inventory, skills, stats, xp, and any other item that can be persisted on the server side, should be stored on the server-side to prevent client-side manipulation. It's imperitive that the game prevents cheating.

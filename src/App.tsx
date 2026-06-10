@@ -5,10 +5,11 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import SettingsPage from './pages/SettingsPage'
 import Nav from './components/Nav'
-import { useAuth } from './hooks/useAuth'
+import { useAuth, useSessionGuard } from './hooks/useAuth'
 
 export default function App() {
   const { isAuthenticated, token, user, setContentMode } = useAuth()
+  useSessionGuard(isAuthenticated)
 
   return (
     <div className="min-h-screen flex flex-col">

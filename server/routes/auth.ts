@@ -316,4 +316,16 @@ router.put('/content-mode', requireAuth, async (req: Request, res: Response) => 
   })
 })
 
+// ---------------------------------------------------------------------------
+// GET /api/auth/me  (authenticated)
+// Server-side token validation: returns the decoded user if the JWT is valid.
+// The client calls this on load so a token the server would reject (expired,
+// signed with a rotated secret) logs the user out instead of leaving the UI
+// "logged in" while every socket connection silently fails.
+// ---------------------------------------------------------------------------
+
+router.get('/me', requireAuth, (req: Request, res: Response) => {
+  res.json({ user: req.user })
+})
+
 export default router

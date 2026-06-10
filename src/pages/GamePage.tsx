@@ -3,7 +3,7 @@ import Phaser from 'phaser'
 import { io, Socket } from 'socket.io-client'
 import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
-import type { AuthUser } from '../hooks/useAuth'
+import { forceLogout, type AuthUser } from '../hooks/useAuth'
 
 interface GamePageProps {
   token: string | null
@@ -30,6 +30,13 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
 
     s.on('connect', () => {
       s.emit('players:get_online')
+    })
+
+    // The server rejects sockets with invalid/expired tokens. Without this,
+    // socket.io retries forever with the same bad token while the UI still
+    // looks logged in (and Players Online never updates).
+    s.on('connect_error', (err) => {
+      if (err.message === 'Invalid token') forceLogout()
     })
 
     ;(window as typeof window & { __lumenSocket?: Socket }).__lumenSocket = s

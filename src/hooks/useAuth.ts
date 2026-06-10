@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 
 export type ContentMode = 'child' | 'adolescent' | null
 
@@ -11,6 +11,21 @@ export interface AuthUser {
 }
 
 const TOKEN_KEY = 'lumen_token'
+
+/** Auto-logout after this long with no mouse/keyboard/touch activity. */
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+/** How often the session guard re-checks expiry and idle time. */
+const SESSION_CHECK_INTERVAL_MS = 30 * 1000
+
+/**
+ * Clear the stored token and reload, landing the user on the login page.
+ * Module-level so any caller (session guard, socket error handler) can use it
+ * without coordinating React state — the reload resets everything.
+ */
+export function forceLogout(): void {
+  localStorage.removeItem(TOKEN_KEY)
+  window.location.reload()
+}
 
 /** Decode the payload of a JWT without verifying the signature (client-side only). */
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -40,6 +55,53 @@ function getStoredUser(): AuthUser | null {
     ageGroup: payload.ageGroup as 'child' | 'teen' | 'adult',
     contentMode: (payload.contentMode as ContentMode) ?? null,
   }
+}
+
+/**
+ * Session guard — call ONCE (from App). Logs the user out when:
+ *  1. the server rejects the stored token (GET /api/auth/me → 401), e.g.
+ *     expired or signed with a rotated secret;
+ *  2. the token's exp passes while the tab is open (checked every 30s,
+ *     not just on page load);
+ *  3. the user is idle for IDLE_TIMEOUT_MS (no pointer/key/touch activity).
+ */
+export function useSessionGuard(enabled: boolean): void {
+  useEffect(() => {
+    if (!enabled) return
+    const token = localStorage.getItem(TOKEN_KEY)
+    if (!token) return
+
+    // 1. Validate the token against the server once on load
+    fetch('http://localhost:3001/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (res.status === 401) forceLogout()
+      })
+      .catch(() => {
+        /* server unreachable — leave the session alone */
+      })
+
+    // 2 + 3. Periodic expiry & idle checks
+    let lastActivity = Date.now()
+    const markActivity = () => { lastActivity = Date.now() }
+    const events: (keyof WindowEventMap)[] = ['pointerdown', 'pointermove', 'keydown', 'touchstart']
+    for (const ev of events) window.addEventListener(ev, markActivity, { passive: true })
+
+    const interval = window.setInterval(() => {
+      const t = localStorage.getItem(TOKEN_KEY)
+      if (!t) return
+      const payload = decodeJwtPayload(t)
+      const expired = typeof payload?.exp === 'number' && payload.exp * 1000 < Date.now()
+      const idle = Date.now() - lastActivity > IDLE_TIMEOUT_MS
+      if (expired || idle) forceLogout()
+    }, SESSION_CHECK_INTERVAL_MS)
+
+    return () => {
+      window.clearInterval(interval)
+      for (const ev of events) window.removeEventListener(ev, markActivity)
+    }
+  }, [enabled])
 }
 
 export function useAuth() {

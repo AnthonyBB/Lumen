@@ -31,9 +31,12 @@ export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, getSecret()) as JwtPayload
 }
 
+/** Session lifetime. Override with JWT_EXPIRES_IN (e.g. '30m', '2h', '7d'). */
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN ?? '2h') as jwt.SignOptions['expiresIn']
+
 /** Sign a new JWT. */
 export function signToken(payload: JwtPayload): string {
-  return jwt.sign(payload, getSecret(), { expiresIn: '7d' })
+  return jwt.sign(payload, getSecret(), { expiresIn: JWT_EXPIRES_IN })
 }
 
 /**

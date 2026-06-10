@@ -489,7 +489,9 @@ export function registerHandlers(
 
     // ── Server-authoritative shard awards ────────────────────────────────────
     // 🔷 Skill Shard: 1 per 5 cumulative correct answers (persisted per user).
-    // 🔶 Combat Shard: completing a subcategory session with a perfect score.
+    // 🔶 Combat Shard: a subcategory is complete only when EVERY question in
+    //    it has been answered correctly at least 3 times (tracked per user
+    //    across sessions; awarded once per subcategory).
     let skillShardsAwarded = 0;
     let combatShardAwarded = false;
 
@@ -499,12 +501,24 @@ export function registerHandlers(
         inventoryManager.addCurrency(socket.id, 'skill_shard', skillShardsAwarded);
         console.log(`[learning] ${socket.id} reached a 5-correct milestone — skill shard awarded`);
       }
-    }
 
-    if (sessionComplete && perfectScore && session?.subcategory) {
-      combatShardAwarded = true;
-      inventoryManager.addCurrency(socket.id, 'combat_shard', 1);
-      console.log(`[learning] ${socket.id} completed subcategory "${session.subcategory}" — combat shard awarded`);
+      if (session?.subcategory) {
+        const subcatQuestionIds = questionEngine.getQuestionIdsForSubcategory(session.subcategory);
+        const newlyMastered = playerManager.recordQuestionMastery(
+          socket.id,
+          payload.questionId,
+          session.subcategory,
+          subcatQuestionIds,
+        );
+        if (newlyMastered) {
+          combatShardAwarded = true;
+          inventoryManager.addCurrency(socket.id, 'combat_shard', 1);
+          console.log(
+            `[learning] ${socket.id} mastered subcategory "${session.subcategory}" ` +
+            `(every question correct ≥3×) — combat shard awarded`,
+          );
+        }
+      }
     }
 
     // Persist XP / level / cumulative-correct progress on every correct

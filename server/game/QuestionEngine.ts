@@ -11,7 +11,7 @@
  *    by position.
  */
 
-import { randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 import type { Question, Subject, Difficulty, ClientQuestion } from '../types/index.js';
 import { MATH_QUESTIONS } from './data/questions/math.js';
 import { SCIENCE_QUESTIONS } from './data/questions/science.js';
@@ -42,9 +42,18 @@ export class QuestionEngine {
   private questions: Map<string, Question> = new Map();
 
   constructor() {
-    // Assign stable UUIDs to every question at startup
+    // Assign STABLE content-derived ids. Per-question mastery counts are
+    // persisted per user (subcategory completion = every question correct
+    // ≥3 times), so ids must survive server restarts — random UUIDs would
+    // reset everyone's mastery on every deploy. A hash is still
+    // non-sequential, so clients cannot enumerate the bank by position.
     for (const raw of RAW_QUESTIONS) {
-      const id = randomUUID();
+      let id = 'q_' + createHash('sha1')
+        .update(`${raw.subject}|${raw.subcategory}|${raw.question}`)
+        .digest('hex')
+        .slice(0, 16);
+      // Collision guard (duplicate question text within a subcategory)
+      while (this.questions.has(id)) id += 'x';
       this.questions.set(id, { ...raw, id } as Question);
     }
   }
@@ -102,6 +111,16 @@ export class QuestionEngine {
    */
   getQuestionById(id: string): Question | undefined {
     return this.questions.get(id);
+  }
+
+  /**
+   * All question ids belonging to a curriculum subcategory — used to decide
+   * subcategory mastery (every id answered correctly ≥3 times).
+   */
+  getQuestionIdsForSubcategory(subcategory: string): string[] {
+    return Array.from(this.questions.values())
+      .filter((q) => q.subcategory === subcategory)
+      .map((q) => q.id);
   }
 
   // -------------------------------------------------------------------------

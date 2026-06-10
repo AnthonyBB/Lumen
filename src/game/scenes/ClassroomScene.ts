@@ -916,10 +916,11 @@ export class ClassroomScene extends Phaser.Scene {
       sy += 60
     }
     if (this.combatShardEarned) {
-      this.resultsPanel.add(this.add.text(0, sy, '🔶  Combat Shard earned — topic complete!', {
+      this.resultsPanel.add(this.add.text(0, sy, '🔶  Combat Shard earned — topic mastered!', {
         fontSize: '19px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
       }).setOrigin(0.5, 0.5))
-      this.resultsPanel.add(this.add.text(0, sy + 24, 'Spend it at the Combat Strategy Hall', {
+      this.resultsPanel.add(this.add.text(0, sy + 24,
+        'Every question in this topic answered correctly 3 times — spend it at the Combat Strategy Hall', {
         fontSize: '12px', fontFamily: 'Arial', color: '#aaaaaa',
       }).setOrigin(0.5, 0.5))
     }

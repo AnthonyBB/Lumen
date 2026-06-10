@@ -65,6 +65,8 @@ export class PlayerManager {
       position: { ...INITIAL_STATS.position },
       lastMessageAt: 0,
       correctAnswers: 0,
+      questionMastery: {},
+      masteredSubcategories: [],
       unlockedSkills: [],
       unlockedStrategies: [],
     };
@@ -152,6 +154,8 @@ export class PlayerManager {
     xp: number;
     level: number;
     correctAnswers: number;
+    questionMastery: Record<string, number>;
+    masteredSubcategories: string[];
     unlockedSkills: string[];
     unlockedStrategies: string[];
   }> {
@@ -162,6 +166,8 @@ export class PlayerManager {
           xp: doc.xp,
           level: doc.level,
           correctAnswers: doc.correctAnswers ?? 0,
+          questionMastery: doc.questionMastery ?? {},
+          masteredSubcategories: doc.masteredSubcategories ?? [],
           unlockedSkills: doc.unlockedSkills ?? [],
           unlockedStrategies: doc.unlockedStrategies ?? [],
         };
@@ -169,7 +175,11 @@ export class PlayerManager {
     } catch (err) {
       console.error('[PlayerManager] loadProgress error:', err);
     }
-    return { xp: 0, level: 1, correctAnswers: 0, unlockedSkills: [], unlockedStrategies: [] };
+    return {
+      xp: 0, level: 1, correctAnswers: 0,
+      questionMastery: {}, masteredSubcategories: [],
+      unlockedSkills: [], unlockedStrategies: [],
+    };
   }
 
   /**
@@ -182,6 +192,8 @@ export class PlayerManager {
       xp: number;
       level: number;
       correctAnswers?: number;
+      questionMastery?: Record<string, number>;
+      masteredSubcategories?: string[];
       unlockedSkills?: string[];
       unlockedStrategies?: string[];
     },
@@ -193,6 +205,8 @@ export class PlayerManager {
     player.maxHp = 100 + (player.level - 1) * 20;
     player.hp = player.maxHp;
     player.correctAnswers = Math.max(0, progress.correctAnswers ?? 0);
+    player.questionMastery = { ...(progress.questionMastery ?? {}) };
+    player.masteredSubcategories = [...(progress.masteredSubcategories ?? [])];
     player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
     player.unlockedStrategies = [...(progress.unlockedStrategies ?? [])];
   }
@@ -211,6 +225,8 @@ export class PlayerManager {
         xp: player.xp,
         level: player.level,
         correctAnswers: player.correctAnswers,
+        questionMastery: player.questionMastery,
+        masteredSubcategories: player.masteredSubcategories,
         unlockedSkills: player.unlockedSkills,
         unlockedStrategies: player.unlockedStrategies,
       },
@@ -231,6 +247,39 @@ export class PlayerManager {
     player.correctAnswers += 1;
     return player.correctAnswers % 5 === 0 ? 1 : 0;
   }
+
+  /**
+   * Record one correct answer toward per-question mastery and report whether
+   * this answer just completed the subcategory. A subcategory is complete
+   * when EVERY question in it has been answered correctly at least
+   * MASTERY_THRESHOLD times; the Combat Shard is awarded once per
+   * subcategory (tracked in masteredSubcategories).
+   */
+  recordQuestionMastery(
+    socketId: string,
+    questionId: string,
+    subcategory: string,
+    subcategoryQuestionIds: string[],
+  ): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+
+    player.questionMastery[questionId] = (player.questionMastery[questionId] ?? 0) + 1;
+
+    if (player.masteredSubcategories.includes(subcategory)) return false;
+    if (subcategoryQuestionIds.length === 0) return false;
+
+    const mastered = subcategoryQuestionIds.every(
+      (id) => (player.questionMastery[id] ?? 0) >= PlayerManager.MASTERY_THRESHOLD,
+    );
+    if (!mastered) return false;
+
+    player.masteredSubcategories.push(subcategory);
+    return true;
+  }
+
+  /** Correct answers required per question before a subcategory counts as complete. */
+  static readonly MASTERY_THRESHOLD = 3;
 
   /** Add a purchased skill id to the player's unlocks (idempotent). */
   unlockSkill(socketId: string, skillId: string): void {

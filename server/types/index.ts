@@ -26,6 +26,10 @@ export interface Player {
   lastMessageAt: number; // unix ms — used for chat rate-limiting
   /** Cumulative correct learning answers (persisted) — every 5th awards a Skill Shard. */
   correctAnswers: number;
+  /** Per-question correct-answer counts (persisted) — drives subcategory mastery. */
+  questionMastery: Record<string, number>;
+  /** Subcategories already mastered & rewarded with a Combat Shard (persisted). */
+  masteredSubcategories: string[];
   /** Skill ids purchased with Skill Shards (persisted). */
   unlockedSkills: string[];
   /** Combat strategy ids purchased with Combat Shards (persisted). */
@@ -265,7 +269,8 @@ export interface LearningAnswerResultPayload {
   nextQuestion?: ClientQuestion;
   /** Number of Skill Shards awarded by this answer (cumulative-correct milestones of 5). */
   skillShardsAwarded: number;
-  /** True when this answer completed a subcategory session with a perfect score (1 Combat Shard). */
+  /** True when this answer completed MASTERY of a subcategory — every question
+   *  in it answered correctly at least 3 times (1 Combat Shard, once per topic). */
   combatShardAwarded: boolean;
 }
 

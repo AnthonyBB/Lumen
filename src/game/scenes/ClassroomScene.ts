@@ -967,12 +967,44 @@ export class ClassroomScene extends Phaser.Scene {
       y += 24
     }
 
+    // Primary: stay in the school and return to this subject's topic list so
+    // the player can keep studying (the next topic, or the same one again).
+    const cont = this.makeButton('Continue Studying', '', 290, 52, 0x1a5a2a, 0x2a7a3a, () => this.continueStudying())
+    cont.setPosition(-156, H / 2 - 36)
+    this.resultsPanel.add(cont)
+
     const ret = this.makeButton('Return to World', '', 290, 52, 0x2a1060, 0x4a2090, () => this.returnToWorld())
-    ret.setPosition(0, H / 2 - 36)
+    ret.setPosition(156, H / 2 - 36)
     this.resultsPanel.add(ret)
   }
 
   // ─── RETURN ────────────────────────────────────────────────────────────────
+
+  /** After a quiz, stay in the classroom and reopen the topic list for the
+   *  subject just studied (its grade/passes already refreshed in handleComplete,
+   *  so completing a grade lands the player on the next grade's topics). */
+  private continueStudying() {
+    this.resultsPanel.setVisible(false)
+    this.questionPanel.setVisible(false)
+
+    // Un-seat: clear the seated avatar and restore the walking sprite for when
+    // the player eventually leaves the modal.
+    this.seatedGfx.clear()
+    this.player.setVisible(true).setVelocity(0, 0)
+
+    // Reset session state
+    this.sessionId = null
+    this.currentQuestion = null
+    this.completeResult = null
+
+    // Reopen the topic list for the same subject
+    this.modalSubject = this.sessionTopic?.subject ?? null
+    this.state = 'teacher_dialog'
+    this.overlay.setVisible(true)
+    this.socket?.emit('shop:get_unlocks')   // confirm fresh passes/grade from server
+    this.buildTopicModal()
+    this.topicModal.setVisible(true)
+  }
 
   private returnToWorld() {
     this.scene.start('WorldScene')

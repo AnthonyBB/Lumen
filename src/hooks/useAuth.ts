@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, createContext, useContext, createElement, type ReactNode } from 'react'
 
 export type ContentMode = 'child' | 'adolescent' | null
 
@@ -104,7 +104,14 @@ export function useSessionGuard(enabled: boolean): void {
   }, [enabled])
 }
 
-export function useAuth() {
+/**
+ * Internal: the actual auth state. Lives ONCE inside AuthProvider — components
+ * must consume it via useAuth()/the context. Before the provider existed,
+ * every component calling this hook got an independent state copy, so logging
+ * in updated LoginPage's copy while App's router still saw "logged out" and
+ * bounced the user back to the login page.
+ */
+function useAuthState() {
   const [user, setUser] = useState<AuthUser | null>(() => getStoredUser())
   const token = localStorage.getItem(TOKEN_KEY)
 
@@ -174,4 +181,21 @@ export function useAuth() {
     setContentMode,
     isAuthenticated: user !== null,
   }
+}
+
+type AuthContextValue = ReturnType<typeof useAuthState>
+
+const AuthContext = createContext<AuthContextValue | null>(null)
+
+/** Mount once around the app (see main.tsx) so all components share ONE auth state. */
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const value = useAuthState()
+  return createElement(AuthContext.Provider, { value }, children)
+}
+
+/** Shared auth state — reads the single instance provided by AuthProvider. */
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth must be used within <AuthProvider>')
+  return ctx
 }

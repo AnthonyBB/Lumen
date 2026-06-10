@@ -69,6 +69,7 @@ export class PlayerManager {
       masteredSubcategories: [],
       unlockedSkills: [],
       unlockedStrategies: [],
+      strategyLoadout: [],
     };
 
     this.players.set(socketId, player);
@@ -158,6 +159,7 @@ export class PlayerManager {
     masteredSubcategories: string[];
     unlockedSkills: string[];
     unlockedStrategies: string[];
+    strategyLoadout: string[];
   }> {
     try {
       const doc = await PlayerProgress.findOne({ userId }).lean();
@@ -170,6 +172,7 @@ export class PlayerManager {
           masteredSubcategories: doc.masteredSubcategories ?? [],
           unlockedSkills: doc.unlockedSkills ?? [],
           unlockedStrategies: doc.unlockedStrategies ?? [],
+          strategyLoadout: doc.strategyLoadout ?? [],
         };
       }
     } catch (err) {
@@ -178,7 +181,7 @@ export class PlayerManager {
     return {
       xp: 0, level: 1, correctAnswers: 0,
       questionMastery: {}, masteredSubcategories: [],
-      unlockedSkills: [], unlockedStrategies: [],
+      unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
     };
   }
 
@@ -196,6 +199,7 @@ export class PlayerManager {
       masteredSubcategories?: string[];
       unlockedSkills?: string[];
       unlockedStrategies?: string[];
+      strategyLoadout?: string[];
     },
   ): void {
     const player = this.players.get(socketId);
@@ -209,6 +213,10 @@ export class PlayerManager {
     player.masteredSubcategories = [...(progress.masteredSubcategories ?? [])];
     player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
     player.unlockedStrategies = [...(progress.unlockedStrategies ?? [])];
+    // Defensive: only keep loadout entries the player actually owns.
+    player.strategyLoadout = (progress.strategyLoadout ?? []).filter((id) =>
+      player.unlockedStrategies.includes(id),
+    );
   }
 
   /**
@@ -229,6 +237,7 @@ export class PlayerManager {
         masteredSubcategories: player.masteredSubcategories,
         unlockedSkills: player.unlockedSkills,
         unlockedStrategies: player.unlockedStrategies,
+        strategyLoadout: player.strategyLoadout,
       },
       { upsert: true, new: true },
     ).catch((err) => {
@@ -295,6 +304,13 @@ export class PlayerManager {
     for (const id of strategyIds) {
       if (!player.unlockedStrategies.includes(id)) player.unlockedStrategies.push(id);
     }
+  }
+
+  /** Replace the player's ordered strategy loadout (caller validates ids). */
+  setStrategyLoadout(socketId: string, strategyIds: string[]): void {
+    const player = this.players.get(socketId);
+    if (!player) return;
+    player.strategyLoadout = [...strategyIds];
   }
 
   /** Apply damage to a player's HP (server-side only). */

@@ -34,6 +34,9 @@ export interface Player {
   unlockedSkills: string[];
   /** Combat strategy ids purchased with Combat Shards (persisted). */
   unlockedStrategies: string[];
+  /** Ordered strategy loadout arranged at the Teacher (persisted, max 10,
+   *  owned ids only — first entry is checked first in combat). */
+  strategyLoadout: string[];
 }
 
 /** Safe subset of a player that can be broadcast to other clients. */
@@ -216,6 +219,15 @@ export interface ShopBuyStrategyPayload {
   strategyId: string;
 }
 
+/**
+ * Payload for `strategy:set_loadout` — the player's desired strategy order
+ * (top = checked first). Validated server-side: ≤10 ids, all known, all
+ * owned, no duplicates.
+ */
+export interface StrategySetLoadoutPayload {
+  strategyIds: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Socket event payloads — Server → Client
 // ---------------------------------------------------------------------------
@@ -280,6 +292,8 @@ export interface ShopUnlocksPayload {
   unlockedStrategies: string[];
   skillShards: number;
   combatShards: number;
+  /** Ordered strategy loadout saved at the Teacher (top = checked first). */
+  strategyLoadout: string[];
 }
 
 // ---------------------------------------------------------------------------

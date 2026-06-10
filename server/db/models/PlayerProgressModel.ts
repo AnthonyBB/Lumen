@@ -21,6 +21,8 @@ export interface IPlayerProgress extends Document {
   unlockedSkills: string[]
   /** Strategy ids purchased at the Strategy Hall (see game/data/combatStrategies.ts). */
   unlockedStrategies: string[]
+  /** Ordered strategy loadout arranged at the Teacher (max 10, owned ids only). */
+  strategyLoadout: string[]
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -60,6 +62,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       default: [],
     },
     unlockedStrategies: {
+      type: [String],
+      default: [],
+    },
+    strategyLoadout: {
       type: [String],
       default: [],
     },

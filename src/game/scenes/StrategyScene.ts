@@ -5,12 +5,16 @@ import { STRATEGIES, STRATEGY_PRESETS, CombatStrategy, StrategyPreset } from '..
 
 // Display copy of the server's Combat Shard pricing (server enforces the real price)
 const STRATEGY_PRICE = 2
+// Display copy of the server's loadout cap (server enforces the real cap)
+const MAX_LOADOUT_SIZE = 10
 
 interface ShopUnlocks {
   unlockedSkills: string[]
   unlockedStrategies: string[]
   skillShards: number
   combatShards: number
+  /** Ordered strategy loadout saved at the Teacher (top = checked first). */
+  strategyLoadout?: string[]
 }
 
 const COLOR_BG        = 0x0d0d1a
@@ -32,29 +36,53 @@ const RIGHT_PANEL_W = GAME_WIDTH - RIGHT_PANEL_X - 20
 const PANEL_TOP     = 70
 const PANEL_H       = GAME_HEIGHT - PANEL_TOP - 20
 
+// ── Tiny Dungeon frames (12 cols × 11 rows of 16×16; frame = row*12+col) ────
+// See src/game/data/tileFrames.ts for the verified character block layout.
+const td = (col: number, row: number) => row * 12 + col
+/** (0,7) purple wizard — pixel-verified (used elsewhere in the project). */
+const TD_TEACHER_NPC  = td(0, 7)
+/** (1,7) villager-like human — pixel-verified character row. */
+const TD_MERCHANT_NPC = td(1, 7)
+/** Checkered banquet table, 3 wide × 2 tall, at (6..8, 5..6) in the furniture
+ *  block (rows 5-6). Inferred from the sheet's 12-column grid — shell access
+ *  for per-tile pixel extraction was unavailable. */
+const TD_TABLE_TOP    = [td(6, 5), td(7, 5), td(8, 5)]
+const TD_TABLE_BOTTOM = [td(6, 6), td(7, 6), td(8, 6)]
+
+type HallView = 'room' | 'merchant' | 'teacher'
+
 export class StrategyScene extends Phaser.Scene {
-  private selectedPreset: StrategyPreset | null = null
+  private view: HallView = 'room'
+
+  private selectedPreset: CombatStrategy extends never ? never : StrategyPreset | null = null
   private selectedStrategy: CombatStrategy | null = null
-  private activePresetId: string | null = null
 
   // Server-reported shop state — only ever updated from 'shop:unlocks' /
-  // 'shop:strategy_purchased' pushes.  Purchases go through shop:buy_strategy.
+  // 'shop:strategy_purchased' / 'strategy:loadout_saved' pushes. Purchases go
+  // through shop:buy_strategy; the loadout through strategy:set_loadout.
   private socket: Socket | null = null
   private unlockedStrategies: Set<string> = new Set()
   private combatShards = 0
+  /** Last loadout the SERVER confirmed (snapshot). */
+  private savedLoadout: string[] = []
+  /** Local editing copy shown in the teacher panel (sent on Save Order). */
+  private loadout: string[] = []
+
   private balanceText!: Phaser.GameObjects.Text
   private feedbackText!: Phaser.GameObjects.Text
+  private escLabel!: Phaser.GameObjects.Text
 
-  // Left panel
+  // Room hub
+  private roomContainer!: Phaser.GameObjects.Container
+
+  // Merchant panels
   private leftContainer!: Phaser.GameObjects.Container
-  private presetButtons: Phaser.GameObjects.Container[] = []
-
-  // Right panel — top half: preset info
   private rightInfoContainer!: Phaser.GameObjects.Container
-
-  // Right panel — bottom half: strategy list
   private rightListContainer!: Phaser.GameObjects.Container
-  private strategyItems: Phaser.GameObjects.Container[] = []
+
+  // Teacher panel
+  private teacherContainer!: Phaser.GameObjects.Container
+  private ownedPage = 0
 
   // Tooltip overlay
   private tooltipContainer!: Phaser.GameObjects.Container
@@ -64,8 +92,10 @@ export class StrategyScene extends Phaser.Scene {
   }
 
   create() {
-    // ── Load active preset from registry ──────────────────────────────────────
-    this.activePresetId = this.registry.get('activeStrategyPreset') ?? null
+    this.view = 'room'
+    this.selectedPreset = null
+    this.selectedStrategy = null
+    this.ownedPage = 0
 
     // ── Server shop state ─────────────────────────────────────────────────────
     this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
@@ -75,15 +105,23 @@ export class StrategyScene extends Phaser.Scene {
       this.applyUnlocks(data)
       this.showFeedback('✓ Purchase complete!', '#88ffaa')
     }
+    const onLoadoutSaved = (data: { strategyLoadout: string[] }) => {
+      this.savedLoadout = [...(data.strategyLoadout ?? [])]
+      this.loadout = [...this.savedLoadout]
+      this.showFeedback('✓ Strategy order saved!', '#88ffaa')
+      if (this.view === 'teacher') this.drawTeacherPanel()
+    }
     const onError = (err: { message?: string }) => {
       if (err?.message) this.showFeedback(err.message, '#ff8866')
     }
     this.socket?.on('shop:unlocks', onUnlocks)
     this.socket?.on('shop:strategy_purchased', onPurchased)
+    this.socket?.on('strategy:loadout_saved', onLoadoutSaved)
     this.socket?.on('error', onError)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.socket?.off('shop:unlocks', onUnlocks)
       this.socket?.off('shop:strategy_purchased', onPurchased)
+      this.socket?.off('strategy:loadout_saved', onLoadoutSaved)
       this.socket?.off('error', onError)
     })
     this.socket?.emit('shop:get_unlocks')
@@ -106,36 +144,77 @@ export class StrategyScene extends Phaser.Scene {
     // ── Header ────────────────────────────────────────────────────────────────
     this.drawHeader()
 
-    // ── Left panel ────────────────────────────────────────────────────────────
-    this.leftContainer = this.add.container(0, 0).setDepth(10)
-    this.drawLeftPanel()
-
-    // ── Right panel top ───────────────────────────────────────────────────────
+    // ── View containers ───────────────────────────────────────────────────────
+    this.roomContainer      = this.add.container(0, 0).setDepth(10)
+    this.leftContainer      = this.add.container(0, 0).setDepth(10)
     this.rightInfoContainer = this.add.container(0, 0).setDepth(10)
-
-    // ── Right panel bottom ────────────────────────────────────────────────────
     this.rightListContainer = this.add.container(0, 0).setDepth(10)
+    this.teacherContainer   = this.add.container(0, 0).setDepth(10)
 
     // ── Tooltip (hidden by default) ───────────────────────────────────────────
     this.tooltipContainer = this.add.container(0, 0).setDepth(200)
     this.tooltipContainer.setVisible(false)
 
-    // ── Purchase feedback toast ───────────────────────────────────────────────
+    // ── Purchase / save feedback toast ────────────────────────────────────────
     this.feedbackText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 34, '', {
       fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#88ffaa',
       backgroundColor: '#000000aa', padding: { x: 10, y: 5 },
     }).setOrigin(0.5, 0.5).setDepth(250).setVisible(false)
 
-    // ── Keyboard ESC ─────────────────────────────────────────────────────────
-    this.input.keyboard!.once('keydown-ESC', () => this.closeScene())
+    // ── Keyboard ESC: station → room → world ─────────────────────────────────
+    this.input.keyboard!.on('keydown-ESC', () => this.handleEscape())
 
-    // Select the first preset by default
-    if (STRATEGY_PRESETS.length > 0) {
-      this.selectPreset(STRATEGY_PRESETS[0])
+    // Start in the room hub
+    this.showRoom()
+  }
+
+  // ── View switching ─────────────────────────────────────────────────────────
+
+  private handleEscape() {
+    if (this.view !== 'room') {
+      this.showRoom()
+    } else {
+      this.closeScene()
     }
+  }
 
-    // Show right panel initial state
+  private clearAllViews() {
+    this.roomContainer.removeAll(true)
+    this.leftContainer.removeAll(true)
+    this.rightInfoContainer.removeAll(true)
+    this.rightListContainer.removeAll(true)
+    this.teacherContainer.removeAll(true)
+    this.tooltipContainer.removeAll(true)
+    this.tooltipContainer.setVisible(false)
+    this.selectedStrategy = null
+  }
+
+  private showRoom() {
+    this.view = 'room'
+    this.clearAllViews()
+    this.escLabel.setText('ESC  Close')
+    this.drawRoom()
+  }
+
+  private openMerchant() {
+    this.view = 'merchant'
+    this.clearAllViews()
+    this.escLabel.setText('ESC  Back')
+    if (!this.selectedPreset && STRATEGY_PRESETS.length > 0) {
+      this.selectedPreset = STRATEGY_PRESETS[0]
+    }
+    this.drawLeftPanel()
     this.drawRightPanel()
+  }
+
+  private openTeacher() {
+    this.view = 'teacher'
+    this.clearAllViews()
+    this.escLabel.setText('ESC  Back')
+    this.ownedPage = 0
+    // Fresh editing copy of the server-confirmed order
+    this.loadout = this.savedLoadout.filter(id => this.unlockedStrategies.has(id))
+    this.drawTeacherPanel()
   }
 
   // ── Header ─────────────────────────────────────────────────────────────────
@@ -158,7 +237,7 @@ export class StrategyScene extends Phaser.Scene {
       fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
     }).setOrigin(1, 0.5).setDepth(6)
 
-    // ESC close button
+    // ESC close/back button
     const closeBtnX = GAME_WIDTH - 100
     const closeBtnY = PANEL_TOP / 2
     const closeBg = this.add.graphics().setDepth(6)
@@ -167,22 +246,174 @@ export class StrategyScene extends Phaser.Scene {
     closeBg.lineStyle(1, 0xaa3333, 1)
     closeBg.strokeRoundedRect(closeBtnX - 50, closeBtnY - 14, 100, 28, 6)
 
-    const closeText = this.add.text(closeBtnX, closeBtnY, 'ESC  Close', {
+    this.escLabel = this.add.text(closeBtnX, closeBtnY, 'ESC  Close', {
       fontSize: '13px',
       fontFamily: 'Arial, sans-serif',
       color: '#cc6666',
     }).setOrigin(0.5, 0.5).setDepth(7).setInteractive({ useHandCursor: true })
-    closeText.on('pointerover', () => closeText.setColor('#ff9999'))
-    closeText.on('pointerout',  () => closeText.setColor('#cc6666'))
-    closeText.on('pointerdown', () => this.closeScene())
+    this.escLabel.on('pointerover', () => this.escLabel.setColor('#ff9999'))
+    this.escLabel.on('pointerout',  () => this.escLabel.setColor('#cc6666'))
+    this.escLabel.on('pointerdown', () => this.handleEscape())
   }
 
-  // ── Left panel ─────────────────────────────────────────────────────────────
+  // ── Room hub ───────────────────────────────────────────────────────────────
+  private drawRoom() {
+    const c = this.roomContainer
+    const roomTop = PANEL_TOP - 4
+    const wallH = 110
+
+    const g = this.add.graphics()
+
+    // Wall band at the top
+    g.fillStyle(0x16162e, 1)
+    g.fillRect(0, roomTop, GAME_WIDTH, wallH)
+    // Wall trim (gold skirting where the wall meets the floor)
+    g.fillStyle(0x1f1b38, 1)
+    g.fillRect(0, roomTop + wallH - 12, GAME_WIDTH, 12)
+    g.lineStyle(2, COLOR_BORDER_DIM, 1)
+    g.lineBetween(0, roomTop + wallH, GAME_WIDTH, roomTop + wallH)
+    // Wall stones
+    for (let wx = 0; wx < GAME_WIDTH; wx += 72) {
+      g.lineStyle(1, 0x10102a, 0.8)
+      g.lineBetween(wx, roomTop, wx, roomTop + wallH - 12)
+    }
+    c.add(g)
+
+    // Torch sconces on the wall (gold glow accents)
+    for (const tx of [GAME_WIDTH * 0.18, GAME_WIDTH * 0.5, GAME_WIDTH * 0.82]) {
+      const glow = this.add.graphics()
+      glow.fillStyle(0xffd700, 0.08)
+      glow.fillCircle(tx, roomTop + 48, 36)
+      glow.fillStyle(0xffaa33, 0.85)
+      glow.fillCircle(tx, roomTop + 48, 5)
+      glow.fillStyle(0x554400, 1)
+      glow.fillRect(tx - 2, roomTop + 53, 4, 14)
+      c.add(glow)
+      this.tweens.add({
+        targets: glow, alpha: { from: 1, to: 0.7 },
+        duration: 700 + Math.random() * 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      })
+    }
+
+    // Wooden floor planks (dark, blue-tinted wood in the scene palette)
+    const floor = this.add.graphics()
+    const floorTop = roomTop + wallH
+    let plankRow = 0
+    for (let py = floorTop; py < GAME_HEIGHT; py += 36) {
+      floor.fillStyle(plankRow % 2 === 0 ? 0x241a30 : 0x2a2038, 1)
+      floor.fillRect(0, py, GAME_WIDTH, 36)
+      floor.lineStyle(1, 0x171022, 0.9)
+      floor.lineBetween(0, py, GAME_WIDTH, py)
+      // Staggered plank seams
+      const offset = plankRow % 2 === 0 ? 0 : 80
+      for (let px = offset; px < GAME_WIDTH; px += 160) {
+        floor.lineBetween(px, py, px, Math.min(py + 36, GAME_HEIGHT))
+      }
+      plankRow++
+    }
+    c.add(floor)
+
+    // Center rug
+    const rug = this.add.graphics()
+    const rugW = 540, rugH = 190
+    const rugX = GAME_WIDTH / 2 - rugW / 2
+    const rugY = floorTop + 120
+    rug.fillStyle(0x1d1535, 1)
+    rug.fillRoundedRect(rugX, rugY, rugW, rugH, 10)
+    rug.lineStyle(3, COLOR_BORDER_DIM, 1)
+    rug.strokeRoundedRect(rugX, rugY, rugW, rugH, 10)
+    rug.lineStyle(1, COLOR_BORDER, 0.35)
+    rug.strokeRoundedRect(rugX + 12, rugY + 12, rugW - 24, rugH - 24, 8)
+    rug.fillStyle(COLOR_BORDER, 0.15)
+    rug.fillCircle(GAME_WIDTH / 2, rugY + rugH / 2, 26)
+    c.add(rug)
+
+    // Stations
+    const stationY = floorTop + 200
+    c.add(this.createStation(
+      GAME_WIDTH * 0.32, stationY,
+      TD_MERCHANT_NPC, 'Merchant', 'Buy combat strategies',
+      () => this.openMerchant(),
+    ))
+    c.add(this.createStation(
+      GAME_WIDTH * 0.68, stationY,
+      TD_TEACHER_NPC, 'Teacher', 'Arrange your strategy order',
+      () => this.openTeacher(),
+    ))
+
+    // Bottom hint
+    c.add(this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 56, 'Click a table to talk  ·  ESC to leave the hall', {
+      fontSize: '13px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_DIM,
+    }).setOrigin(0.5, 0.5))
+  }
+
+  /** One station: NPC behind a table, name plate, hint, hover glow + click. */
+  private createStation(
+    x: number, y: number,
+    npcFrame: number, name: string, hint: string,
+    onOpen: () => void,
+  ): Phaser.GameObjects.Container {
+    const station = this.add.container(x, y)
+
+    // Hover glow (behind everything)
+    const glow = this.add.graphics()
+    glow.fillStyle(COLOR_BORDER, 1)
+    glow.fillRoundedRect(-130, -150, 260, 320, 18)
+    glow.setAlpha(0)
+    station.add(glow)
+
+    // NPC behind the table (~5× of 16px)
+    const npc = this.add.sprite(0, -52, 'tiny_dungeon', npcFrame).setScale(5)
+    station.add(npc)
+
+    // Table: tiny_dungeon banquet table, 3 wide × 2 tall, ~3× scale
+    const tileS = 16 * 3
+    TD_TABLE_TOP.forEach((frame, i) => {
+      station.add(this.add.sprite((i - 1) * tileS, 16, 'tiny_dungeon', frame).setScale(3))
+    })
+    TD_TABLE_BOTTOM.forEach((frame, i) => {
+      station.add(this.add.sprite((i - 1) * tileS, 16 + tileS, 'tiny_dungeon', frame).setScale(3))
+    })
+
+    // Name plate
+    const plateG = this.add.graphics()
+    plateG.fillStyle(COLOR_PANEL, 0.95)
+    plateG.fillRoundedRect(-70, 102, 140, 30, 8)
+    plateG.lineStyle(1, COLOR_BORDER, 0.9)
+    plateG.strokeRoundedRect(-70, 102, 140, 30, 8)
+    station.add(plateG)
+    station.add(this.add.text(0, 117, name, {
+      fontSize: '16px', fontFamily: 'Georgia, serif',
+      color: COLOR_TEXT_GOLD, fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+
+    // Hint line
+    station.add(this.add.text(0, 146, hint, {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_GRAY,
+    }).setOrigin(0.5, 0.5))
+
+    // Hit zone covering the whole station
+    const hit = this.add.zone(0, 5, 260, 320).setOrigin(0.5, 0.5)
+    hit.setInteractive({ useHandCursor: true })
+    hit.on('pointerover', () => {
+      this.tweens.add({ targets: station, scale: 1.05, duration: 140, ease: 'Sine.easeOut' })
+      this.tweens.add({ targets: glow, alpha: 0.12, duration: 140 })
+    })
+    hit.on('pointerout', () => {
+      this.tweens.add({ targets: station, scale: 1, duration: 140, ease: 'Sine.easeOut' })
+      this.tweens.add({ targets: glow, alpha: 0, duration: 140 })
+    })
+    hit.on('pointerdown', () => onOpen())
+    station.add(hit)
+
+    return station
+  }
+
+  // ── Merchant: left panel (preset browser) ──────────────────────────────────
   private drawLeftPanel() {
     this.leftContainer.removeAll(true)
-    this.presetButtons = []
 
-    const g = this.add.graphics().setDepth(5)
+    const g = this.add.graphics()
     // Panel background
     g.fillStyle(COLOR_PANEL, 1)
     g.fillRoundedRect(LEFT_PANEL_X, PANEL_TOP, LEFT_PANEL_W, PANEL_H, 8)
@@ -197,12 +428,12 @@ export class StrategyScene extends Phaser.Scene {
     this.leftContainer.add(hdrG)
 
     this.leftContainer.add(
-      this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + 19, 'STRATEGY PRESETS', {
+      this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + 19, 'MERCHANT — STRATEGY PRESETS', {
         fontSize: '13px',
         fontFamily: 'Arial, sans-serif',
         color: COLOR_TEXT_GOLD,
         fontStyle: 'bold',
-        letterSpacing: 2,
+        letterSpacing: 1,
       }).setOrigin(0.5, 0.5)
     )
 
@@ -220,38 +451,18 @@ export class StrategyScene extends Phaser.Scene {
       const itemY = listStartY + index * (itemH + 8)
       const btn = this.createPresetButton(preset, LEFT_PANEL_X + 12, itemY, LEFT_PANEL_W - 24, itemH)
       this.leftContainer.add(btn)
-      this.presetButtons.push(btn)
     })
 
-    // ── MY STRATEGY section ───────────────────────────────────────────────────
-    const mySectionY = listStartY + STRATEGY_PRESETS.length * (itemH + 8) + 20
-    const divLine = this.add.graphics()
-    divLine.lineStyle(1, COLOR_BORDER_DIM, 0.6)
-    divLine.lineBetween(LEFT_PANEL_X + 10, mySectionY, LEFT_PANEL_X + LEFT_PANEL_W - 10, mySectionY)
-    this.leftContainer.add(divLine)
-
+    // Merchant footer hint (replaces the old MY STRATEGY section)
     this.leftContainer.add(
-      this.add.text(LEFT_PANEL_X + 14, mySectionY + 14, 'MY STRATEGY', {
+      this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + PANEL_H - 26,
+        'Visit the Teacher to arrange\nyour purchased strategies.', {
         fontSize: '11px',
         fontFamily: 'Arial, sans-serif',
-        color: COLOR_TEXT_GOLD,
-        fontStyle: 'bold',
-        letterSpacing: 2,
-      })
-    )
-
-    const activePreset = this.activePresetId
-      ? STRATEGY_PRESETS.find(p => p.id === this.activePresetId)
-      : null
-
-    this.leftContainer.add(
-      this.add.text(LEFT_PANEL_X + 14, mySectionY + 34, activePreset
-        ? `${activePreset.icon} ${activePreset.name}`
-        : 'None equipped', {
-        fontSize: '13px',
-        fontFamily: 'Arial, sans-serif',
-        color: activePreset ? '#88ffaa' : COLOR_TEXT_DIM,
-      })
+        color: COLOR_TEXT_DIM,
+        align: 'center',
+        lineSpacing: 3,
+      }).setOrigin(0.5, 0.5)
     )
   }
 
@@ -265,10 +476,9 @@ export class StrategyScene extends Phaser.Scene {
     const container = this.add.container(x, y)
 
     const isSelected = this.selectedPreset?.id === preset.id
-    const isActive   = this.activePresetId === preset.id
 
     const bg = this.add.graphics()
-    this.drawPresetButtonBg(bg, 0, 0, w, h, isSelected, isActive)
+    this.drawPresetButtonBg(bg, 0, 0, w, h, isSelected)
 
     const iconText = this.add.text(12, h / 2, preset.icon, {
       fontSize: '22px',
@@ -289,31 +499,20 @@ export class StrategyScene extends Phaser.Scene {
 
     container.add([bg, iconText, nameText, countText])
 
-    if (isActive) {
-      const activeBadge = this.add.text(w - 8, h / 2, 'EQUIPPED', {
-        fontSize: '9px',
-        fontFamily: 'Arial, sans-serif',
-        color: '#88ffaa',
-        backgroundColor: '#0a2a1a',
-        padding: { x: 4, y: 2 },
-      }).setOrigin(1, 0.5)
-      container.add(activeBadge)
-    }
-
     // Hit zone
     const hit = this.add.zone(0, 0, w, h).setOrigin(0, 0)
     hit.setInteractive({ useHandCursor: true })
     hit.on('pointerover', () => {
       if (this.selectedPreset?.id !== preset.id) {
         bg.clear()
-        this.drawPresetButtonBg(bg, 0, 0, w, h, false, isActive, true)
+        this.drawPresetButtonBg(bg, 0, 0, w, h, false, true)
         nameText.setColor(COLOR_TEXT_GOLD)
       }
     })
     hit.on('pointerout', () => {
       if (this.selectedPreset?.id !== preset.id) {
         bg.clear()
-        this.drawPresetButtonBg(bg, 0, 0, w, h, false, isActive)
+        this.drawPresetButtonBg(bg, 0, 0, w, h, false)
         nameText.setColor(COLOR_TEXT_WHITE)
       }
     })
@@ -328,29 +527,28 @@ export class StrategyScene extends Phaser.Scene {
   private drawPresetButtonBg(
     g: Phaser.GameObjects.Graphics,
     x: number, y: number, w: number, h: number,
-    selected: boolean, active: boolean, hover = false
+    selected: boolean, hover = false
   ) {
     g.clear()
     const fillColor = selected ? COLOR_SELECTED : hover ? COLOR_HOVER : COLOR_PANEL_ALT
     g.fillStyle(fillColor, 1)
     g.fillRoundedRect(x, y, w, h, 6)
-    const borderColor = selected ? COLOR_BORDER : active ? 0x44aa66 : 0x333366
+    const borderColor = selected ? COLOR_BORDER : 0x333366
     const borderAlpha = selected ? 1 : 0.7
     g.lineStyle(selected ? 2 : 1, borderColor, borderAlpha)
     g.strokeRoundedRect(x, y, w, h, 6)
   }
 
-  // ── Right panel ────────────────────────────────────────────────────────────
+  // ── Merchant: right panel ──────────────────────────────────────────────────
   private drawRightPanel() {
     this.rightInfoContainer.removeAll(true)
     this.rightListContainer.removeAll(true)
-    this.strategyItems = []
 
     if (!this.selectedPreset) return
 
     const preset = this.selectedPreset
 
-    // ── Top area: preset info + equip button ──────────────────────────────────
+    // ── Top area: preset info ─────────────────────────────────────────────────
     const infoH = 160
     const infoG = this.add.graphics()
     infoG.fillStyle(COLOR_PANEL, 1)
@@ -389,48 +587,6 @@ export class StrategyScene extends Phaser.Scene {
       }).setOrigin(0, 0)
     )
 
-    // ── Equip button ──────────────────────────────────────────────────────────
-    // Only shown once the preset is owned (every strategy in it purchased
-    // individually). Until then the rule list below tells the story.
-    const owned = this.isPresetOwned(preset)
-    if (owned) {
-      const equipX = RIGHT_PANEL_X + RIGHT_PANEL_W - 140
-      const equipY = PANEL_TOP + infoH / 2
-      const isEquipped = this.activePresetId === preset.id
-      const equipBg = this.add.graphics()
-      this.rightInfoContainer.add(equipBg)
-
-      const drawEquipBtn = (hover = false) => {
-        equipBg.clear()
-        const fillC = isEquipped ? 0x0a3a1a : (hover ? 0x2a3a1a : 0x1a2a1a)
-        const borderC = isEquipped ? 0x44ff88 : (hover ? 0x88dd44 : 0x44aa44)
-        equipBg.fillStyle(fillC, 1)
-        equipBg.fillRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
-        equipBg.lineStyle(2, borderC, 1)
-        equipBg.strokeRoundedRect(equipX - 75, equipY - 18, 150, 36, 8)
-      }
-      drawEquipBtn()
-
-      const equipText = this.add.text(equipX, equipY, isEquipped ? '✓ Equipped' : 'Equip Preset', {
-        fontSize: '14px',
-        fontFamily: 'Arial, sans-serif',
-        color: isEquipped ? '#88ffaa' : '#aaffaa',
-        fontStyle: 'bold',
-      }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: !isEquipped })
-      this.rightInfoContainer.add(equipText)
-
-      equipText.on('pointerover', () => drawEquipBtn(true))
-      equipText.on('pointerout',  () => drawEquipBtn(false))
-      equipText.on('pointerdown', () => {
-        if (!isEquipped) {
-          this.registry.set('activeStrategyPreset', preset.id)
-          this.activePresetId = preset.id
-          this.drawLeftPanel()
-          this.drawRightPanel()
-        }
-      })
-    }
-
     // ── Bottom area: strategy list ─────────────────────────────────────────────
     const listY = PANEL_TOP + infoH + 12
     const listH = PANEL_H - infoH - 12
@@ -448,7 +604,7 @@ export class StrategyScene extends Phaser.Scene {
     this.rightListContainer.add(listHdrG)
 
     this.rightListContainer.add(
-      this.add.text(RIGHT_PANEL_X + 20, listY + 18, 'ACTIVE RULES  (priority order — lowest number = checked first)', {
+      this.add.text(RIGHT_PANEL_X + 20, listY + 18, 'RULES IN THIS PRESET  (suggested priority — buy the ones you like)', {
         fontSize: '11px',
         fontFamily: 'Arial, sans-serif',
         color: COLOR_TEXT_GOLD,
@@ -476,7 +632,6 @@ export class StrategyScene extends Phaser.Scene {
 
       const item = this.createStrategyItem(strategy, index + 1, RIGHT_PANEL_X + 10, iy, RIGHT_PANEL_W - 20, itemH)
       this.rightListContainer.add(item)
-      this.strategyItems.push(item)
     })
   }
 
@@ -605,6 +760,325 @@ export class StrategyScene extends Phaser.Scene {
     g.strokeRoundedRect(x, y, w, h, 5)
   }
 
+  // ── Teacher panel ──────────────────────────────────────────────────────────
+
+  /** Owned strategies, sorted by suggested priority then name. */
+  private getOwnedStrategies(): CombatStrategy[] {
+    return STRATEGIES
+      .filter(s => this.unlockedStrategies.has(s.id))
+      .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
+  }
+
+  private drawTeacherPanel() {
+    const c = this.teacherContainer
+    c.removeAll(true)
+
+    // ── Left panel: owned strategies ──────────────────────────────────────────
+    const g = this.add.graphics()
+    g.fillStyle(COLOR_PANEL, 1)
+    g.fillRoundedRect(LEFT_PANEL_X, PANEL_TOP, LEFT_PANEL_W, PANEL_H, 8)
+    g.lineStyle(1, COLOR_BORDER_DIM, 1)
+    g.strokeRoundedRect(LEFT_PANEL_X, PANEL_TOP, LEFT_PANEL_W, PANEL_H, 8)
+    // Right panel: loadout order
+    g.fillStyle(COLOR_PANEL, 1)
+    g.fillRoundedRect(RIGHT_PANEL_X, PANEL_TOP, RIGHT_PANEL_W, PANEL_H, 8)
+    g.lineStyle(1, COLOR_BORDER_DIM, 1)
+    g.strokeRoundedRect(RIGHT_PANEL_X, PANEL_TOP, RIGHT_PANEL_W, PANEL_H, 8)
+    c.add(g)
+
+    // Headers
+    const hdrG = this.add.graphics()
+    hdrG.fillStyle(0x1a1a35, 1)
+    hdrG.fillRoundedRect(LEFT_PANEL_X, PANEL_TOP, LEFT_PANEL_W, 38, { tl: 8, tr: 8, bl: 0, br: 0 })
+    hdrG.fillRoundedRect(RIGHT_PANEL_X, PANEL_TOP, RIGHT_PANEL_W, 38, { tl: 8, tr: 8, bl: 0, br: 0 })
+    hdrG.lineStyle(1, COLOR_BORDER_DIM, 0.8)
+    hdrG.lineBetween(LEFT_PANEL_X + 10, PANEL_TOP + 38, LEFT_PANEL_X + LEFT_PANEL_W - 10, PANEL_TOP + 38)
+    hdrG.lineBetween(RIGHT_PANEL_X + 10, PANEL_TOP + 38, RIGHT_PANEL_X + RIGHT_PANEL_W - 10, PANEL_TOP + 38)
+    c.add(hdrG)
+
+    c.add(this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + 19, 'TEACHER — OWNED STRATEGIES', {
+      fontSize: '13px', fontFamily: 'Arial, sans-serif',
+      color: COLOR_TEXT_GOLD, fontStyle: 'bold', letterSpacing: 1,
+    }).setOrigin(0.5, 0.5))
+
+    c.add(this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 19,
+      `YOUR STRATEGY ORDER  (top = checked first)  ·  ${this.loadout.length}/${MAX_LOADOUT_SIZE}`, {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif',
+      color: COLOR_TEXT_GOLD, fontStyle: 'bold', letterSpacing: 1,
+    }).setOrigin(0, 0.5))
+
+    this.drawOwnedList(c)
+    this.drawLoadoutList(c)
+  }
+
+  private drawOwnedList(c: Phaser.GameObjects.Container) {
+    const owned = this.getOwnedStrategies()
+
+    if (owned.length === 0) {
+      c.add(this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + PANEL_H / 2,
+        'You don\'t own any strategies yet.\n\nBuy strategies from the\nMerchant first!', {
+        fontSize: '14px', fontFamily: 'Arial, sans-serif',
+        color: COLOR_TEXT_DIM, align: 'center', lineSpacing: 4,
+      }).setOrigin(0.5, 0.5))
+      return
+    }
+
+    c.add(this.add.text(LEFT_PANEL_X + 14, PANEL_TOP + 50, 'Click a strategy to add it to your order  →', {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_DIM,
+    }))
+
+    const itemH = 40
+    const gap = 4
+    const listStartY = PANEL_TOP + 70
+    const footerH = 36
+    const pageSize = Math.floor((PANEL_H - (listStartY - PANEL_TOP) - footerH - 8) / (itemH + gap))
+    const pageCount = Math.max(1, Math.ceil(owned.length / pageSize))
+    this.ownedPage = Phaser.Math.Clamp(this.ownedPage, 0, pageCount - 1)
+    const pageItems = owned.slice(this.ownedPage * pageSize, (this.ownedPage + 1) * pageSize)
+
+    pageItems.forEach((strategy, i) => {
+      const y = listStartY + i * (itemH + gap)
+      c.add(this.createOwnedItem(strategy, LEFT_PANEL_X + 12, y, LEFT_PANEL_W - 24, itemH))
+    })
+
+    // Pagination footer
+    if (pageCount > 1) {
+      const fy = PANEL_TOP + PANEL_H - footerH / 2 - 6
+      const mkArrow = (label: string, dx: number, enabled: boolean, delta: number) => {
+        const t = this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2 + dx, fy, label, {
+          fontSize: '15px', fontFamily: 'Arial, sans-serif',
+          color: enabled ? COLOR_TEXT_GOLD : COLOR_TEXT_DIM, fontStyle: 'bold',
+        }).setOrigin(0.5, 0.5)
+        if (enabled) {
+          t.setInteractive({ useHandCursor: true })
+          t.on('pointerover', () => t.setColor('#ffee99'))
+          t.on('pointerout',  () => t.setColor(COLOR_TEXT_GOLD))
+          t.on('pointerdown', () => { this.ownedPage += delta; this.drawTeacherPanel() })
+        }
+        return t
+      }
+      c.add(mkArrow('◀', -70, this.ownedPage > 0, -1))
+      c.add(this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, fy,
+        `Page ${this.ownedPage + 1}/${pageCount}`, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_GRAY,
+      }).setOrigin(0.5, 0.5))
+      c.add(mkArrow('▶', 70, this.ownedPage < pageCount - 1, 1))
+    }
+  }
+
+  private createOwnedItem(
+    strategy: CombatStrategy,
+    x: number, y: number, w: number, h: number,
+  ): Phaser.GameObjects.Container {
+    const container = this.add.container(x, y)
+    const inLoadout = this.loadout.includes(strategy.id)
+
+    const bg = this.add.graphics()
+    this.drawItemBg(bg, 0, 0, w, h, false)
+    container.add(bg)
+
+    const nameText = this.add.text(10, h / 2 - 8, strategy.name, {
+      fontSize: '13px', fontFamily: 'Georgia, serif',
+      color: inLoadout ? COLOR_TEXT_DIM : COLOR_TEXT_WHITE,
+    }).setOrigin(0, 0.5)
+    container.add(nameText)
+
+    container.add(this.add.text(10, h / 2 + 8, this.formatCondition(strategy), {
+      fontSize: '10px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_DIM,
+    }).setOrigin(0, 0.5))
+
+    if (inLoadout) {
+      container.add(this.add.text(w - 8, h / 2, '✓ In order', {
+        fontSize: '10px', fontFamily: 'Arial, sans-serif', color: '#88ffaa',
+        backgroundColor: '#0a2a1a', padding: { x: 4, y: 2 },
+      }).setOrigin(1, 0.5))
+      container.setAlpha(0.55)
+    } else {
+      // Action badge (reuses the merchant's formatting helpers)
+      container.add(this.add.text(w - 8, h / 2, this.formatAction(strategy), {
+        fontSize: '10px', fontFamily: 'Arial, sans-serif',
+        color: this.actionColor(strategy.action),
+        backgroundColor: '#0a0a22', padding: { x: 4, y: 2 },
+      }).setOrigin(1, 0.5))
+    }
+
+    const hit = this.add.zone(0, 0, w, h).setOrigin(0, 0)
+    hit.setInteractive({ useHandCursor: true })
+    hit.on('pointerover', () => {
+      if (!inLoadout) {
+        bg.clear(); this.drawItemBg(bg, 0, 0, w, h, false, true)
+        nameText.setColor(COLOR_TEXT_GOLD)
+      }
+    })
+    hit.on('pointerout', () => {
+      if (!inLoadout) {
+        bg.clear(); this.drawItemBg(bg, 0, 0, w, h, false, false)
+        nameText.setColor(COLOR_TEXT_WHITE)
+      }
+    })
+    hit.on('pointerdown', () => this.addToLoadout(strategy.id))
+    container.add(hit)
+
+    return container
+  }
+
+  private drawLoadoutList(c: Phaser.GameObjects.Container) {
+    const listStartY = PANEL_TOP + 48
+    const itemH = 44
+    const gap = 4
+
+    if (this.loadout.length === 0) {
+      const msg = this.unlockedStrategies.size === 0
+        ? 'Buy strategies from the Merchant first!'
+        : 'Your order is empty.\nClick an owned strategy on the left to add it.'
+      c.add(this.add.text(RIGHT_PANEL_X + RIGHT_PANEL_W / 2, PANEL_TOP + PANEL_H / 2 - 30, msg, {
+        fontSize: '14px', fontFamily: 'Arial, sans-serif',
+        color: COLOR_TEXT_DIM, align: 'center', lineSpacing: 5,
+      }).setOrigin(0.5, 0.5))
+    }
+
+    this.loadout.forEach((id, index) => {
+      const strategy = STRATEGIES.find(s => s.id === id)
+      if (!strategy) return
+      const y = listStartY + index * (itemH + gap)
+      c.add(this.createLoadoutItem(strategy, index, RIGHT_PANEL_X + 12, y, RIGHT_PANEL_W - 24, itemH))
+    })
+
+    // ── Save Order button ─────────────────────────────────────────────────────
+    const btnW = 170, btnH = 38
+    const btnX = RIGHT_PANEL_X + RIGHT_PANEL_W / 2
+    const btnY = PANEL_TOP + PANEL_H - btnH / 2 - 14
+    const dirty = this.loadout.length !== this.savedLoadout.length
+      || this.loadout.some((id, i) => this.savedLoadout[i] !== id)
+
+    const btnBg = this.add.graphics()
+    const drawBtn = (hover = false) => {
+      btnBg.clear()
+      const fillC = dirty ? (hover ? 0x2a3a1a : 0x1a2a1a) : 0x16162e
+      const borderC = dirty ? (hover ? 0x88dd44 : 0x44aa44) : 0x333366
+      btnBg.fillStyle(fillC, 1)
+      btnBg.fillRoundedRect(btnX - btnW / 2, btnY - btnH / 2, btnW, btnH, 8)
+      btnBg.lineStyle(2, borderC, 1)
+      btnBg.strokeRoundedRect(btnX - btnW / 2, btnY - btnH / 2, btnW, btnH, 8)
+    }
+    drawBtn()
+    c.add(btnBg)
+
+    const btnText = this.add.text(btnX, btnY, dirty ? 'Save Order' : '✓ Saved', {
+      fontSize: '14px', fontFamily: 'Arial, sans-serif',
+      color: dirty ? '#aaffaa' : COLOR_TEXT_DIM, fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5)
+    c.add(btnText)
+
+    if (dirty) {
+      btnText.setInteractive({ useHandCursor: true })
+      btnText.on('pointerover', () => drawBtn(true))
+      btnText.on('pointerout',  () => drawBtn(false))
+      btnText.on('pointerdown', () => this.saveLoadout())
+    }
+  }
+
+  private createLoadoutItem(
+    strategy: CombatStrategy,
+    index: number,
+    x: number, y: number, w: number, h: number,
+  ): Phaser.GameObjects.Container {
+    const container = this.add.container(x, y)
+
+    const bg = this.add.graphics()
+    this.drawItemBg(bg, 0, 0, w, h, false)
+    container.add(bg)
+
+    // Order badge (1 = checked first)
+    const badge = this.add.graphics()
+    badge.fillStyle(0x1a1a40, 1)
+    badge.fillCircle(18, h / 2, 14)
+    badge.lineStyle(1, COLOR_BORDER, 0.8)
+    badge.strokeCircle(18, h / 2, 14)
+    container.add(badge)
+    container.add(this.add.text(18, h / 2, String(index + 1), {
+      fontSize: '13px', fontFamily: 'Arial, sans-serif',
+      color: COLOR_TEXT_GOLD, fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+
+    container.add(this.add.text(42, h / 2 - 8, strategy.name, {
+      fontSize: '14px', fontFamily: 'Georgia, serif', color: COLOR_TEXT_WHITE,
+    }).setOrigin(0, 0.5))
+
+    container.add(this.add.text(42, h / 2 + 9, this.formatCondition(strategy), {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_DIM,
+    }).setOrigin(0, 0.5))
+
+    // Action badge
+    container.add(this.add.text(w - 110, h / 2, this.formatAction(strategy), {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif',
+      color: this.actionColor(strategy.action),
+      backgroundColor: '#0a0a22', padding: { x: 5, y: 3 },
+    }).setOrigin(1, 0.5))
+
+    // ▲ ▼ ✕ controls
+    const mkBtn = (label: string, dx: number, enabled: boolean, color: string, onClick: () => void) => {
+      const t = this.add.text(w - dx, h / 2, label, {
+        fontSize: '16px', fontFamily: 'Arial, sans-serif',
+        color: enabled ? color : '#333355', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5)
+      if (enabled) {
+        t.setInteractive({ useHandCursor: true })
+        t.on('pointerover', () => t.setColor('#ffffff'))
+        t.on('pointerout',  () => t.setColor(color))
+        t.on('pointerdown', (_p: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+          event.stopPropagation()
+          onClick()
+        })
+      }
+      container.add(t)
+    }
+    mkBtn('▲', 84, index > 0, COLOR_TEXT_GOLD, () => this.moveInLoadout(index, -1))
+    mkBtn('▼', 56, index < this.loadout.length - 1, COLOR_TEXT_GOLD, () => this.moveInLoadout(index, 1))
+    mkBtn('✕', 26, true, '#cc6666', () => this.removeFromLoadout(index))
+
+    return container
+  }
+
+  // ── Teacher loadout mutations (client-side edit; server validates on save) ──
+
+  private addToLoadout(strategyId: string) {
+    if (this.loadout.includes(strategyId)) {
+      this.showFeedback('That strategy is already in your order.', '#ffcc77')
+      return
+    }
+    if (this.loadout.length >= MAX_LOADOUT_SIZE) {
+      this.showFeedback(`Your order is full (${MAX_LOADOUT_SIZE} max). Remove one first.`, '#ffcc77')
+      return
+    }
+    this.loadout.push(strategyId)
+    this.drawTeacherPanel()
+  }
+
+  private moveInLoadout(index: number, delta: number) {
+    const target = index + delta
+    if (target < 0 || target >= this.loadout.length) return
+    const tmp = this.loadout[index]
+    this.loadout[index] = this.loadout[target]
+    this.loadout[target] = tmp
+    this.drawTeacherPanel()
+  }
+
+  private removeFromLoadout(index: number) {
+    this.loadout.splice(index, 1)
+    this.drawTeacherPanel()
+  }
+
+  private saveLoadout() {
+    if (!this.socket?.connected) {
+      this.showFeedback('Not connected to the server.', '#ff8866')
+      return
+    }
+    this.showFeedback('Saving your strategy order…', '#ffcc77')
+    // Server validates: ≤10 ids, all known, all owned, no duplicates.
+    this.socket.emit('strategy:set_loadout', { strategyIds: [...this.loadout] })
+  }
+
   // ── Tooltip ────────────────────────────────────────────────────────────────
   private showTooltip(strategy: CombatStrategy) {
     this.tooltipContainer.removeAll(true)
@@ -694,7 +1168,7 @@ export class StrategyScene extends Phaser.Scene {
     this.input.once('pointerdown', () => {
       this.tooltipContainer.setVisible(false)
       this.selectedStrategy = null
-      this.drawRightPanel()
+      if (this.view === 'merchant') this.drawRightPanel()
     })
   }
 
@@ -705,13 +1179,23 @@ export class StrategyScene extends Phaser.Scene {
     this.unlockedStrategies = new Set(data.unlockedStrategies ?? [])
     this.combatShards = data.combatShards ?? 0
     this.balanceText.setText(`🔶 Combat Shards:  ${this.combatShards}`)
-    this.drawLeftPanel()
-    this.drawRightPanel()
-  }
 
-  /** A preset is owned when every strategy in it has been purchased. */
-  private isPresetOwned(preset: StrategyPreset): boolean {
-    return preset.strategies.every(id => this.unlockedStrategies.has(id))
+    if (Array.isArray(data.strategyLoadout)) {
+      this.savedLoadout = [...data.strategyLoadout]
+      if (this.view !== 'teacher') {
+        // Don't clobber an in-progress edit; otherwise mirror the server.
+        this.loadout = [...this.savedLoadout]
+      }
+    }
+    // Editing copy may never reference strategies the player doesn't own.
+    this.loadout = this.loadout.filter(id => this.unlockedStrategies.has(id))
+
+    if (this.view === 'merchant') {
+      this.drawLeftPanel()
+      this.drawRightPanel()
+    } else if (this.view === 'teacher') {
+      this.drawTeacherPanel()
+    }
   }
 
   private showFeedback(message: string, color: string) {

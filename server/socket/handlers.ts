@@ -32,6 +32,7 @@ import type {
   LearningEndPayload,
   ShopBuySkillPayload,
   ShopBuyStrategyPayload,
+  StrategySetLoadoutPayload,
   ShopUnlocksPayload,
   Player,
   Subject,
@@ -64,6 +65,9 @@ const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
 /** Combat Shard price per individual strategy (presets are not purchasable —
  *  they unlock automatically once every rule in them is owned). */
 const STRATEGY_PRICE = 2;
+
+/** Maximum number of rules in a player's ordered strategy loadout. */
+const MAX_LOADOUT_SIZE = 10;
 
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
 const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
@@ -740,6 +744,7 @@ export function registerHandlers(
     unlockedStrategies: [...player.unlockedStrategies],
     skillShards: inventoryManager.getCurrencyCount(socket.id, 'skill_shard'),
     combatShards: inventoryManager.getCurrencyCount(socket.id, 'combat_shard'),
+    strategyLoadout: [...player.strategyLoadout],
   });
 
   // ── shop:get_unlocks ─────────────────────────────────────────────────────
@@ -870,6 +875,56 @@ export function registerHandlers(
     if (inventory) socket.emit('inventory:updated', inventory);
 
     console.log(`[shop] ${player.username} bought ${label} for ${price} combat shard(s)`);
+  });
+
+  // ── strategy:set_loadout ─────────────────────────────────────────────────
+  //
+  // Saves the player's ordered strategy loadout (arranged at the Teacher).
+  // Server-authoritative validation — a crafted client cannot equip
+  // strategies it never bought:
+  //  1. The player must exist (joined).
+  //  2. strategyIds must be an array of ≤ MAX_LOADOUT_SIZE strings.
+  //  3. Every id must be a known strategy (combatStrategies.ts catalog).
+  //  4. Every id must already be owned (player.unlockedStrategies).
+  //  5. No duplicate ids.
+  socket.on('strategy:set_loadout', (payload: StrategySetLoadoutPayload) => {
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before arranging strategies.' });
+      return;
+    }
+
+    const ids = payload?.strategyIds;
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+      socket.emit('error', { message: 'Invalid strategy loadout payload.' });
+      return;
+    }
+    if (ids.length > MAX_LOADOUT_SIZE) {
+      socket.emit('error', {
+        message: `A strategy loadout can hold at most ${MAX_LOADOUT_SIZE} rules.`,
+      });
+      return;
+    }
+    if (new Set(ids).size !== ids.length) {
+      socket.emit('error', { message: 'A strategy loadout cannot contain duplicates.' });
+      return;
+    }
+    for (const id of ids) {
+      if (!STRATEGY_MAP.has(id)) {
+        socket.emit('error', { message: 'Unknown strategy in loadout.' });
+        return;
+      }
+      if (!player.unlockedStrategies.includes(id)) {
+        socket.emit('error', { message: 'You can only equip strategies you own.' });
+        return;
+      }
+    }
+
+    playerManager.setStrategyLoadout(socket.id, ids);
+    playerManager.persistProgress(socket.id);
+
+    socket.emit('strategy:loadout_saved', { strategyLoadout: [...ids] });
+    console.log(`[strategy] ${player.username} saved loadout (${ids.length} rule(s))`);
   });
 
   // ── chest:open ───────────────────────────────────────────────────────────

@@ -55,7 +55,9 @@ interface PathNode {
   markerSprite: Phaser.GameObjects.Sprite | null
 }
 
-type PathState = 'idle' | 'walking' | 'encounter_pause' | 'battling' | 'complete'
+// (No explicit 'battling' state is needed — BiomeScene is paused while
+// BattleScene runs, so update() never ticks during combat.)
+type PathState = 'idle' | 'walking' | 'encounter_pause' | 'complete'
 
 // ── Biome constants ─────────────────────────────────────────────────────────
 
@@ -522,11 +524,7 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   update() {
-    if (
-      this.pathState !== 'battling' &&
-      this.pathState !== 'complete' &&
-      Phaser.Input.Keyboard.JustDown(this.escKey)
-    ) {
+    if (this.pathState !== 'complete' && Phaser.Input.Keyboard.JustDown(this.escKey)) {
       this.returnToWorld()
     }
   }
@@ -600,6 +598,14 @@ export class BiomeScene extends Phaser.Scene {
     }
   }
 
+  /** True when (x, y) is within the keep-clear box around any path waypoint —
+   *  props and decorations must not crowd the route or the encounter markers. */
+  private isNearWaypoint(x: number, y: number): boolean {
+    return this.pathNodes.some(wp =>
+      Math.abs(wp.x - x) < 120 && Math.abs(wp.y - y) < 120,
+    )
+  }
+
   /** Scatter trees and rocks from the roguelike sheet, avoiding waypoints.
    *  A tree entry is either a single frame or a [top, trunk] tall-tree pair. */
   private scatterProps(
@@ -616,10 +622,7 @@ export class BiomeScene extends Phaser.Scene {
       const x = minX + rng.frac() * (maxX - minX)
       const y = minY + rng.frac() * (maxY - minY)
 
-      const tooClose = this.pathNodes.some(wp =>
-        Math.abs(wp.x - x) < 120 && Math.abs(wp.y - y) < 120,
-      )
-      if (tooClose) continue
+      if (this.isNearWaypoint(x, y)) continue
 
       if (rng.frac() < treeRatio && trees.length > 0) {
         const tree = rng.pick(trees)
@@ -673,7 +676,7 @@ export class BiomeScene extends Phaser.Scene {
     for (let i = 0; i < 25; i++) {
       const x = rng.integerInRange(40, WORLD_W - 40)
       const y = rng.integerInRange(40, WORLD_H - 40)
-      if (this.pathNodes.some(wp => Math.abs(wp.x - x) < 120 && Math.abs(wp.y - y) < 120)) continue
+      if (this.isNearWaypoint(x, y)) continue
       this.add.image(x, y, 'tiny_town', TT_MUSHROOMS).setScale(3).setDepth(9)
     }
   }
@@ -761,7 +764,7 @@ export class BiomeScene extends Phaser.Scene {
     for (let i = 0; i < 22; i++) {
       const x = rng.integerInRange(40, WORLD_W - 40)
       const y = rng.integerInRange(40, WORLD_H - 40)
-      if (this.pathNodes.some(wp => Math.abs(wp.x - x) < 120 && Math.abs(wp.y - y) < 120)) continue
+      if (this.isNearWaypoint(x, y)) continue
       this.add.image(x, y, 'roguelike', rng.pick(RL_ROCKS_WATER))
         .setScale(3 + rng.frac()).setDepth(9)
     }

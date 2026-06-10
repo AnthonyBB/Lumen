@@ -217,7 +217,7 @@ export class ChestScene extends Phaser.Scene {
   // Destroyed and redrawn on every inventory change.
 
   private rebuildItemLayer() {
-    this.itemLayer.forEach(o => (o as Phaser.GameObjects.GameObject).destroy())
+    this.itemLayer.forEach(o => o.destroy())
     this.itemLayer = []
 
     // Panel titles + counts (depth 2, above slot backgrounds)

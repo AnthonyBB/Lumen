@@ -100,7 +100,6 @@ export class EquipmentScene extends Phaser.Scene {
   private inventory: InventoryItem[] = []
 
   private slotContainerMap: Map<SlotKey, Phaser.GameObjects.Container> = new Map()
-  private slotGfxMap:       Map<SlotKey, Phaser.GameObjects.Graphics>   = new Map()
   private inventoryContainer!: Phaser.GameObjects.Container
   private statsContainer!:     Phaser.GameObjects.Container
   private selectedItem: InventoryItem | null = null
@@ -114,15 +113,10 @@ export class EquipmentScene extends Phaser.Scene {
 
   create() {
     // Reset state on each launch
-    this.equipped = {
-      mainHand: null, offHand: null, helm: null, earring: null,
-      ring1: null,    ring2: null,   belt: null, shoes: null,
-      gloves: null,   necklace: null,
-    }
+    this.equipped     = { ...INITIAL_EQUIPPED }
     this.inventory    = MOCK_INVENTORY.map(i => ({ ...i, stats: { ...i.stats } }))
     this.selectedItem = null
     this.slotContainerMap.clear()
-    this.slotGfxMap.clear()
 
     this.drawBackground()
     this.drawHeader()
@@ -471,7 +465,6 @@ export class EquipmentScene extends Phaser.Scene {
   private buildSlots() {
     this.slotContainerMap.forEach(c => c.destroy())
     this.slotContainerMap.clear()
-    this.slotGfxMap.clear()
 
     this.drawConnectorLines()
 
@@ -488,7 +481,7 @@ export class EquipmentScene extends Phaser.Scene {
 
     // Slot background gfx
     const gfx = this.add.graphics()
-    this.drawSlotGfx(gfx, slotKey, item, false)
+    this.drawSlotGfx(gfx, item, false)
     container.add(gfx)
 
     // Item icon
@@ -513,10 +506,10 @@ export class EquipmentScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true })
 
     hit.on('pointerover', () => {
-      this.drawSlotGfx(gfx, slotKey, this.equipped[slotKey], true)
+      this.drawSlotGfx(gfx, this.equipped[slotKey], true)
     })
     hit.on('pointerout', () => {
-      this.drawSlotGfx(gfx, slotKey, this.equipped[slotKey], false)
+      this.drawSlotGfx(gfx, this.equipped[slotKey], false)
     })
     hit.on('pointerdown', () => {
       if (this.equipped[slotKey]) {
@@ -525,13 +518,11 @@ export class EquipmentScene extends Phaser.Scene {
     })
     container.add(hit)
 
-    this.slotGfxMap.set(slotKey, gfx)
     this.slotContainerMap.set(slotKey, container)
   }
 
   private drawSlotGfx(
     gfx: Phaser.GameObjects.Graphics,
-    _slotKey: SlotKey,
     item: InventoryItem | null,
     hovered: boolean
   ) {

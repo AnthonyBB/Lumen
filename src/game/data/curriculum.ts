@@ -5,13 +5,9 @@
  * (same pattern as the equipment system's duplicated catalog).  The server
  * validates every subcategory id it receives, so a drifted client copy can
  * never grant access to anything — it would just show stale labels.
- *
- * Also provides a tag → subcategory mapping so the local question bank in
- * src/engine/questions/ (whose questions carry free-form `tags`) can be
- * filtered by curriculum subcategory in the ClassroomScene picker.
  */
 
-import type { Subject, Question } from '../../engine/types'
+import type { Subject } from '../../engine/types'
 
 export interface Subcategory {
   id: string            // e.g. 'math_fractions'
@@ -89,69 +85,3 @@ export function gradeRangeLabel(s: Subcategory): string {
   return `Grades ${lo}-${s.gradeMax}`
 }
 
-// ---------------------------------------------------------------------------
-// Tag → subcategory mapping for the local question bank (src/engine/questions/)
-// ---------------------------------------------------------------------------
-
-const TAG_TO_SUBCATEGORY: Record<string, string> = {
-  // math
-  'counting': 'math_counting', 'time': 'math_counting', 'patterns': 'math_counting',
-  'addition': 'math_addsub', 'subtraction': 'math_addsub',
-  'multiplication': 'math_muldiv', 'division': 'math_muldiv',
-  'factors': 'math_muldiv', 'multiples': 'math_muldiv', 'primes': 'math_muldiv', 'number properties': 'math_muldiv',
-  'fractions': 'math_fractions', 'decimals': 'math_fractions', 'ordering': 'math_fractions', 'simplification': 'math_fractions',
-  'geometry': 'math_geometry', 'shapes': 'math_geometry', 'perimeter': 'math_geometry', 'area': 'math_geometry',
-  'circles': 'math_geometry', 'Pythagoras': 'math_geometry', 'measurement': 'math_geometry',
-  'ratios': 'math_ratios', 'percentages': 'math_ratios',
-  'algebra': 'math_algebra', 'exponents': 'math_algebra', 'order of operations': 'math_algebra',
-  'statistics': 'math_stats', 'mean': 'math_stats', 'probability': 'math_stats',
-  // science
-  'animals': 'sci_animals', 'insects': 'sci_animals', 'life cycles': 'sci_animals',
-  'classification': 'sci_animals', 'food chains': 'sci_animals',
-  'plants': 'sci_plants', 'photosynthesis': 'sci_plants', 'ecosystems': 'sci_plants', 'biomes': 'sci_plants',
-  'weather': 'sci_weather', 'water cycle': 'sci_weather', 'atmosphere': 'sci_weather',
-  'space': 'sci_space', 'solar system': 'sci_space', 'planets': 'sci_space', 'stars': 'sci_space',
-  'earth science': 'sci_space', 'rocks': 'sci_space',
-  'states of matter': 'sci_matter', 'matter': 'sci_matter', 'scientific method': 'sci_matter',
-  'forces': 'sci_forces', 'motion': 'sci_forces',
-  'energy': 'sci_energy', 'electricity': 'sci_energy', 'light': 'sci_energy', 'electromagnetic spectrum': 'sci_energy',
-  'cell biology': 'sci_cells', 'genetics': 'sci_cells', 'life science': 'sci_cells',
-  'chemistry': 'sci_chemistry', 'acids and bases': 'sci_chemistry', 'atomic structure': 'sci_chemistry',
-  'reactions': 'sci_chemistry', 'gas laws': 'sci_chemistry',
-  'physics': 'sci_physics',
-  'human body': 'sci_body', 'gases': 'sci_body',
-  // history
-  'ancient civilizations': 'hist_ancient', 'landmarks': 'hist_ancient', 'culture': 'hist_ancient',
-  'engineering': 'hist_ancient',
-  'explorers': 'hist_explorers', 'exploration': 'hist_explorers', 'trade': 'hist_explorers',
-  'world empires': 'hist_world', 'wars': 'hist_world', 'major events': 'hist_world',
-  'revolutions': 'hist_world', 'cultural history': 'hist_world', 'historical figures': 'hist_world',
-  'inventions': 'hist_world',
-  'geography': 'hist_geography', 'timeline concepts': 'hist_geography',
-  'law': 'hist_civics', 'government': 'hist_civics',
-  'economy': 'hist_economics',
-  // language
-  'phonics': 'lang_phonics', 'rhyming': 'lang_phonics', 'syllables': 'lang_phonics', 'spelling': 'lang_phonics',
-  'vocabulary': 'lang_vocabulary', 'synonyms': 'lang_vocabulary', 'antonyms': 'lang_vocabulary',
-  'connotation': 'lang_vocabulary', 'semantics': 'lang_vocabulary', 'word choice': 'lang_vocabulary',
-  'advanced vocabulary': 'lang_vocabulary',
-  'grammar': 'lang_grammar', 'punctuation': 'lang_grammar', 'capitalization': 'lang_grammar',
-  'parts of speech': 'lang_grammar', 'sentence structure': 'lang_grammar', 'plurals': 'lang_grammar',
-  'reading comprehension': 'lang_reading',
-  'writing': 'lang_writing', 'writing styles': 'lang_writing',
-  'literary devices': 'lang_literature', 'figurative language': 'lang_literature', 'irony': 'lang_literature',
-  'word roots': 'lang_roots', 'prefixes': 'lang_roots', 'suffixes': 'lang_roots', 'etymology': 'lang_roots',
-}
-
-/**
- * Best-fit subcategory for a local question, derived from its tags.
- * Returns undefined when no tag maps (such questions appear only in the
- * subject-wide pool fallback).
- */
-export function questionSubcategory(q: Question): string | undefined {
-  for (const tag of q.tags ?? []) {
-    const sub = TAG_TO_SUBCATEGORY[tag]
-    if (sub && SUBCATEGORY_MAP[sub].subject === q.subject) return sub
-  }
-  return undefined
-}

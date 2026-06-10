@@ -63,22 +63,6 @@ export class BootScene extends Phaser.Scene {
     shadowGfx.generateTexture('shadow', 40, 8)
     shadowGfx.destroy()
 
-    // ── STONE TILE for ClassroomScene indoor floor (32x32) ──────────────────────
-    const sg = this.make.graphics({ x: 0, y: 0 })
-    sg.fillStyle(0x888090, 1)
-    sg.fillRect(0, 0, 32, 32)
-    sg.fillStyle(0x706878, 0.7)
-    sg.fillRect(0, 0, 15, 15)
-    sg.fillRect(17, 17, 15, 15)
-    sg.fillStyle(0x9a92a4, 0.5)
-    sg.fillRect(17, 0, 15, 15)
-    sg.fillRect(0, 17, 15, 15)
-    sg.lineStyle(1, 0x5a5262, 0.8)
-    sg.lineBetween(16, 0, 16, 32)
-    sg.lineBetween(0, 16, 32, 16)
-    sg.generateTexture('stone', 32, 32)
-    sg.destroy()
-
   }
 
   create() {

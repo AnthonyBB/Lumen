@@ -51,7 +51,7 @@ type HallView = 'room' | 'merchant' | 'teacher'
 export class StrategyScene extends Phaser.Scene {
   private view: HallView = 'room'
 
-  private selectedPreset: CombatStrategy extends never ? never : StrategyPreset | null = null
+  private selectedPreset: StrategyPreset | null = null
   private selectedStrategy: CombatStrategy | null = null
 
   // Server-reported shop state — only ever updated from 'shop:unlocks' /

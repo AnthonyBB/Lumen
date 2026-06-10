@@ -16,7 +16,7 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import { PLAYER_SKILLS } from '../data/skills'
+import { BASIC_ATTACK } from '../data/skills'
 import type { Skill } from '../data/skills'
 import { SKILL_MAP } from '../data/skillTrees'
 import type { CombatSkill, SkillClass } from '../data/skillTrees'
@@ -62,9 +62,6 @@ const xpForMob = (level: number) => 10 + level * 2
 
 /** Fallback player initiative speed when no equipment-derived speed is set. */
 const DEFAULT_PLAYER_SPEED = 25
-
-/** Everyone always has the basic weapon attack, purchased or not. */
-const BASIC_ATTACK: Skill = PLAYER_SKILLS.find(s => s.id === 'attack')!
 
 /** Button accent color per skill class (matches shop theming). */
 const CLASS_COLORS: Record<SkillClass, number> = {
@@ -159,7 +156,6 @@ export class BattleScene extends Phaser.Scene {
   private logText!: Phaser.GameObjects.Text
   private skillButtons: Phaser.GameObjects.Container[] = []
   private skillBtnGfx: Phaser.GameObjects.Graphics[] = []
-  private dmgLabels: Phaser.GameObjects.Text[] = []
 
   constructor() { super({ key: 'BattleScene' }) }
 
@@ -173,7 +169,6 @@ export class BattleScene extends Phaser.Scene {
     this.mobs        = []
     this.skillButtons = []
     this.skillBtnGfx  = []
-    this.dmgLabels    = []
     this.skillPage    = 0
   }
 
@@ -415,7 +410,7 @@ export class BattleScene extends Phaser.Scene {
         if (mob.alive) sprite.setTint(baseTint)   // restore archetype tint
       })
       hit.on('pointerdown', () => {
-        if (this.phase === 'target_select' && mob.alive) this.fireSkilOnMob(idx)
+        if (this.phase === 'target_select' && mob.alive) this.fireSkillOnMob(idx)
       })
       mob.hitZone = hit
     }
@@ -504,7 +499,7 @@ export class BattleScene extends Phaser.Scene {
 
     pageSkills.forEach((skill, i) => {
       const cx = startX + i * (btnW + gap)
-      const c = this.makeSkillButton(skill, cx, btnY, btnW, SKILL_BTN_H - 4, i)
+      const c = this.makeSkillButton(skill, cx, btnY, btnW, SKILL_BTN_H - 4)
       this.skillButtons.push(c)
     })
 
@@ -547,7 +542,7 @@ export class BattleScene extends Phaser.Scene {
 
   private makeSkillButton(
     skill: Skill, cx: number, cy: number,
-    bw: number, bh: number, idx: number,
+    bw: number, bh: number,
   ): Phaser.GameObjects.Container {
     const btn = this.add.container(cx, cy).setDepth(6)
 
@@ -588,7 +583,7 @@ export class BattleScene extends Phaser.Scene {
     })
     hit.on('pointerdown', () => {
       if (this.phase !== 'player_turn' && this.phase !== 'target_select') return
-      this.onSkillSelected(skill, idx, draw, fillActive, fillIdle, g, bw, bh)
+      this.onSkillSelected(skill, draw, fillActive)
     })
 
     btn.add([g, icon, name, desc, hit])
@@ -596,11 +591,9 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private onSkillSelected(
-    skill: Skill, _idx: number,
-    draw: (f: number, a: number) => void,
-    fillActive: number, _fillIdle: number,
-    _g: Phaser.GameObjects.Graphics,
-    _bw: number, _bh: number,
+    skill: Skill,
+    draw: (fill: number, accent: number) => void,
+    fillActive: number,
   ) {
     // Reset all button backgrounds to idle (re-build is handled via resetSkillButtons on next turn)
     this.skillBtnGfx.forEach(bg => bg.clear())
@@ -639,7 +632,7 @@ export class BattleScene extends Phaser.Scene {
 
   // ── Combat actions ────────────────────────────────────────────────────────
 
-  private fireSkilOnMob(mobIdx: number) {
+  private fireSkillOnMob(mobIdx: number) {
     if (this.phase !== 'target_select' || !this.selectedSkill) return
     this.phase = 'animating'
 
@@ -706,7 +699,7 @@ export class BattleScene extends Phaser.Scene {
 
     let delay = 0
 
-    alive.forEach((mob, _i) => {
+    alive.forEach(mob => {
       this.time.delayedCall(delay, () => {
         // Damage = mob's stat-derived attack ± 15%, reduced by player defense.
         const raw = Phaser.Math.Between(
@@ -797,12 +790,11 @@ export class BattleScene extends Phaser.Scene {
       color: hex, fontStyle: 'bold',
       stroke: '#000000', strokeThickness: 3,
     }).setOrigin(0.5, 0.5).setDepth(20)
-    this.dmgLabels.push(lbl)
     this.tweens.add({
       targets: lbl,
       y: y - 60, alpha: 0,
       duration: 900, ease: 'Sine.easeOut',
-      onComplete: () => { lbl.destroy(); this.dmgLabels = this.dmgLabels.filter(l => l !== lbl) },
+      onComplete: () => lbl.destroy(),
     })
   }
 

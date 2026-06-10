@@ -52,10 +52,8 @@ export const RL_SAND_ISLAND: [number, number, number, number] =
 
 // ── Roguelike: single-tile vegetation (row 9) ───────────────────────────────
 export const RL_TREE_GREEN_SM  = rl(13, 9)  // (13,9) small round green tree
-export const RL_TREE_ORANGE_SM = rl(14, 9)  // (14,9) small round orange tree
 export const RL_TREE_TEAL_SM   = rl(15, 9)  // (15,9) small round teal tree
 export const RL_PINE_GREEN_SM  = rl(16, 9)  // (16,9) small green pine
-export const RL_PINE_ORANGE_SM = rl(17, 9)  // (17,9) small orange pine
 export const RL_PINE_TEAL_SM   = rl(18, 9)  // (18,9) small teal pine
 export const RL_BUSH_GREEN     = rl(19, 9)  // (19,9) green bush
 export const RL_BUSH_ORANGE    = rl(20, 9)  // (20,9) orange bush
@@ -67,12 +65,10 @@ export const RL_TREE_GREEN_TALL:  [number, number] = [rl(13, 10), rl(13, 11)]
 export const RL_TREE_ORANGE_TALL: [number, number] = [rl(14, 10), rl(14, 11)]
 export const RL_TREE_TEAL_TALL:   [number, number] = [rl(15, 10), rl(15, 11)]
 export const RL_PINE_GREEN_TALL:  [number, number] = [rl(16, 10), rl(16, 11)]
-export const RL_PINE_ORANGE_TALL: [number, number] = [rl(17, 10), rl(17, 11)]
 export const RL_PINE_TEAL_TALL:   [number, number] = [rl(18, 10), rl(18, 11)]
 export const RL_TREE_BERRY_TALL:  [number, number] = [rl(23, 10), rl(23, 11)]
 
 export const RL_GRASS_TUFT  = rl(22, 10)  // (22,10) small grass tuft
-export const RL_GRASS_TUFT2 = rl(22, 11)  // (22,11) grass tuft variant
 
 // ── Roguelike: rocks (cols 54-56) ───────────────────────────────────────────
 export const RL_ROCKS_BROWN      = [rl(54, 19), rl(55, 19), rl(56, 19)]  // (54..56,19)
@@ -85,8 +81,6 @@ export const RL_ROCKS_WATER      = [rl(54, 23), rl(55, 23), rl(56, 23)]  // (54.
 export const TT_POPLAR_ORANGE: [number, number] = [tt(3, 0), tt(3, 1)]  // (3,0)+(3,1) tall orange poplar
 export const TT_POPLAR_GREEN:  [number, number] = [tt(4, 0), tt(4, 1)]  // (4,0)+(4,1) tall green poplar
 export const TT_TREE_ROUND     = tt(5, 0)  // (5,0)  round green tree (single tile)
-export const TT_TREE_ORANGE_SM = tt(3, 2)  // (3,2)  small orange tree
-export const TT_TREE_GREEN_SM  = tt(4, 2)  // (4,2)  small green tree
 export const TT_MUSHROOMS      = tt(5, 2)  // (5,2)  red mushrooms
 
 // ── Tiny Dungeon: monsters & creatures ──────────────────────────────────────

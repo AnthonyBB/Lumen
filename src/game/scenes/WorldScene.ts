@@ -466,10 +466,14 @@ export class WorldScene extends Phaser.Scene {
   private rng(seed: number): () => number {
     let s = seed >>> 0
     return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       s = (((s * 1664525 + 1013904223) | 0) >>> 0)
       return s / 0x100000000
     }
+  }
+
+  /** True when the player is within `range` px of world position (x, y). */
+  private playerIsNear(x: number, y: number, range: number): boolean {
+    return Phaser.Math.Distance.Between(this.player.x, this.player.y, x, y) < range
   }
 
   /**
@@ -873,38 +877,14 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Check proximity to buildings
-    let nearBuilding: BuildingEntry | null = null
-    for (const entry of this.buildings) {
-      const dist = Phaser.Math.Distance.Between(
-        this.player.x, this.player.y,
-        entry.x, entry.y
-      )
-      if (dist < 120) {
-        nearBuilding = entry
-        break
-      }
-    }
+    // Check proximity to buildings, chest, and biome gates
+    const nearBuilding =
+      this.buildings.find(entry => this.playerIsNear(entry.x, entry.y, 120)) ?? null
 
-    // Check proximity to chest
-    const chestDist = Phaser.Math.Distance.Between(
-      this.player.x, this.player.y,
-      this.chestPos.x, this.chestPos.y
-    )
-    this.nearChest = chestDist < 80
+    this.nearChest = this.playerIsNear(this.chestPos.x, this.chestPos.y, 80)
 
-    // Check proximity to biome gates
-    this.nearBiomeGate = null
-    for (const gate of this.biomeGates) {
-      const dist = Phaser.Math.Distance.Between(
-        this.player.x, this.player.y,
-        gate.x, gate.y
-      )
-      if (dist < 80) {
-        this.nearBiomeGate = gate
-        break
-      }
-    }
+    this.nearBiomeGate =
+      this.biomeGates.find(gate => this.playerIsNear(gate.x, gate.y, 80)) ?? null
 
     // Handle prompt display and E key interactions
     if (this.biomeMenuOpen) {

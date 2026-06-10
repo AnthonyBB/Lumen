@@ -18,6 +18,8 @@ import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { PLAYER_SKILLS } from '../data/skills'
 import type { Skill } from '../data/skills'
+import { SKILL_MAP } from '../data/skillTrees'
+import type { CombatSkill, SkillClass } from '../data/skillTrees'
 import { TD_MONSTERS } from '../data/tileFrames'
 import type { BiomeScene } from './BiomeScene'
 
@@ -60,6 +62,44 @@ const xpForMob = (level: number) => 10 + level * 2
 
 /** Fallback player initiative speed when no equipment-derived speed is set. */
 const DEFAULT_PLAYER_SPEED = 25
+
+/** Everyone always has the basic weapon attack, purchased or not. */
+const BASIC_ATTACK: Skill = PLAYER_SKILLS.find(s => s.id === 'attack')!
+
+/** Button accent color per skill class (matches shop theming). */
+const CLASS_COLORS: Record<SkillClass, number> = {
+  fire_mage: 0xff4400, ice_mage: 0x44aaff, lightning_mage: 0xffee00,
+  sword: 0xcc8855, spear: 0xaa9966, axe: 0xbb5533, hammer: 0x997755,
+  monk: 0xffaa66, paladin: 0xffd700, assassin: 0x9955cc,
+  cleric: 0x44ff88, shaman: 0x55cc77, bard: 0xff77cc,
+}
+
+const MAX_SKILLS_PER_PAGE = 6
+
+/**
+ * Map a purchased skill-tree skill onto the battle engine's damage/heal model.
+ * The engine currently supports direct damage and heals; richer effects
+ * (DoT ticks, stuns, buffs) are flattened to their primary value for now.
+ */
+function toBattleSkill(cs: CombatSkill): Skill {
+  const dmgEffect = cs.effects.find(e =>
+    e.type === 'damage' || e.type === 'aoe' || e.type === 'execute' ||
+    e.type === 'chain' || e.type === 'dot' || e.type === 'lifesteal')
+  const healEffect = cs.effects.find(e => e.type === 'heal' || e.type === 'shield')
+  const isHeal = !dmgEffect && !!healEffect
+  const base = (dmgEffect ?? healEffect)?.value ?? 10
+  return {
+    id: cs.id,
+    name: cs.name,
+    icon: cs.icon,
+    description: cs.description,
+    damageMin: Math.max(1, Math.round(base * 0.85)),
+    damageMax: Math.max(2, Math.round(base * 1.15)),
+    isHeal,
+    color: CLASS_COLORS[cs.class] ?? 0x8a6a40,
+    mpCost: cs.mpCost,
+  }
+}
 
 // Sprite scale per difficulty (16px source tile → 64/72/80 px on screen)
 const MOB_SCALE: Record<string, number> = { easy: 4, medium: 4.5, hard: 5 }
@@ -109,6 +149,10 @@ export class BattleScene extends Phaser.Scene {
   private playerDefense = 0   // equipment-derived defense will feed this later
   private xpGained = 0
 
+  /** Skills shown in the bar: basic Attack + server-confirmed purchases only. */
+  private battleSkills: Skill[] = [BASIC_ATTACK]
+  private skillPage = 0
+
   // ── HUD refs ─────────────────────────────────────────────────────────────
   private playerHpGfx!: Phaser.GameObjects.Graphics
   private playerHpText!: Phaser.GameObjects.Text
@@ -130,6 +174,7 @@ export class BattleScene extends Phaser.Scene {
     this.skillButtons = []
     this.skillBtnGfx  = []
     this.dmgLabels    = []
+    this.skillPage    = 0
   }
 
   create() {
@@ -138,6 +183,7 @@ export class BattleScene extends Phaser.Scene {
     this.playerSpeed   = (this.registry.get('speed') as number) ?? DEFAULT_PLAYER_SPEED
     this.playerDefense = (this.registry.get('defense') as number) ?? 0
 
+    this.loadOwnedSkills()
     this.buildMobs()
     this.drawBackground()
     this.placeMobs()
@@ -401,20 +447,102 @@ export class BattleScene extends Phaser.Scene {
     this.logText.setText(msg).setColor(color)
   }
 
+  // ── Owned skills ──────────────────────────────────────────────────────────
+
+  /**
+   * SECURITY: the bar only ever shows the basic Attack plus skills the SERVER
+   * reports as purchased ('shop:unlocks'). A registry cache renders instantly
+   * on battle start; the fresh server response replaces it moments later.
+   */
+  private loadOwnedSkills() {
+    const cached = (this.registry.get('unlockedSkillIds') as string[]) ?? []
+    this.applyOwnedSkills(cached)
+
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    if (!socket) return
+
+    const onUnlocks = (data: { unlockedSkills?: string[] }) => {
+      const ids = data.unlockedSkills ?? []
+      this.registry.set('unlockedSkillIds', ids)
+      this.applyOwnedSkills(ids)
+      // Rebuild now unless the player is mid-target-selection; resetSkillButtons
+      // runs every turn anyway, so the update lands next turn at the latest.
+      if (this.phase !== 'target_select') this.resetSkillButtons()
+    }
+    socket.on('shop:unlocks', onUnlocks)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      socket.off('shop:unlocks', onUnlocks)
+    })
+    socket.emit('shop:get_unlocks')
+  }
+
+  private applyOwnedSkills(ids: string[]) {
+    const owned = ids
+      .map(id => SKILL_MAP[id])
+      .filter((s): s is CombatSkill => !!s)
+      .sort((a, b) => a.tier - b.tier)
+    this.battleSkills = [BASIC_ATTACK, ...owned.map(toBattleSkill)]
+  }
+
   // ── Skill panel ───────────────────────────────────────────────────────────
 
   private buildSkillPanel() {
-    const n     = PLAYER_SKILLS.length
-    const btnW  = Math.min(220, (GAME_WIDTH - 40) / n - 8)
-    const gap   = ((GAME_WIDTH - 40) - n * btnW) / (n - 1)
-    const startX = 20 + btnW / 2
-    const btnY  = SKILL_TOP + SKILL_BTN_H / 2 + 4
+    const totalPages = Math.max(1, Math.ceil(this.battleSkills.length / MAX_SKILLS_PER_PAGE))
+    this.skillPage = Phaser.Math.Clamp(this.skillPage, 0, totalPages - 1)
+    const pageSkills = this.battleSkills.slice(
+      this.skillPage * MAX_SKILLS_PER_PAGE,
+      (this.skillPage + 1) * MAX_SKILLS_PER_PAGE,
+    )
 
-    PLAYER_SKILLS.forEach((skill, i) => {
+    const arrowSpace = totalPages > 1 ? 36 : 0
+    const usableW = GAME_WIDTH - 40 - arrowSpace * 2
+    const n      = pageSkills.length
+    const btnW   = Math.min(220, usableW / n - 8)
+    const gap    = n > 1 ? (usableW - n * btnW) / (n - 1) : 0
+    const startX = 20 + arrowSpace + btnW / 2
+    const btnY   = SKILL_TOP + SKILL_BTN_H / 2 + 4
+
+    pageSkills.forEach((skill, i) => {
       const cx = startX + i * (btnW + gap)
       const c = this.makeSkillButton(skill, cx, btnY, btnW, SKILL_BTN_H - 4, i)
       this.skillButtons.push(c)
     })
+
+    if (totalPages > 1) {
+      this.makePageArrow(20, btnY, '◀', -1, this.skillPage > 0)
+      this.makePageArrow(GAME_WIDTH - 20, btnY, '▶', +1, this.skillPage < totalPages - 1)
+
+      const ind = this.add.container(GAME_WIDTH / 2, SKILL_TOP + 8).setDepth(6)
+      ind.add(this.add.text(0, 0, `Page ${this.skillPage + 1}/${totalPages}`, {
+        fontSize: '9px', fontFamily: 'Arial', color: '#666688',
+      }).setOrigin(0.5, 0.5))
+      this.skillButtons.push(ind)
+    }
+  }
+
+  private makePageArrow(x: number, y: number, glyph: string, dir: number, enabled: boolean) {
+    const c = this.add.container(x, y).setDepth(6)
+    c.add(this.add.text(0, 0, glyph, {
+      fontSize: '22px', fontFamily: 'Arial',
+      color: enabled ? '#ffd700' : '#444455',
+    }).setOrigin(0.5, 0.5))
+
+    if (enabled) {
+      const hit = this.add.rectangle(0, 0, 34, SKILL_BTN_H - 8, 0, 0)
+        .setInteractive({ useHandCursor: true })
+      hit.on('pointerdown', () => {
+        if (this.phase !== 'player_turn' && this.phase !== 'target_select') return
+        this.skillPage += dir
+        this.selectedSkill = null
+        this.resetSkillButtons()
+        if (this.phase === 'target_select') {
+          this.highlightAliveMobs(false)
+          this.phase = 'player_turn'
+        }
+      })
+      c.add(hit)
+    }
+    this.skillButtons.push(c)
   }
 
   private makeSkillButton(

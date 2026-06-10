@@ -33,7 +33,7 @@ export const RL_SNOW2       = rl(7, 1)   // (7,1)  snow variant
 export const RL_SAND        = rl(8, 0)   // (8,0)  cream desert sand
 export const RL_SAND2       = rl(8, 1)   // (8,1)  sand variant
 export const RL_GRASS_PEBBLES = rl(9, 1) // (9,1)  grass with gray pebbles
-export const RL_GRASS_LUSH  = rl(2, 16)  // (2,16) brighter lush grass fill
+export const RL_GRASS_LUSH  = rl(3, 16)  // (3,16) brighter lush grass fill ((2,16) is an edge-transition tile)
 
 // ── Roguelike: 2×2 decoration patches (motif centred on shared corner) ──────
 // Order: top-left, top-right, bottom-left, bottom-right.

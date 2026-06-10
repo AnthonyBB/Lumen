@@ -27,6 +27,7 @@ export interface LearningSession {
   playerId: string;           // socket.id
   subject: Subject;
   difficulty: Difficulty;
+  subcategory?: string;       // curriculum subcategory id (see data/curriculum.ts)
   questions: Question[];      // full server-side questions (with correctIndex)
   currentIndex: number;
   attemptsLeft: number;       // attempts remaining for current question
@@ -42,6 +43,7 @@ export interface LearningSession {
 export interface ClientLearningQuestion {
   id: string;
   subject: Subject;
+  subcategory: string;
   question: string;
   answers: [string, string, string, string];
   difficulty: Difficulty;
@@ -63,6 +65,7 @@ function toClientQuestion(q: Question): ClientLearningQuestion {
   return {
     id: q.id,
     subject: q.subject,
+    subcategory: q.subcategory,
     question: q.question,
     answers: q.answers,
     difficulty: q.difficulty,
@@ -94,6 +97,7 @@ export class LearningSessionManager {
     playerId: string,
     subject: Subject,
     difficulty: Difficulty,
+    subcategory?: string,
   ): { session: LearningSession; firstQuestion: ClientLearningQuestion } | { error: string } {
     // End any pre-existing session for this player
     this.endPlayerSession(playerId);
@@ -107,7 +111,7 @@ export class LearningSessionManager {
     let attempts = 0;
     while (questions.length < QUESTIONS_PER_SESSION && attempts < 50) {
       attempts++;
-      const q = this.questionEngine.getQuestion(subject, difficulty);
+      const q = this.questionEngine.getQuestion(subject, difficulty, subcategory);
       if (q && !seen.has(q.id)) {
         seen.add(q.id);
         questions.push(q);
@@ -124,6 +128,7 @@ export class LearningSessionManager {
       playerId,
       subject,
       difficulty,
+      subcategory,
       questions,
       currentIndex: 0,
       attemptsLeft: ATTEMPTS_PER_QUESTION,

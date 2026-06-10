@@ -34,6 +34,7 @@ import type {
   Difficulty,
 } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
+import { CURRICULUM, SUBCATEGORY_MAP } from '../game/data/curriculum.js';
 
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
 const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
@@ -364,6 +365,22 @@ export function registerHandlers(
       return;
     }
 
+    // Optional subcategory — must be a known curriculum id belonging to the
+    // requested subject.  Unknown ids are rejected (never trusted blindly).
+    let subcategory: string | undefined;
+    if (payload.subcategory !== undefined) {
+      if (typeof payload.subcategory !== 'string') {
+        socket.emit('error', { message: 'Invalid subcategory.' });
+        return;
+      }
+      const subcat = SUBCATEGORY_MAP[payload.subcategory];
+      if (!subcat || subcat.subject !== payload.subject) {
+        socket.emit('error', { message: 'Unknown subcategory for that subject.' });
+        return;
+      }
+      subcategory = subcat.id;
+    }
+
     // Content-mode gating: child mode (user-chosen or defaulting from ageGroup)
     // may only access easy/medium difficulty questions.
     const contentMode = (socket.data.contentMode as string | null) ??
@@ -383,6 +400,7 @@ export function registerHandlers(
       socket.id,
       payload.subject as Subject,
       payload.difficulty as Difficulty,
+      subcategory,
     );
 
     if ('error' in result) {
@@ -398,8 +416,17 @@ export function registerHandlers(
     });
 
     console.log(
-      `[learning] ${socket.id} started session ${session.sessionId} (${payload.subject}/${payload.difficulty})`,
+      `[learning] ${socket.id} started session ${session.sessionId} ` +
+      `(${payload.subject}/${subcategory ?? 'any'}/${payload.difficulty})`,
     );
+  });
+
+  // ── curriculum:get ───────────────────────────────────────────────────────
+  //
+  // Returns the K-12 subject → subcategory taxonomy so clients can render the
+  // subcategory picker.  Safe to send: contains no questions or answers.
+  socket.on('curriculum:get', () => {
+    socket.emit('curriculum:data', { curriculum: CURRICULUM });
   });
 
   // ── learning:answer ──────────────────────────────────────────────────────

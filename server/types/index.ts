@@ -48,6 +48,8 @@ export type Difficulty = 'easy' | 'medium' | 'hard';
 export interface Question {
   id: string;
   subject: Subject;
+  /** Curriculum subcategory id, e.g. 'math_fractions' — see game/data/curriculum.ts */
+  subcategory: string;
   question: string;
   /** Exactly 4 answer choices. */
   answers: [string, string, string, string];
@@ -62,6 +64,8 @@ export interface Question {
 export interface ClientQuestion {
   id: string;
   subject: Subject;
+  /** Curriculum subcategory id — safe to expose (contains no answer data). */
+  subcategory: string;
   question: string;
   answers: [string, string, string, string];
   difficulty: Difficulty;
@@ -116,6 +120,8 @@ export interface LearningSession {
   playerId: string;           // socket.id
   subject: Subject;
   difficulty: Difficulty;
+  /** Curriculum subcategory this session targets, if any. */
+  subcategory?: string;
   /** Full server-side questions (with correctIndex) — never sent to client. */
   questions: Question[];
   currentIndex: number;
@@ -171,6 +177,8 @@ export interface ChatMessagePayload {
 export interface LearningStartPayload {
   subject: Subject;
   difficulty: Difficulty;
+  /** Optional curriculum subcategory id (e.g. 'math_fractions'). Validated server-side. */
+  subcategory?: string;
 }
 
 export interface LearningAnswerPayload {

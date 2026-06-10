@@ -3,8 +3,14 @@ import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT, PLAYER_SPEED } from '../constants'
 import type { Subject, Difficulty, Question } from '../../engine/types'
 import { QUESTIONS_BY_SUBJECT } from '../../engine/questions'
+import {
+  CURRICULUM_BY_SUBJECT,
+  gradeRangeLabel,
+  questionSubcategory,
+  type Subcategory,
+} from '../data/curriculum'
 
-type ClassroomState = 'exploring' | 'teacher_dialog' | 'seated' | 'questioning' | 'results'
+type ClassroomState = 'exploring' | 'teacher_dialog' | 'subcategory_select' | 'seated' | 'questioning' | 'results'
 
 const SUBJECT_CONFIG = [
   { key: 'math'     as Subject, label: 'Mathematics',  icon: '➕', color: 0x1a3a8a, hover: 0x2a4aaa },
@@ -51,11 +57,13 @@ export class ClassroomScene extends Phaser.Scene {
   private overlay!: Phaser.GameObjects.Rectangle
 
   private subjectModal!: Phaser.GameObjects.Container
+  private subcategoryModal!: Phaser.GameObjects.Container
   private difficultyModal!: Phaser.GameObjects.Container
   private questionPanel!: Phaser.GameObjects.Container
   private resultsPanel!: Phaser.GameObjects.Container
 
   private sessionSubject!: Subject
+  private sessionSubcategory: Subcategory | null = null
   private sessionDifficulty!: Difficulty
   private sessionQuestions: Question[] = []
   private currentQuestionIdx = 0
@@ -70,6 +78,7 @@ export class ClassroomScene extends Phaser.Scene {
   create() {
     this.state = 'exploring'
     this.questionLocked = false
+    this.sessionSubcategory = null
 
     this.drawRoom()
     this.createDesks()
@@ -90,6 +99,7 @@ export class ClassroomScene extends Phaser.Scene {
     }).setOrigin(0.5, 0).setDepth(50).setVisible(false)
 
     this.createSubjectModal()
+    this.createSubcategoryModal()
     this.createDifficultyModal()
     this.createQuestionPanel()
     this.createResultsPanel()
@@ -419,6 +429,72 @@ export class ClassroomScene extends Phaser.Scene {
   private onSubjectChosen(subject: Subject) {
     this.sessionSubject = subject
     this.subjectModal.setVisible(false)
+    this.state = 'subcategory_select'
+    this.buildSubcategoryModal(subject)
+    this.subcategoryModal.setVisible(true)
+  }
+
+  // ─── SUBCATEGORY MODAL ─────────────────────────────────────────────────────
+
+  private createSubcategoryModal() {
+    this.subcategoryModal = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
+      .setDepth(100).setVisible(false)
+  }
+
+  /** Rebuilt on each subject pick — lists that subject's K-12 subcategories. */
+  private buildSubcategoryModal(subject: Subject) {
+    this.subcategoryModal.removeAll(true)
+
+    const subs = CURRICULUM_BY_SUBJECT[subject]
+    const subjCfg = SUBJECT_CONFIG.find(s => s.key === subject)!
+    const cols = 2
+    const rows = Math.ceil(subs.length / cols)
+    const bW = 360, bH = 60, stepY = 70
+    const W = 800, H = 150 + rows * stepY + 70
+
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0c0c24, 0.98)
+    bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
+    bg.lineStyle(2, 0xffd700, 1)
+    bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
+    this.subcategoryModal.add(bg)
+
+    this.subcategoryModal.add(this.add.text(0, -H / 2 + 32, `${subjCfg.icon}  ${subjCfg.label} — Pick a Topic`, {
+      fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+    this.subcategoryModal.add(this.add.text(0, -H / 2 + 62, 'Topics span Kindergarten through 12th grade — pick what fits you!', {
+      fontSize: '14px', fontFamily: 'Arial', color: '#aaaaaa',
+    }).setOrigin(0.5, 0.5))
+
+    const div = this.add.graphics()
+    div.lineStyle(1, 0xffd700, 0.35)
+    div.lineBetween(-W / 2 + 40, -H / 2 + 82, W / 2 - 40, -H / 2 + 82)
+    this.subcategoryModal.add(div)
+
+    subs.forEach((sub, i) => {
+      const col = i % cols, row = Math.floor(i / cols)
+      const x = (col === 0 ? -1 : 1) * (bW / 2 + 14)
+      const y = -H / 2 + 122 + row * stepY
+      const btn = this.makeButton(`${sub.icon}  ${sub.name}`, gradeRangeLabel(sub), bW, bH, subjCfg.color, subjCfg.hover, () => {
+        if (this.state === 'subcategory_select') this.onSubcategoryChosen(sub)
+      })
+      btn.setPosition(x, y)
+      this.subcategoryModal.add(btn)
+    })
+
+    const back = this.makeButton('← Back to Subjects', '', 220, 40, 0x2a2a44, 0x3a3a60, () => {
+      if (this.state !== 'subcategory_select') return
+      this.subcategoryModal.setVisible(false)
+      this.state = 'teacher_dialog'
+      this.subjectModal.setVisible(true)
+    })
+    back.setPosition(0, H / 2 - 36)
+    this.subcategoryModal.add(back)
+  }
+
+  private onSubcategoryChosen(sub: Subcategory) {
+    this.sessionSubcategory = sub
+    this.subcategoryModal.setVisible(false)
 
     // Seat player at a random empty desk
     const desk = EMPTY_DESKS[Phaser.Math.Between(0, EMPTY_DESKS.length - 1)]
@@ -482,9 +558,21 @@ export class ClassroomScene extends Phaser.Scene {
     this.sessionDifficulty = difficulty
     this.difficultyModal.setVisible(false)
 
-    const pool = QUESTIONS_BY_SUBJECT[this.sessionSubject].filter(q => q.difficulty === difficulty)
-    const shuffled = Phaser.Utils.Array.Shuffle([...pool]) as Question[]
-    this.sessionQuestions = shuffled.slice(0, Math.min(5, shuffled.length))
+    // Build the question pool: prefer the chosen subcategory at the chosen
+    // difficulty, then pad with same-topic questions at other difficulties,
+    // then with subject-wide questions — so a session always fills 5 slots.
+    const subjectPool = QUESTIONS_BY_SUBJECT[this.sessionSubject]
+    const subId = this.sessionSubcategory?.id
+    const topicPool = subId ? subjectPool.filter(q => questionSubcategory(q) === subId) : subjectPool
+    const shuffle = (arr: Question[]) => Phaser.Utils.Array.Shuffle([...arr]) as Question[]
+    const tiers = [
+      shuffle(topicPool.filter(q => q.difficulty === difficulty)),
+      shuffle(topicPool.filter(q => q.difficulty !== difficulty)),
+      shuffle(subjectPool.filter(q => !topicPool.includes(q) && q.difficulty === difficulty)),
+    ]
+    const combined: Question[] = []
+    for (const tier of tiers) for (const q of tier) if (combined.length < 5) combined.push(q)
+    this.sessionQuestions = combined
     this.currentQuestionIdx = 0
     this.attemptsLeft = 3
     this.correctCount = 0
@@ -525,7 +613,8 @@ export class ClassroomScene extends Phaser.Scene {
     // Header labels
     const subj = SUBJECT_CONFIG.find(s => s.key === this.sessionSubject)!
     const diff = DIFFICULTY_CONFIG.find(d => d.key === this.sessionDifficulty)!
-    this.questionPanel.add(this.add.text(-W / 2 + 20, -H / 2 + 14, `${subj.icon}  ${subj.label}  ·  ${diff.label}`, {
+    const topic = this.sessionSubcategory
+    this.questionPanel.add(this.add.text(-W / 2 + 20, -H / 2 + 14, `${subj.icon}  ${subj.label}${topic ? `  ·  ${topic.icon} ${topic.name}` : ''}  ·  ${diff.label}`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#bbaaff',
     }).setOrigin(0, 0.5))
     this.questionPanel.add(this.add.text(W / 2 - 20, -H / 2 + 14, `Question  ${this.currentQuestionIdx + 1}  of  ${this.sessionQuestions.length}`, {
@@ -653,7 +742,8 @@ export class ClassroomScene extends Phaser.Scene {
 
     const subj = SUBJECT_CONFIG.find(s => s.key === this.sessionSubject)!
     const diff = DIFFICULTY_CONFIG.find(d => d.key === this.sessionDifficulty)!
-    this.resultsPanel.add(this.add.text(0, -H / 2 + 72, `${subj.icon}  ${subj.label}  ·  ${diff.label}`, {
+    const topic = this.sessionSubcategory
+    this.resultsPanel.add(this.add.text(0, -H / 2 + 72, `${subj.icon}  ${subj.label}${topic ? `  ·  ${topic.icon} ${topic.name}` : ''}  ·  ${diff.label}`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#888888',
     }).setOrigin(0.5, 0.5))
 

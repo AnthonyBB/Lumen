@@ -498,8 +498,10 @@ export class WorldScene extends Phaser.Scene {
       length += Math.hypot(p.x - prev.x, p.y - prev.y)
       prev = p
     }
-    const steps = Math.max(8, Math.ceil(length / 16))
-    const scale = { scaleX: 2, scaleY: 2 }
+    // Blobs at 1× (≈48px) every 8px give a skinny footpath like the demo map;
+    // step finely so the smaller blobs still overlap into a continuous ribbon.
+    const steps = Math.max(8, Math.ceil(length / 8))
+    const scale = { scaleX: 1, scaleY: 1 }
 
     for (let i = 0; i <= steps; i++) {
       const p = centerline(i / steps)
@@ -515,7 +517,7 @@ export class WorldScene extends Phaser.Scene {
       const len = Math.max(1, Math.hypot(dx, dy))
       const nx = -dy / len
       const ny = dx / len
-      for (const o of [-16, 0, 16]) {
+      for (const o of [-8, 0, 8]) {
         rt.stamp('cp_ground', CP_DIRT, p.x + nx * o, p.y + ny * o, scale)
       }
     }

@@ -32,6 +32,8 @@ const equipmentSlotsSchema = new Schema(
     shoes:     { type: inventoryItemSchema, default: undefined },
     gloves:    { type: inventoryItemSchema, default: undefined },
     necklace:  { type: inventoryItemSchema, default: undefined },
+    chest:     { type: inventoryItemSchema, default: undefined },
+    legs:      { type: inventoryItemSchema, default: undefined },
   },
   { _id: false },
 );

@@ -267,7 +267,9 @@ export type EquipmentSlotKey =
   | 'belt'
   | 'shoes'
   | 'gloves'
-  | 'necklace';
+  | 'necklace'
+  | 'chest'   // body armor (generated equipment system)
+  | 'legs';   // leg armor (generated equipment system)
 
 export interface ItemStats {
   attack?: number;
@@ -302,6 +304,8 @@ export interface EquipmentSlots {
   shoes?: InventoryItem;
   gloves?: InventoryItem;
   necklace?: InventoryItem;
+  chest?: InventoryItem;
+  legs?: InventoryItem;
 }
 
 export interface PlayerInventory {
@@ -322,6 +326,15 @@ export interface InventoryEquipPayload {
 
 export interface InventoryUnequipPayload {
   slot: EquipmentSlotKey;
+}
+
+/**
+ * Payload for `equipment:equip` — equips a generated equipment item
+ * (see server/game/data/equipmentGen.ts).  Only the bag-item instance id is
+ * accepted; the slot, stats and XP requirement are looked up server-side.
+ */
+export interface EquipmentEquipPayload {
+  itemId: string;
 }
 
 // ---------------------------------------------------------------------------

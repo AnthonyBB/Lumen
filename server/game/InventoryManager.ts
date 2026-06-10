@@ -237,6 +237,36 @@ export class InventoryManager {
   }
 
   /**
+   * Equip a *generated* equipment item (see server/game/data/equipmentGen.ts)
+   * whose slot and XP requirement have ALREADY been validated by the caller
+   * (the `equipment:equip` socket handler) against EQUIPMENT_MAP.
+   *
+   * Unlike equipItem(), this does not consult ItemDatabase — generated items
+   * are catalogued in equipmentGen, not ItemDatabase.  Ownership is still
+   * verified here: the item instance must exist in the player's bag.
+   */
+  equipGeneratedItem(playerId: string, itemId: string, slot: EquipmentSlotKey): boolean {
+    const inv = this.inventories.get(playerId);
+    if (!inv) return false;
+
+    const itemIdx = inv.items.findIndex((i) => i.id === itemId);
+    if (itemIdx === -1) return false;
+
+    const item = inv.items[itemIdx];
+
+    // Unequip current occupant back to bag
+    if (inv.equipment[slot]) {
+      inv.items.push(inv.equipment[slot]!);
+    }
+
+    inv.equipment[slot] = item;
+    inv.items.splice(itemIdx, 1);
+
+    this.persistInventory(playerId);
+    return true;
+  }
+
+  /**
    * Move the item in an equipment slot back into the player's bag.
    * Returns false if the player is unknown or the slot is already empty.
    */

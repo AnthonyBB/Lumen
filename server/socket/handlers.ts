@@ -24,6 +24,7 @@ import type {
   ChatMessagePayload,
   InventoryEquipPayload,
   InventoryUnequipPayload,
+  EquipmentEquipPayload,
   EquipmentSlotKey,
   ChestTransferPayload,
   LearningStartPayload,
@@ -32,11 +33,29 @@ import type {
   Subject,
   Difficulty,
 } from '../types/index.js';
+import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
+
 /** All valid equipment slot names — used to reject unknown slot strings from clients. */
 const VALID_SLOTS: ReadonlySet<EquipmentSlotKey> = new Set([
   'mainHand', 'offHand', 'helm', 'earring',
   'ring1', 'ring2', 'belt', 'shoes', 'gloves', 'necklace',
+  'chest', 'legs',
 ]);
+
+/**
+ * Maps a generated-equipment slot (equipmentGen.ts) onto the player's
+ * equipment record keys.  Rings always go to ring1 in this minimal flow.
+ */
+const EQUIP_SLOT_TO_KEY: Record<EquipSlot, EquipmentSlotKey> = {
+  weapon: 'mainHand',
+  helmet: 'helm',
+  chest: 'chest',
+  legs: 'legs',
+  boots: 'shoes',
+  gloves: 'gloves',
+  ring: 'ring1',
+  amulet: 'necklace',
+};
 
 const VALID_SUBJECTS: ReadonlySet<Subject> = new Set(['math', 'science', 'history', 'language']);
 const VALID_DIFFICULTIES: ReadonlySet<Difficulty> = new Set(['easy', 'medium', 'hard']);
@@ -530,6 +549,72 @@ export function registerHandlers(
 
     const inventory = inventoryManager.getInventory(socket.id)!;
     socket.emit('inventory:updated', inventory);
+  });
+
+  // ── equipment:equip ──────────────────────────────────────────────────────
+  //
+  // Equips a *generated* equipment item (catalogued in
+  // server/game/data/equipmentGen.ts).  Server-authoritative validation —
+  // the client sends only the bag-item instance id:
+  //  1. The player must exist and own the item (it must be in their bag).
+  //  2. The item's itemType must be a known generated-equipment id (eq_NNNN).
+  //  3. XP GATE: the player's server-tracked XP must be >= the item's
+  //     xpRequired.  Clients cannot bypass this — XP lives in PlayerManager /
+  //     PlayerProgress (MongoDB) and is never accepted from the client.
+  //  4. The destination slot is derived server-side from the catalog, never
+  //     taken from the payload.
+  socket.on('equipment:equip', (payload: EquipmentEquipPayload) => {
+    if (typeof payload?.itemId !== 'string') {
+      socket.emit('error', { message: 'Invalid equipment payload.' });
+      return;
+    }
+
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) {
+      socket.emit('error', { message: 'You must join before equipping items.' });
+      return;
+    }
+
+    const inv = inventoryManager.getInventory(socket.id);
+    if (!inv) {
+      socket.emit('error', { message: 'Inventory not found.' });
+      return;
+    }
+
+    // Ownership: the instance must be in the player's bag
+    const bagItem = inv.items.find((i) => i.id === payload.itemId);
+    if (!bagItem) {
+      socket.emit('error', { message: 'You do not own that item.' });
+      return;
+    }
+
+    // Catalog lookup: itemType is the stable generated-equipment id
+    const catalogItem = EQUIPMENT_MAP[bagItem.itemType];
+    if (!catalogItem) {
+      socket.emit('error', { message: 'That item is not equippable gear.' });
+      return;
+    }
+
+    // XP gate — enforced server-side; player.xp is server-authoritative
+    if (player.xp < catalogItem.xpRequired) {
+      socket.emit('error', {
+        message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
+      });
+      return;
+    }
+
+    const slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
+    const success = inventoryManager.equipGeneratedItem(socket.id, payload.itemId, slotKey);
+    if (!success) {
+      socket.emit('error', { message: 'Could not equip that item.' });
+      return;
+    }
+
+    const inventory = inventoryManager.getInventory(socket.id)!;
+    socket.emit('inventory:updated', inventory);
+    console.log(
+      `[equip] ${player.username} equipped ${catalogItem.name} (${catalogItem.id}) in ${slotKey}`,
+    );
   });
 
   // ── inventory:add_shard ──────────────────────────────────────────────────

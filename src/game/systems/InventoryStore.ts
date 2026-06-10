@@ -73,15 +73,17 @@ type UpdateCallback = (inventory: ClientPlayerInventory) => void;
 class InventoryStoreClass {
   private snapshot: ClientPlayerInventory | null = null;
   private listeners: UpdateCallback[] = [];
-  private initialised = false;
+  private socket: MinimalSocket | null = null;
 
   /**
-   * Call once after the socket is connected.  Subscribes to server-pushed
-   * inventory events and immediately requests the current state.
+   * Bind the store to a socket. Safe to call again with a NEW socket (e.g.
+   * after a reconnect or a React effect re-run) — update listeners registered
+   * via onUpdate() are kept; only the socket subscription is rebound. The old
+   * socket's handlers die with its disconnection.
    */
   init(socket: MinimalSocket): void {
-    if (this.initialised) return;
-    this.initialised = true;
+    if (this.socket === socket) return;
+    this.socket = socket;
 
     const handleUpdate = (data: unknown) => {
       // Trust the server — cast to our client type
@@ -117,7 +119,7 @@ class InventoryStoreClass {
   /** Reset state — call if the player disconnects and reconnects. */
   reset(): void {
     this.snapshot = null;
-    this.initialised = false;
+    this.socket = null;
     this.listeners = [];
   }
 }

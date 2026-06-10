@@ -4,6 +4,7 @@ import { io, Socket } from 'socket.io-client'
 import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
+import { InventoryStore } from '../game/systems/InventoryStore'
 
 interface GamePageProps {
   token: string | null
@@ -35,6 +36,9 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       // The server derives identity from the JWT; the payload is informational.
       s.emit('player:join', { username: user?.username ?? '' })
       s.emit('players:get_online')
+      // Bind the inventory store to this (possibly new) socket so the HUD
+      // shard counters receive inventory:data / inventory:updated pushes.
+      InventoryStore.init(s)
     })
 
     // The server rejects sockets with invalid/expired tokens. Without this,

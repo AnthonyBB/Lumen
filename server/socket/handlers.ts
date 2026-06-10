@@ -187,6 +187,11 @@ export function registerHandlers(
     // Tell the joining player about themselves and the current zone
     socket.emit('player:joined', { player, zonePlayers });
 
+    // Push the freshly-loaded inventory so HUD counters render immediately —
+    // the client's inventory:get can race ahead of this async join handler.
+    const joinInventory = inventoryManager.getInventory(socket.id);
+    if (joinInventory) socket.emit('inventory:data', joinInventory);
+
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {
       players: game.getZonePlayers(player.zone),

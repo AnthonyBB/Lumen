@@ -153,9 +153,23 @@ export function registerHandlers(
     if (inventory) socket.emit('inventory:updated', inventory);
   };
 
+  /** Push the player's shard balances so the HUD currency counters refresh.
+   *  Shards are a tracked currency (PlayerManager), not inventory items. */
+  const pushCurrency = (): void => {
+    socket.emit('currency:update', {
+      skillShards: playerManager.getSkillShards(socket.id),
+      combatShards: playerManager.getCombatShards(socket.id),
+    });
+  };
+
   // ── players:get_online ────────────────────────────────────────────────────
   socket.on('players:get_online', () => {
     socket.emit('players:online', onlinePlayers.size)
+  })
+
+  // ── currency:get — HUD requests current shard balances ────────────────────
+  socket.on('currency:get', () => {
+    pushCurrency();
   })
 
   // ── zone:get ──────────────────────────────────────────────────────────────
@@ -211,10 +225,20 @@ export function registerHandlers(
     // Tell the joining player about themselves and the current zone
     socket.emit('player:joined', { player, zonePlayers });
 
-    // Push the freshly-loaded inventory so HUD counters render immediately —
-    // the client's inventory:get can race ahead of this async join handler.
+    // Migrate any shards that were stored as bag items (older builds) into the
+    // tracked shard balances, then drop them from the bag.
+    const drained = inventoryManager.drainShardItems(socket.id);
+    if (drained.skill > 0) playerManager.addShards(socket.id, 'skill', drained.skill);
+    if (drained.combat > 0) playerManager.addShards(socket.id, 'combat', drained.combat);
+    if (drained.skill > 0 || drained.combat > 0) {
+      console.log(`[migrate] folded bag shards into balances for ${username}: +${drained.skill} skill, +${drained.combat} combat`);
+    }
+
+    // Push the freshly-loaded inventory + shard balances so HUD counters render
+    // immediately — the client's get requests can race this async join handler.
     const joinInventory = inventoryManager.getInventory(socket.id);
     if (joinInventory) socket.emit('inventory:data', joinInventory);
+    pushCurrency();
 
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {
@@ -428,7 +452,7 @@ export function registerHandlers(
     // Every completed quiz earns 1 skill shard (effort reward), regardless of
     // pass/fail. Grade completion adds the larger bonus below.
     let skillShardsAwarded = QUIZ_COMPLETE_SKILL_SHARDS;
-    inventoryManager.addCurrency(socket.id, 'skill_shard', QUIZ_COMPLETE_SKILL_SHARDS);
+    playerManager.addShards(socket.id, 'skill', QUIZ_COMPLETE_SKILL_SHARDS);
 
     if (passed && completedSession) {
       const { topicId, subject } = completedSession;
@@ -439,8 +463,8 @@ export function registerHandlers(
         gradeCompleted = true;
         skillShardsAwarded += GRADE_COMPLETE_SKILL_SHARDS;
         combatShardAwarded = GRADE_COMPLETE_COMBAT_SHARDS;
-        inventoryManager.addCurrency(socket.id, 'skill_shard', GRADE_COMPLETE_SKILL_SHARDS);
-        inventoryManager.addCurrency(socket.id, 'combat_shard', combatShardAwarded);
+        playerManager.addShards(socket.id, 'skill', GRADE_COMPLETE_SKILL_SHARDS);
+        playerManager.addShards(socket.id, 'combat', combatShardAwarded);
         newGrade = playerManager.advanceSubjectGrade(socket.id, subject);
         console.log(
           `[learning] ${socket.id} completed grade in ${subject} → grade ${newGrade} ` +
@@ -464,10 +488,8 @@ export function registerHandlers(
       combatShardAwarded,
     });
 
-    // Refresh inventory HUD counters when shards changed.
-    if (skillShardsAwarded > 0 || combatShardAwarded > 0) {
-      pushInventoryUpdate();
-    }
+    // Refresh the HUD shard counters (a quiz always awards at least 1 skill shard).
+    pushCurrency();
 
     // Let the HUD refresh XP / level after the quiz wraps up.
     const player = playerManager.getPlayer(socket.id);
@@ -644,8 +666,8 @@ export function registerHandlers(
   const buildUnlocksPayload = (player: Player): ShopUnlocksPayload => ({
     unlockedSkills: [...player.unlockedSkills],
     unlockedStrategies: [...player.unlockedStrategies],
-    skillShards: inventoryManager.getCurrencyCount(socket.id, 'skill_shard'),
-    combatShards: inventoryManager.getCurrencyCount(socket.id, 'combat_shard'),
+    skillShards: playerManager.getSkillShards(socket.id),
+    combatShards: playerManager.getCombatShards(socket.id),
     strategyLoadout: [...player.strategyLoadout],
     subjectGrades: { ...player.subjectGrades },
     topicPasses: { ...player.topicPasses },
@@ -700,7 +722,7 @@ export function registerHandlers(
     }
 
     const price = SKILL_PRICE_BY_TIER[skill.tier];
-    if (!inventoryManager.spendCurrency(socket.id, 'skill_shard', price)) {
+    if (!playerManager.spendShards(socket.id, 'skill', price)) {
       socket.emit('error', {
         message: `Not enough Skill Shards — ${skill.name} costs ${price} 🔷. Answer more questions to earn shards!`,
       });
@@ -714,7 +736,7 @@ export function registerHandlers(
       skillId: skill.id,
       ...buildUnlocksPayload(player),
     });
-    pushInventoryUpdate();
+    pushCurrency();
 
     console.log(`[shop] ${player.username} bought skill ${skill.id} for ${price} skill shard(s)`);
   });
@@ -751,7 +773,7 @@ export function registerHandlers(
     const price = STRATEGY_PRICE;
     const label = strategy.name;
 
-    if (!inventoryManager.spendCurrency(socket.id, 'combat_shard', price)) {
+    if (!playerManager.spendShards(socket.id, 'combat', price)) {
       socket.emit('error', {
         message: `Not enough Combat Shards — ${label} costs ${price} 🔶. Complete learning topics to earn shards!`,
       });
@@ -765,7 +787,7 @@ export function registerHandlers(
       strategyId: payload.strategyId,
       ...buildUnlocksPayload(player),
     });
-    pushInventoryUpdate();
+    pushCurrency();
 
     console.log(`[shop] ${player.username} bought ${label} for ${price} combat shard(s)`);
   });

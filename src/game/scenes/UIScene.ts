@@ -1,6 +1,6 @@
 import Phaser from 'phaser'
+import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import { InventoryStore } from '../systems/InventoryStore'
 
 export class UIScene extends Phaser.Scene {
 
@@ -128,8 +128,8 @@ export class UIScene extends Phaser.Scene {
       fontSize: '11px', fontFamily: 'Arial', color: '#88eeff', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
-    // Shard counters — server-authoritative, read from InventoryStore which
-    // is only ever populated by inventory:data / inventory:updated pushes.
+    // Shard counters — server-authoritative tracked currency (NOT inventory
+    // items). Updated only by the server's `currency:update` push.
     const skillShardCount = this.add.text(12, GAME_HEIGHT - 36, '🔷 Skill x0', {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
     }).setOrigin(0, 0)
@@ -137,20 +137,17 @@ export class UIScene extends Phaser.Scene {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
-    const refreshShards = () => {
-      const inv = InventoryStore.get()
-      const count = (itemType: string) =>
-        inv ? inv.items.filter(i => i.itemType === itemType).reduce((s, i) => s + i.quantity, 0) : 0
-      skillShardCount.setText(`🔷 Skill x${count('skill_shard')}`)
-      combatShardCount.setText(`🔶 Combat x${count('combat_shard')}`)
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    const onCurrency = (data: { skillShards?: number; combatShards?: number }) => {
+      skillShardCount.setText(`🔷 Skill x${data?.skillShards ?? 0}`)
+      combatShardCount.setText(`🔶 Combat x${data?.combatShards ?? 0}`)
     }
-    refreshShards()
+    socket?.on('currency:update', onCurrency)
+    socket?.emit('currency:get')   // request the initial balances
 
-    // Listen for server inventory updates (immediate, no polling lag)
-    const unsubscribe = InventoryStore.onUpdate(() => refreshShards())
-
-    // Clean up the InventoryStore listener when this scene shuts down
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => unsubscribe())
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      socket?.off('currency:update', onCurrency)
+    })
 
     // Vignette overlay at screen edges
     const vignette = this.add.graphics()

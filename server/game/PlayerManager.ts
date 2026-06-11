@@ -101,6 +101,8 @@ export class PlayerManager {
       unlockedSkills: [],
       unlockedStrategies: [],
       strategyLoadout: [],
+      skillShards: 0,
+      combatShards: 0,
     };
 
     this.players.set(socketId, player);
@@ -182,6 +184,8 @@ export class PlayerManager {
     unlockedSkills: string[];
     unlockedStrategies: string[];
     strategyLoadout: string[];
+    skillShards: number;
+    combatShards: number;
   }> {
     try {
       const doc = await PlayerProgress.findOne({ userId }).lean();
@@ -194,6 +198,8 @@ export class PlayerManager {
           unlockedSkills: doc.unlockedSkills ?? [],
           unlockedStrategies: doc.unlockedStrategies ?? [],
           strategyLoadout: doc.strategyLoadout ?? [],
+          skillShards: Math.max(0, doc.skillShards ?? 0),
+          combatShards: Math.max(0, doc.combatShards ?? 0),
         };
       }
     } catch (err) {
@@ -203,6 +209,7 @@ export class PlayerManager {
       xp: 0, level: 1,
       subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
+      skillShards: 0, combatShards: 0,
     };
   }
 
@@ -220,6 +227,8 @@ export class PlayerManager {
       unlockedSkills?: string[];
       unlockedStrategies?: string[];
       strategyLoadout?: string[];
+      skillShards?: number;
+      combatShards?: number;
     },
   ): void {
     const player = this.players.get(socketId);
@@ -236,6 +245,8 @@ export class PlayerManager {
     player.strategyLoadout = (progress.strategyLoadout ?? []).filter((id) =>
       player.unlockedStrategies.includes(id),
     );
+    player.skillShards = Math.max(0, Math.floor(progress.skillShards ?? 0));
+    player.combatShards = Math.max(0, Math.floor(progress.combatShards ?? 0));
   }
 
   /**
@@ -256,11 +267,51 @@ export class PlayerManager {
         unlockedSkills: player.unlockedSkills,
         unlockedStrategies: player.unlockedStrategies,
         strategyLoadout: player.strategyLoadout,
+        skillShards: player.skillShards,
+        combatShards: player.combatShards,
       },
       { upsert: true, new: true },
     ).catch((err) => {
       console.error('[PlayerManager] persistProgress error:', err);
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Shard currencies (skill / combat) — tracked balances, NOT inventory items.
+  // -------------------------------------------------------------------------
+
+  getSkillShards(socketId: string): number {
+    return this.players.get(socketId)?.skillShards ?? 0;
+  }
+
+  getCombatShards(socketId: string): number {
+    return this.players.get(socketId)?.combatShards ?? 0;
+  }
+
+  /** Add to a shard balance (server-side callers only). Persists. */
+  addShards(socketId: string, kind: 'skill' | 'combat', amount: number): void {
+    if (amount <= 0) return;
+    const player = this.players.get(socketId);
+    if (!player) return;
+    if (kind === 'skill') player.skillShards += amount;
+    else player.combatShards += amount;
+    this.persistProgress(socketId);
+  }
+
+  /**
+   * Spend from a shard balance. Returns false and changes nothing if the
+   * player can't afford it — the only place balances are checked, server-side.
+   */
+  spendShards(socketId: string, kind: 'skill' | 'combat', amount: number): boolean {
+    if (amount <= 0) return false;
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    const balance = kind === 'skill' ? player.skillShards : player.combatShards;
+    if (balance < amount) return false;
+    if (kind === 'skill') player.skillShards -= amount;
+    else player.combatShards -= amount;
+    this.persistProgress(socketId);
+    return true;
   }
 
   /** Current grade for a subject (1..12, or 13 = mastered). */

@@ -23,6 +23,10 @@ export interface IPlayerProgress extends Document {
   unlockedStrategies: string[]
   /** Ordered strategy loadout arranged at the Teacher (max 10, owned ids only). */
   strategyLoadout: string[]
+  /** Skill Shard balance — a tracked currency, NOT an inventory item. */
+  skillShards: number
+  /** Combat Shard balance — a tracked currency, NOT an inventory item. */
+  combatShards: number
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -63,6 +67,16 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     strategyLoadout: {
       type: [String],
       default: [],
+    },
+    skillShards: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    combatShards: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
   },
   { timestamps: true },

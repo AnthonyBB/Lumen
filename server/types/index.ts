@@ -36,6 +36,10 @@ export interface Player {
   /** Ordered strategy loadout arranged at the Teacher (persisted, max 10,
    *  owned ids only — first entry is checked first in combat). */
   strategyLoadout: string[];
+  /** Skill Shard balance (persisted) — a tracked currency, NOT a bag item. */
+  skillShards: number;
+  /** Combat Shard balance (persisted) — a tracked currency, NOT a bag item. */
+  combatShards: number;
 }
 
 /** Safe subset of a player that can be broadcast to other clients. */

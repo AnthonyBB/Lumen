@@ -16,7 +16,7 @@
  */
 
 import type { PlayerInventory, InventoryItem, EquipmentSlotKey } from '../types/index.js';
-import { getStarterItems, createItem } from './ItemDatabase.js';
+import { getStarterItems } from './ItemDatabase.js';
 import { isDbConnected } from '../db/connection.js';
 import { PlayerInventoryModel } from '../db/models/PlayerInventoryModel.js';
 
@@ -103,26 +103,6 @@ export class InventoryManager {
       };
 
       this.inventories.set(storeKey, inventory);
-
-      // ── Migration: legacy Shards of Knowledge → Skill Shards ──────────────
-      // Converts any old shard_of_knowledge stack(s) into an equivalent
-      // skill_shard stack (same total quantity), then persists the result.
-      const legacyStacks = inventory.items.filter((i) => i.itemType === 'shard_of_knowledge');
-      if (legacyStacks.length > 0) {
-        const legacyQty = legacyStacks.reduce((sum, i) => sum + Math.max(1, i.quantity), 0);
-        inventory.items = inventory.items.filter((i) => i.itemType !== 'shard_of_knowledge');
-
-        const existing = inventory.items.find((i) => i.itemType === 'skill_shard');
-        if (existing) {
-          existing.quantity += legacyQty;
-        } else {
-          const migrated = createItem('skill_shard', legacyQty);
-          if (migrated) inventory.items.push(migrated);
-        }
-
-        this.persistInventory(storeKey);
-        console.log(`[inventory] Migrated ${legacyQty} Shard(s) of Knowledge → Skill Shards for ${userId}`);
-      }
     } catch (err) {
       console.error('[DB] loadInventory failed:', err);
     }
@@ -277,60 +257,32 @@ export class InventoryManager {
   }
 
   // -------------------------------------------------------------------------
-  // Special items
+  // Legacy shard migration
   // -------------------------------------------------------------------------
 
   /**
-   * Award shard currency to the player.  Server-side callers only — shard
-   * amounts are NEVER accepted from the client.
-   * Stacks with any existing stack of the same type.
+   * One-time migration: shards used to live as bag items. Remove any
+   * skill_shard / combat_shard / shard_of_knowledge stacks from the bag and
+   * return their totals so the caller can fold them into the player's tracked
+   * shard balances (PlayerManager). shard_of_knowledge counts as skill shards
+   * (its older meaning). Persists the cleaned inventory.
    */
-  addCurrency(playerId: string, itemType: 'skill_shard' | 'combat_shard', amount = 1): void {
-    if (amount <= 0) return;
+  drainShardItems(playerId: string): { skill: number; combat: number } {
     const inv = this.inventories.get(playerId);
-    if (!inv) return;
+    if (!inv) return { skill: 0, combat: 0 };
 
-    const existing = inv.items.find((i) => i.itemType === itemType);
-    if (existing) {
-      existing.quantity += amount;
-    } else {
-      const shard = createItem(itemType, amount);
-      if (!shard) return;
-      inv.items.push(shard);
+    const sum = (type: string) =>
+      inv.items.filter((i) => i.itemType === type).reduce((s, i) => s + Math.max(1, i.quantity), 0);
+
+    const skill = sum('skill_shard') + sum('shard_of_knowledge');
+    const combat = sum('combat_shard');
+
+    if (skill > 0 || combat > 0) {
+      inv.items = inv.items.filter(
+        (i) => i.itemType !== 'skill_shard' && i.itemType !== 'combat_shard' && i.itemType !== 'shard_of_knowledge',
+      );
+      this.persistInventory(playerId);
     }
-
-    this.persistInventory(playerId);
-  }
-
-  /** Count how many shards of a given currency type the player owns. */
-  getCurrencyCount(playerId: string, itemType: 'skill_shard' | 'combat_shard'): number {
-    const inv = this.inventories.get(playerId);
-    if (!inv) return 0;
-    return inv.items
-      .filter((i) => i.itemType === itemType)
-      .reduce((sum, i) => sum + i.quantity, 0);
-  }
-
-  /**
-   * Spend shard currency.  Returns false (and changes nothing) if the player
-   * does not have enough.  All balance checks happen here, server-side.
-   */
-  spendCurrency(playerId: string, itemType: 'skill_shard' | 'combat_shard', amount: number): boolean {
-    if (amount <= 0) return false;
-    const inv = this.inventories.get(playerId);
-    if (!inv) return false;
-    if (this.getCurrencyCount(playerId, itemType) < amount) return false;
-
-    let remaining = amount;
-    for (const item of inv.items) {
-      if (item.itemType !== itemType || remaining <= 0) continue;
-      const take = Math.min(item.quantity, remaining);
-      item.quantity -= take;
-      remaining -= take;
-    }
-    inv.items = inv.items.filter((i) => !(i.itemType === itemType && i.quantity <= 0));
-
-    this.persistInventory(playerId);
-    return true;
+    return { skill, combat };
   }
 }

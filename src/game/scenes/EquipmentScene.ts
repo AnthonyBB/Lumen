@@ -40,7 +40,7 @@ const RARITY_COLOR: Record<Rarity, number> = {
 const SLOT_LABELS: Record<SlotKey, string> = {
   mainHand: 'Main Hand', offHand: 'Off Hand', helm: 'Helm',
   earring:  'Earring',   ring1:   'Ring 1',   ring2: 'Ring 2',
-  belt:     'Belt',      shoes:   'Shoes',    gloves: 'Gloves',
+  belt:     'Belt',      shoes:   'Boots',    gloves: 'Gloves',
   necklace: 'Necklace',  chest:   'Chest',    legs:   'Legs',
 }
 
@@ -82,29 +82,43 @@ function isEquippable(itemType: string): boolean {
   return !!EQUIPMENT_MAP[itemType] || !!LEGACY_ITEM_SLOT[itemType]
 }
 
-// Slot positions — paper doll center at ~190, 360
+// Paper-doll layout: the wizard sits in the centre, slots flank it in two
+// even columns (armour left, weapons/accessories right) — aligned rows that
+// stay clear of the panel edges.
 const DOLL_CX = 190
 const DOLL_CY = 360
+const COL_L = DOLL_CX - 130
+const COL_R = DOLL_CX + 130
+const ROW0  = 188
+const ROWH  = 84
+const row = (i: number) => ROW0 + i * ROWH
 const SLOT_POSITIONS: Record<SlotKey, { x: number; y: number }> = {
-  helm:     { x: DOLL_CX,       y: DOLL_CY - 198 },
-  earring:  { x: DOLL_CX + 90,  y: DOLL_CY - 165 },
-  legs:     { x: DOLL_CX - 110, y: DOLL_CY - 110 },
-  chest:    { x: DOLL_CX + 110, y: DOLL_CY - 110 },
-  necklace: { x: DOLL_CX,       y: DOLL_CY - 118 },
-  gloves:   { x: DOLL_CX - 110, y: DOLL_CY - 40  },
-  mainHand: { x: DOLL_CX - 110, y: DOLL_CY + 30  },
-  offHand:  { x: DOLL_CX + 110, y: DOLL_CY + 30  },
-  belt:     { x: DOLL_CX,       y: DOLL_CY + 55  },
-  ring1:    { x: DOLL_CX - 110, y: DOLL_CY + 115 },
-  ring2:    { x: DOLL_CX + 110, y: DOLL_CY + 115 },
-  shoes:    { x: DOLL_CX,       y: DOLL_CY + 178 },
+  helm:     { x: COL_L, y: row(0) },
+  chest:    { x: COL_L, y: row(1) },
+  gloves:   { x: COL_L, y: row(2) },
+  belt:     { x: COL_L, y: row(3) },
+  legs:     { x: COL_L, y: row(4) },
+  shoes:    { x: COL_L, y: row(5) },
+  mainHand: { x: COL_R, y: row(0) },
+  offHand:  { x: COL_R, y: row(1) },
+  necklace: { x: COL_R, y: row(2) },
+  earring:  { x: COL_R, y: row(3) },
+  ring1:    { x: COL_R, y: row(4) },
+  ring2:    { x: COL_R, y: row(5) },
 }
 
 /** Dim placeholder glyph shown in an empty slot. */
 const SLOT_PLACEHOLDER: Record<SlotKey, string> = {
   mainHand: '🗡️', offHand: '🛡️', helm: '🪖', earring: '💎',
-  ring1: '💍', ring2: '💍', belt: '🔗', shoes: '👟',
+  ring1: '💍', ring2: '💍', belt: '🔗', shoes: '👢',
   gloves: '🧤', necklace: '📿', chest: '🦺', legs: '👖',
+}
+
+/** Empty-slot placeholders that use a real RPG icon from the 'armor_icons'
+ *  spritesheet (32×32, 18 cols → frame = row*18 + col) instead of an emoji.
+ *  helm=(4,2) chest=(2,1) legs=(3,1) boots=(3,3). */
+const SLOT_ICON_FRAME: Partial<Record<SlotKey, number>> = {
+  helm: 40, chest: 20, legs: 21, shoes: 57,
 }
 
 // Layout
@@ -466,11 +480,20 @@ export class EquipmentScene extends Phaser.Scene {
     this.drawSlotGfx(gfx, item, false)
     container.add(gfx)
 
-    // Item icon (emoji from the server item, dim placeholder when empty)
-    const icon = this.add.text(0, -8, item ? item.icon : SLOT_PLACEHOLDER[slotKey], {
-      fontSize: '26px',
-    }).setOrigin(0.5, 0.5).setAlpha(item ? 1 : 0.25)
-    container.add(icon)
+    // Item icon: the server item's emoji when equipped; otherwise a dim
+    // placeholder — a real RPG icon sprite for the slots in SLOT_ICON_FRAME
+    // (helm/chest/legs/boots), else an emoji.
+    const frame = SLOT_ICON_FRAME[slotKey]
+    if (!item && frame !== undefined) {
+      container.add(
+        this.add.image(0, -6, 'armor_icons', frame).setScale(1.5).setAlpha(0.55).setOrigin(0.5, 0.5)
+      )
+    } else {
+      const icon = this.add.text(0, -8, item ? item.icon : SLOT_PLACEHOLDER[slotKey], {
+        fontSize: '26px',
+      }).setOrigin(0.5, 0.5).setAlpha(item ? 1 : 0.25)
+      container.add(icon)
+    }
 
     // Label
     const labelStr = item ? this.truncate(item.name, 9) : SLOT_LABELS[slotKey]
@@ -540,26 +563,14 @@ export class EquipmentScene extends Phaser.Scene {
     lineGfx.setDepth(-1)
     this.connectorGfx = lineGfx
 
-    // Body attachment points (where the line "leaves" the doll silhouette)
-    const bodyPoints: Record<SlotKey, { x: number; y: number }> = {
-      helm:     { x: DOLL_CX,      y: DOLL_CY - 110 },
-      earring:  { x: DOLL_CX + 22, y: DOLL_CY - 65  },
-      necklace: { x: DOLL_CX,      y: DOLL_CY - 65  },
-      legs:     { x: DOLL_CX - 22, y: DOLL_CY - 30  },
-      chest:    { x: DOLL_CX + 22, y: DOLL_CY - 30  },
-      gloves:   { x: DOLL_CX - 32, y: DOLL_CY + 10  },
-      mainHand: { x: DOLL_CX - 32, y: DOLL_CY + 50  },
-      offHand:  { x: DOLL_CX + 32, y: DOLL_CY + 50  },
-      belt:     { x: DOLL_CX,      y: DOLL_CY + 55  },
-      ring1:    { x: DOLL_CX - 32, y: DOLL_CY + 86  },
-      ring2:    { x: DOLL_CX + 32, y: DOLL_CY + 86  },
-      shoes:    { x: DOLL_CX,      y: DOLL_CY + 155 },
-    }
-
+    // A tidy horizontal tick from each slot's inner edge to the doll silhouette.
+    const half = SLOT_SIZE / 2
     for (const slotKey of Object.keys(SLOT_POSITIONS) as SlotKey[]) {
       const slot = SLOT_POSITIONS[slotKey]
-      const body = bodyPoints[slotKey]
-      lineGfx.lineBetween(body.x, body.y, slot.x, slot.y)
+      const onLeft = slot.x < DOLL_CX
+      const innerX = slot.x + (onLeft ? half : -half)
+      const dollX  = DOLL_CX + (onLeft ? -46 : 46)
+      lineGfx.lineBetween(innerX, slot.y, dollX, slot.y)
     }
   }
 

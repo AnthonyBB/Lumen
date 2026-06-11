@@ -19,6 +19,7 @@ export class Building extends Phaser.GameObjects.Container {
       'Combat Training': 'building_combat',
       'Market':          'building_market',
       'Combat Strategy': 'building_strategy',
+      'Tavern':          'building_tavern',
     }
     const textureKey = textureMap[label] ?? 'building_learning'
 

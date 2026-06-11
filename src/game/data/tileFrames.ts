@@ -107,6 +107,22 @@ export const CP_PATH = {
   INW: cp(13, 9), INE: cp(11, 9), ISW: cp(13, 7), ISE: cp(11, 7),
 } as const
 
+// ── CraftPix road pack: autotile mapping (sheets 'road_body' + 'road_fringe') ─
+// Both sheets are 15 cols × 26 rows of 16px (frame = row * 15 + col). The body
+// sheet ('_ground') is the opaque cobble road; the fringe sheet ('_grass') is
+// the grass overhang stamped on top at the same frame. Keys name the side(s)
+// where GRASS borders the road cell. Coordinates were derived from the pack's
+// Roads.tmx demo and verified against a rendered autotile simulation.
+export const ROAD_COLS = 15
+const rd = (col: number, row: number) => row * ROAD_COLS + col
+export const ROAD = {
+  C:  [rd(9, 11), rd(10, 11), rd(11, 11)],  // full-road centre (3 variants)
+  N:  rd(1, 11),   S:  rd(7, 25),
+  E:  rd(8, 24),   W:  rd(0, 15),
+  NW: rd(5, 16),   NE: rd(8, 23),
+  SW: rd(0, 25),   SE: rd(8, 25),
+} as const
+
 // ── CraftPix grassland: Details.png decal sheet ─────────────────────────────
 // 192×224, 16px tiles, 12 cols × 14 rows. Small alpha decals stamped over the
 // flat grass fill — this is how the pack's own demo map gets its texture.

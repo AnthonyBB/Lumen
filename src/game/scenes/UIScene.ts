@@ -46,6 +46,19 @@ export class UIScene extends Phaser.Scene {
       color: '#ffd700',
     }).setOrigin(0.5, 0.5)
 
+    // [I] Equipment shortcut badge (directly below the Character badge)
+    const eqBadgeBg = this.add.graphics()
+    eqBadgeBg.fillStyle(0x000000, 0.55)
+    eqBadgeBg.fillRoundedRect(6, 92, 140, 22, 5)
+    eqBadgeBg.lineStyle(1, 0xffd700, 0.5)
+    eqBadgeBg.strokeRoundedRect(6, 92, 140, 22, 5)
+
+    this.add.text(76, 103, '[I] Equipment', {
+      fontSize: '12px',
+      fontFamily: 'Arial, sans-serif',
+      color: '#ffd700',
+    }).setOrigin(0.5, 0.5)
+
     // Panel background behind avatar area
     const panelBg = this.add.graphics()
     panelBg.fillStyle(0x000000, 0.5)
@@ -93,58 +106,42 @@ export class UIScene extends Phaser.Scene {
       padding: { x: 10, y: 4 },
     }).setOrigin(0.5, 1)
 
-    // Bottom-right: Equipment + Chest shortcut hints
-    const eqBg = this.add.graphics()
-    eqBg.fillStyle(0x000000, 0.5)
-    eqBg.fillRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 80, 148, 72, 8)
-    eqBg.lineStyle(1, 0xffd700, 0.4)
-    eqBg.strokeRoundedRect(GAME_WIDTH - 154, GAME_HEIGHT - 80, 148, 72, 8)
-
-    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 74, '[I]  Equipment', {
-      fontSize: '11px', fontFamily: 'Arial', color: '#ffd700', fontStyle: 'bold',
-    }).setOrigin(0.5, 0)
-
-    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 56, 'Open gear screen', {
-      fontSize: '10px', fontFamily: 'Arial', color: '#888888',
-    }).setOrigin(0.5, 0)
-
-    // Divider line
-    const eqDiv = this.add.graphics()
-    eqDiv.lineStyle(1, 0x333355, 0.7)
-    eqDiv.lineBetween(GAME_WIDTH - 148, GAME_HEIGHT - 42, GAME_WIDTH - 12, GAME_HEIGHT - 42)
-
-    this.add.text(GAME_WIDTH - 80, GAME_HEIGHT - 40, '[E near chest]  Storage', {
-      fontSize: '10px', fontFamily: 'Arial', color: '#aaddff',
-    }).setOrigin(0.5, 0)
-
     // ── Currency bar (bottom-left) ────────────────────────────────────────────
     const invBg = this.add.graphics()
     invBg.fillStyle(0x000000, 0.5)
-    invBg.fillRoundedRect(6, GAME_HEIGHT - 74, 184, 64, 8)
+    invBg.fillRoundedRect(6, GAME_HEIGHT - 56, 372, 46, 8)
     invBg.lineStyle(1, 0xffd700, 0.5)
-    invBg.strokeRoundedRect(6, GAME_HEIGHT - 74, 184, 64, 8)
+    invBg.strokeRoundedRect(6, GAME_HEIGHT - 56, 372, 46, 8)
 
-    this.add.text(14, GAME_HEIGHT - 68, 'Currency', {
+    this.add.text(14, GAME_HEIGHT - 52, 'Currency', {
       fontSize: '11px', fontFamily: 'Arial', color: '#88eeff', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
-    // Shard counters — server-authoritative tracked currency (NOT inventory
-    // items). Updated only by the server's `currency:update` push.
-    const skillShardCount = this.add.text(12, GAME_HEIGHT - 50, '🔷 Skill x0', {
+    // Shard / silver counters — server-authoritative tracked currency (NOT
+    // inventory items). Updated only by the server's `currency:update` push.
+    // All three on one row: Silver first, then Skill and Combat shards.
+    // Silver is shown with a drawn round coin (the 🪙 glyph is missing in the
+    // game font and rendered as an empty box).
+    const coin = this.add.graphics()
+    const coinX = 21, coinY = GAME_HEIGHT - 25
+    coin.fillStyle(0x9a9aa6, 1); coin.fillCircle(coinX, coinY, 7)          // rim
+    coin.fillStyle(0xd9d9e2, 1); coin.fillCircle(coinX, coinY, 5.5)        // face
+    coin.fillStyle(0xf2f2f7, 1); coin.fillCircle(coinX - 1.5, coinY - 1.5, 2) // highlight
+    const silverCount = this.add.text(33, GAME_HEIGHT - 32, 'Silver 0', {
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#e8e8e8', fontStyle: 'bold',
+    }).setOrigin(0, 0)
+    const skillShardCount = this.add.text(140, GAME_HEIGHT - 32, '🔷 Skill x0', {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
     }).setOrigin(0, 0)
-    const combatShardCount = this.add.text(98, GAME_HEIGHT - 50, '🔶 Combat x0', {
+    const combatShardCount = this.add.text(252, GAME_HEIGHT - 32, '🔶 Combat x0', {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
-    }).setOrigin(0, 0)
-    const silverCount = this.add.text(12, GAME_HEIGHT - 30, '🪙 Silver 0', {
-      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#e8e8e8', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
     const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
     const onCurrency = (data: { skillShards?: number; combatShards?: number; silver?: number }) => {
       skillShardCount.setText(`🔷 Skill x${data?.skillShards ?? 0}`)
       combatShardCount.setText(`🔶 Combat x${data?.combatShards ?? 0}`)
-      silverCount.setText(`🪙 Silver ${data?.silver ?? 0}`)
+      silverCount.setText(`Silver ${data?.silver ?? 0}`)
     }
     socket?.on('currency:update', onCurrency)
     socket?.emit('currency:get')   // request the initial balances

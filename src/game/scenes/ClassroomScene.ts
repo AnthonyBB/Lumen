@@ -92,6 +92,9 @@ function passesDots(passes: number): string {
 }
 
 export class ClassroomScene extends Phaser.Scene {
+  // Where to drop the player back in town (the building door); set via init().
+  private returnX?: number
+  private returnY?: number
   private player!: Phaser.Physics.Arcade.Sprite
   private seatedGfx!: Phaser.GameObjects.Graphics
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
@@ -134,6 +137,11 @@ export class ClassroomScene extends Phaser.Scene {
   private onUnlocks: ((res: UnlocksPayload) => void) | null = null
 
   constructor() { super({ key: 'ClassroomScene' }) }
+
+  init(data?: { returnX?: number; returnY?: number }) {
+    this.returnX = data?.returnX
+    this.returnY = data?.returnY
+  }
 
   create() {
     this.state = 'exploring'
@@ -303,6 +311,7 @@ export class ClassroomScene extends Phaser.Scene {
   // ─── DESKS & STUDENTS ──────────────────────────────────────────────────────
 
   private createDesks() {
+    let studentIdx = 0
     for (const d of DESK_DEFS) {
       const g = this.add.graphics().setDepth(4)
       // Shadow
@@ -328,20 +337,21 @@ export class ClassroomScene extends Phaser.Scene {
       paper.lineStyle(1, 0xaaaaaa, 0.4)
       for (let l = 0; l < 3; l++) paper.lineBetween(d.x - 16, d.y + 3 + l * 4, d.x + 2, d.y + 3 + l * 4)
 
-      // Seated student
+      // Seated student — a real CraftPix citizen sprite, drawn BEHIND the desk
+      // (lower depth) so the desk front overlaps their lap and only the upper
+      // body shows above the desktop, reading as "seated".
       if (d.occupied) {
-        const s = this.add.graphics().setDepth(6)
-        s.fillStyle(d.color, 1)
-        s.fillRect(d.x - 12, d.y - 22, 24, 20)
-        s.fillStyle(0xffe0b2, 1)
-        s.fillCircle(d.x, d.y - 28, 10)
-        s.fillStyle(0x222222, 1)
-        s.fillCircle(d.x - 4, d.y - 29, 2)
-        s.fillCircle(d.x + 4, d.y - 29, 2)
-        // Hair
-        const dark = (d.color & 0xff) + ((d.color >> 8) & 0xff) + ((d.color >> 16) & 0xff) < 384
-        s.fillStyle(dark ? 0xddbb88 : 0x221100, 1)
-        s.fillEllipse(d.x, d.y - 37, 22, 12)
+        const sheet = `npc_citizen${(studentIdx % 5) + 1}`
+        studentIdx++
+        const student = this.add.sprite(d.x, d.y + 16, sheet, 0)
+          .setOrigin(0.5, 1).setScale(1.6).setDepth(3.6)
+        const idleKey = `${sheet}_idle`
+        if (this.anims.exists(idleKey)) {
+          student.play(idleKey)
+          // Desync so the class doesn't fidget in unison.
+          student.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
+          student.anims.timeScale = Phaser.Math.FloatBetween(0.8, 1.2)
+        }
       }
     }
   }
@@ -350,52 +360,6 @@ export class ClassroomScene extends Phaser.Scene {
 
   private createTeacher() {
     const tx = 640, ty = 248
-    const g = this.add.graphics().setDepth(7)
-
-    // Shadow
-    g.fillStyle(0x000000, 0.18)
-    g.fillEllipse(tx + 3, ty + 38, 46, 10)
-    // Robe
-    g.fillStyle(0x6a1818, 1)
-    g.fillRect(tx - 14, ty - 10, 28, 40)
-    g.fillTriangle(tx - 14, ty + 30, tx - 22, ty + 48, tx, ty + 30)
-    g.fillTriangle(tx + 14, ty + 30, tx + 22, ty + 48, tx, ty + 30)
-    g.fillStyle(0x8a3030, 0.5)
-    g.fillRect(tx - 4, ty - 10, 6, 38)
-    // Collar
-    g.fillStyle(0x221808, 1)
-    g.fillRect(tx - 16, ty - 12, 32, 12)
-    // Head
-    g.fillStyle(0xffe0b2, 1)
-    g.fillCircle(tx, ty - 22, 13)
-    // Glasses
-    g.lineStyle(1, 0x555555, 1)
-    g.strokeCircle(tx - 5, ty - 24, 4)
-    g.strokeCircle(tx + 5, ty - 24, 4)
-    g.lineBetween(tx - 1, ty - 24, tx + 1, ty - 24)
-    g.fillStyle(0x222222, 1)
-    g.fillCircle(tx - 5, ty - 24, 2)
-    g.fillCircle(tx + 5, ty - 24, 2)
-    // White hair
-    g.fillStyle(0xe8e8e8, 1)
-    g.fillEllipse(tx, ty - 34, 28, 14)
-    g.fillStyle(0xdddddd, 0.7)
-    g.fillEllipse(tx - 6, ty - 33, 14, 8)
-    // Graduation cap
-    g.fillStyle(0x111111, 1)
-    g.fillRect(tx - 16, ty - 42, 32, 6)
-    g.fillRect(tx - 10, ty - 48, 20, 6)
-    g.lineStyle(2, 0xffd700, 1)
-    g.lineBetween(tx + 10, ty - 45, tx + 18, ty - 34)
-    g.fillStyle(0xffd700, 1)
-    g.fillRect(tx + 16, ty - 35, 6, 6)
-    // Book in hand
-    g.fillStyle(0x2244aa, 1)
-    g.fillRect(tx + 14, ty - 8, 16, 22)
-    g.fillStyle(0xf5f0e0, 0.9)
-    g.fillRect(tx + 16, ty - 6, 12, 18)
-    g.lineStyle(1, 0xaaaaaa, 0.5)
-    for (let l = 0; l < 3; l++) g.lineBetween(tx + 18, ty - 2 + l * 5, tx + 26, ty - 2 + l * 5)
 
     // Teacher desk
     const td = this.add.graphics().setDepth(5)
@@ -414,6 +378,28 @@ export class ClassroomScene extends Phaser.Scene {
     td.fillRect(tx + 42, ty + 44, 26, 12)
     td.fillStyle(0xffd700, 0.9)
     td.fillRect(tx - 8, ty + 44, 8, 14)
+
+    // Professor — a white-haired CraftPix citizen standing behind the lectern
+    // (lower depth, so the desk overlaps the legs). A small drawn mortarboard +
+    // tassel sits on the head to keep Prof. Lumina's scholarly look.
+    const prof = this.add.sprite(tx, ty + 70, 'npc_citizen1', 0)
+      .setOrigin(0.5, 1).setScale(2.0).setDepth(4)
+    if (this.anims.exists('npc_citizen1_idle')) {
+      prof.play('npc_citizen1_idle')
+      prof.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
+    }
+    // Mortarboard cap, centred over the sprite's head (head top ≈ ty + 6).
+    const cap = this.add.graphics().setDepth(6)
+    const capY = ty + 4
+    cap.fillStyle(0x141414, 1)
+    cap.fillRect(tx - 18, capY, 36, 6)            // board
+    cap.fillRect(tx - 9, capY - 6, 18, 7)         // crown
+    cap.fillStyle(0xffd700, 1)
+    cap.fillCircle(tx, capY + 1, 2.5)             // button
+    cap.lineStyle(2, 0xffd700, 1)
+    cap.lineBetween(tx + 14, capY + 2, tx + 22, capY + 14)  // tassel cord
+    cap.fillStyle(0xffd700, 1)
+    cap.fillRect(tx + 19, capY + 13, 6, 7)        // tassel
 
     // Name label
     const nb = this.add.graphics().setDepth(8)
@@ -1017,7 +1003,8 @@ export class ClassroomScene extends Phaser.Scene {
   }
 
   private returnToWorld() {
-    this.scene.start('WorldScene')
+    this.scene.start('WorldScene',
+      this.returnX !== undefined ? { spawnX: this.returnX, spawnY: this.returnY } : undefined)
   }
 
   // ─── UPDATE ────────────────────────────────────────────────────────────────

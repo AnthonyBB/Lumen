@@ -28,7 +28,7 @@ import {
   TD_MONSTERS,
   CPD_BLADES, CPD_SPECKS, CPD_TUFTS, CPD_MOUNDS,
 } from '../data/tileFrames'
-import { MOBS_BY_BIOME, TIER_LEVEL_BANDS, spawnMob } from '../data/mobs'
+import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
 
 // ── World dimensions ────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ const WORLD_H = 2160   // 3 × GAME_HEIGHT
 
 interface BiomeSceneData {
   biome: string
-  difficulty: 'easy' | 'medium' | 'hard'
+  difficulty: Difficulty
   location: string
   returnX?: number
   returnY?: number
@@ -61,10 +61,6 @@ interface PathNode {
 type PathState = 'idle' | 'walking' | 'encounter_pause' | 'complete'
 
 // ── Biome constants ─────────────────────────────────────────────────────────
-
-const MOB_COUNTS: Record<string, [number, number]> = {
-  easy: [4, 5], medium: [5, 7], hard: [7, 10],
-}
 
 const WALK_SPEED = 180  // world-px per second
 
@@ -91,6 +87,7 @@ export class BiomeScene extends Phaser.Scene {
   private playerMaxHp = 100
   private encountersCleared = 0
   private totalXpGained = 0
+  private maxEnemyLevel = 1   // highest enemy level faced — scales the campaign reward
   private rng!: Phaser.Math.RandomDataGenerator
 
   private playerSprite!: Phaser.GameObjects.Sprite
@@ -164,13 +161,14 @@ export class BiomeScene extends Phaser.Scene {
 
   private buildPath() {
     const { difficulty, biome } = this.biomeData
-    const [minMobs, maxMobs] = MOB_COUNTS[difficulty]
-    const [bandMin, bandMax] = TIER_LEVEL_BANDS[difficulty]
+    const cfg = DIFFICULTIES[difficulty]
+    const [minMobs, maxMobs] = cfg.count
+    const [bandMin, bandMax] = cfg.band
 
-    // Bestiary pool for this biome + difficulty.  Falls back to ANY archetype
-    // of this tier if a biome has no themed entries (shouldn't happen — every
-    // biome ships with 5+).
-    const pool = MOBS_BY_BIOME[biome]?.[difficulty] ?? []
+    // Bestiary pool for this biome + difficulty mode.  Each mode maps to an
+    // archetype POOL tier (beginner/easy → easy pool, medium → medium, hard/
+    // expert → hard). Falls back to empty if a biome lacks that pool.
+    const pool = MOBS_BY_BIOME[biome]?.[cfg.pool] ?? []
     const totalEncounters = WP_DEFS.filter(wp => wp.type === 'encounter').length
     let encounterNo = 0
 
@@ -195,7 +193,10 @@ export class BiomeScene extends Phaser.Scene {
         const sliceLo = bandMin + Math.floor(span * (encIdx / totalEncounters))
         const sliceHi = bandMin + Math.floor(span * ((encIdx + 1) / totalEncounters))
 
-        const count = this.rng.integerInRange(minMobs, maxMobs)
+        // Ramp the mob COUNT smoothly from the band minimum (first encounter)
+        // up to the maximum (last) so every mode opens gently and builds up.
+        const t = totalEncounters <= 1 ? 1 : encIdx / (totalEncounters - 1)
+        const count = Math.max(1, Math.round(Phaser.Math.Linear(minMobs, maxMobs, t)))
         node.mobs = Array.from({ length: count }, () => {
           const level = this.rng.integerInRange(sliceLo, sliceHi)
           if (arch) {
@@ -211,7 +212,7 @@ export class BiomeScene extends Phaser.Scene {
             name: 'Enemy', level, maxHp: 20 + level * 6,
             attack: 4 + Math.round(level * 1.2), defense: level,
             speed: 10 + Math.round(level * 0.5),
-            frame: TD_MONSTERS[difficulty][encIdx % TD_MONSTERS[difficulty].length],
+            frame: TD_MONSTERS[cfg.pool][encIdx % TD_MONSTERS[cfg.pool].length],
           }
         })
       }
@@ -271,7 +272,7 @@ export class BiomeScene extends Phaser.Scene {
 
       // Tiny Dungeon monster sprite matching the encounter's creatures,
       // tinted per archetype, with a subtle idle bob.
-      const frame = node.mobs?.[0]?.frame ?? TD_MONSTERS[this.biomeData.difficulty][0]
+      const frame = node.mobs?.[0]?.frame ?? TD_MONSTERS[DIFFICULTIES[this.biomeData.difficulty].pool][0]
       const tint  = node.mobs?.[0]?.tint ?? 0xffffff
       node.markerSprite = this.add.sprite(node.x, node.y, 'tiny_dungeon', frame)
         .setScale(3).setDepth(7)
@@ -393,6 +394,8 @@ export class BiomeScene extends Phaser.Scene {
       playerHp:        this.playerHp,
       playerMaxHp:     this.playerMaxHp,
     }
+    for (const m of node.mobs ?? []) this.maxEnemyLevel = Math.max(this.maxEnemyLevel, m.level)
+
     this.scene.launch('BattleScene', data)
     this.scene.pause()
   }
@@ -418,9 +421,9 @@ export class BiomeScene extends Phaser.Scene {
 
   private createHUD() {
     const { biome, location, difficulty } = this.biomeData
-    const diffColors: Record<string, string> = {
-      easy: '#44cc44', medium: '#ffcc00', hard: '#ff4444',
-    }
+    const diffColors: Record<string, string> = Object.fromEntries(
+      Object.values(DIFFICULTIES).map(d => [d.key, d.color]),
+    )
 
     const hudBg = this.add.graphics().setScrollFactor(0).setDepth(100)
     hudBg.fillStyle(0x000000, 0.72).fillRect(0, GAME_HEIGHT - 44, GAME_WIDTH, 44)
@@ -471,10 +474,24 @@ export class BiomeScene extends Phaser.Scene {
   // ── End screens ─────────────────────────────────────────────────────────────
 
   private showVictoryScreen() {
-    if (this.totalXpGained > 0) {
-      const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-      socket?.emit('player:award_xp', { xp: Math.min(this.totalXpGained, 500) })
-    }
+    // Whole biome cleared — report the campaign completion so the server grants
+    // a sizeable, difficulty/level-scaled reward of items (added to the bag).
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    socket?.emit('player:award_xp', {
+      xp: Math.min(this.totalXpGained, 500),
+      difficulty: this.biomeData.difficulty,
+      level: this.maxEnemyLevel,
+      campaignComplete: true,
+    })
+    socket?.once('combat:loot', (data: { items?: { name: string; icon: string; rarity: string }[] }) => {
+      const items = data?.items ?? []
+      if (!items.length || !this.scene.isActive()) return
+      const txt = items.map(it => `${it.icon} ${it.name}`).join('   ')
+      this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 60, `💎  Reward: ${txt}`, {
+        fontSize: '14px', fontFamily: 'Georgia, serif', color: '#9be7ff', fontStyle: 'bold',
+        align: 'center', wordWrap: { width: 520 },
+      }).setOrigin(0.5, 0).setDepth(201).setScrollFactor(0)
+    })
     this.cameras.main.flash(700, 255, 215, 0)
 
     const W = 560, H = 280, cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2

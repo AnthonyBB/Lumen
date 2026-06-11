@@ -1,15 +1,22 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
-import { TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import { WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
 import { Building } from '../objects/Building'
-import { CP_GRASS, CP_GRASS2, CP_DIRT, CPD_BLADES, CPD_SPECKS, CPD_PEBBLES } from '../data/tileFrames'
+import { TownNpc } from '../objects/TownNpc'
+import { NpcDialog } from '../objects/NpcDialog'
+import { TOWN_NPCS } from '../data/townNpcs'
+import { DIFFICULTIES, DIFFICULTY_ORDER, type Difficulty } from '../data/mobs'
+import { AnimalManager } from '../systems/AnimalManager'
+import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD } from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
   label: string
   x: number
   y: number
+  doorX: number   // spot just in front of the entrance to return the player to
+  doorY: number
 }
 
 interface BiomeGate {
@@ -30,15 +37,18 @@ const BIOME_COLORS: Record<string, number> = {
   'Ocean':               0x1a6eb5,
 }
 
-const BIOME_LOCATIONS: Record<string, [string, string, string]> = {
-  'Desert':              ['Sandy Flats',    'Scorching Dunes', 'Cursed Sands'],
-  'Pine Forest':         ['Mossy Clearing', 'Dense Pines',     'Ancient Grove'],
-  'Deciduous Forest':    ['Sunlit Path',    'Tangled Wood',    'Gnarled Hollow'],
-  'Swamp':               ['Murky Shallows', 'Boggy Depths',    'The Fetid Mire'],
-  'Snow':                ['Frost Meadow',   'Frozen Pass',     'Glacial Abyss'],
-  'Grassland':           ['Open Plains',    'Rolling Hills',   'Windswept Peaks'],
-  'Tropical Rainforest': ['Forest Edge',    'Jungle Thicket',  'Heart of Darkness'],
-  'Ocean':               ['Tidal Pools',    'Open Waters',     'The Deep Abyss'],
+// Five location names per campaign, ordered easiest → hardest to match
+// DIFFICULTY_ORDER (Beginner, Easy, Medium, Hard, Expert).
+type FiveLocations = [string, string, string, string, string]
+const BIOME_LOCATIONS: Record<string, FiveLocations> = {
+  'Desert':              ['Oasis Edge',      'Sandy Flats',    'Scorching Dunes', 'Cursed Sands',     "Pharaoh's Tomb"],
+  'Pine Forest':         ['Forest Trailhead','Mossy Clearing', 'Dense Pines',     'Ancient Grove',    'Heartwood Throne'],
+  'Deciduous Forest':    ['Meadow Verge',    'Sunlit Path',    'Tangled Wood',    'Gnarled Hollow',   'Eldertree Heart'],
+  'Swamp':               ['Reedy Banks',     'Murky Shallows', 'Boggy Depths',    'The Fetid Mire',   'Drowned Sepulcher'],
+  'Snow':                ['Snowy Foothills', 'Frost Meadow',   'Frozen Pass',     'Glacial Abyss',    'Frostforged Summit'],
+  'Grassland':           ['Gentle Pasture',  'Open Plains',    'Rolling Hills',   'Windswept Peaks',  'Stormcrest Summit'],
+  'Tropical Rainforest': ['Canopy Fringe',   'Forest Edge',    'Jungle Thicket',  'Heart of Darkness','Primeval Depths'],
+  'Ocean':               ['Shallow Cove',    'Tidal Pools',    'Open Waters',     'The Deep Abyss',   'The Abyssal Trench'],
 }
 
 export class WorldScene extends Phaser.Scene {
@@ -62,17 +72,28 @@ export class WorldScene extends Phaser.Scene {
   private nearChest = false
 
   // Biome gates
+  // Scattered around the town (center ~1280,1280): one gate per angular sector
+  // but with irregular angles and radii so they don't sit on a perfect 45° grid.
   private biomeGates: BiomeGate[] = [
-    { name: 'Desert',              x: 320,  y: 1280, color: BIOME_COLORS['Desert'] },
-    { name: 'Ocean',               x: 2240, y: 1280, color: BIOME_COLORS['Ocean'] },
-    { name: 'Snow',                x: 1280, y: 320,  color: BIOME_COLORS['Snow'] },
-    { name: 'Swamp',               x: 1280, y: 2240, color: BIOME_COLORS['Swamp'] },
-    { name: 'Pine Forest',         x: 640,  y: 640,  color: BIOME_COLORS['Pine Forest'] },
-    { name: 'Deciduous Forest',    x: 1920, y: 640,  color: BIOME_COLORS['Deciduous Forest'] },
-    { name: 'Grassland',           x: 640,  y: 1920, color: BIOME_COLORS['Grassland'] },
-    { name: 'Tropical Rainforest', x: 1920, y: 1920, color: BIOME_COLORS['Tropical Rainforest'] },
+    { name: 'Ocean',               x: 2180, y: 1080, color: BIOME_COLORS['Ocean'] },
+    { name: 'Tropical Rainforest', x: 2010, y: 1880, color: BIOME_COLORS['Tropical Rainforest'] },
+    { name: 'Swamp',               x: 1480, y: 2270, color: BIOME_COLORS['Swamp'] },
+    { name: 'Grassland',           x: 760,  y: 2020, color: BIOME_COLORS['Grassland'] },
+    { name: 'Desert',              x: 430,  y: 1520, color: BIOME_COLORS['Desert'] },
+    { name: 'Pine Forest',         x: 560,  y: 760,  color: BIOME_COLORS['Pine Forest'] },
+    { name: 'Snow',                x: 1100, y: 290,  color: BIOME_COLORS['Snow'] },
+    { name: 'Deciduous Forest',    x: 2080, y: 540,  color: BIOME_COLORS['Deciduous Forest'] },
   ]
   private nearBiomeGate: BiomeGate | null = null
+
+  // Townsfolk you can talk to for guidance.
+  private npcs: TownNpc[] = []
+  private npcDialog!: NpcDialog
+  private nearNpc: TownNpc | null = null
+
+  // Per-gate dark "doorway opening" overlay that grows from the centre out when
+  // the player is in range, making the gate look like it opens.
+  private gateGlows = new Map<string, { glow: Phaser.GameObjects.Graphics; open: boolean }>()
 
   // Spawn position — set via init() when returning from a biome, otherwise world centre
   private spawnX = WORLD_WIDTH / 2
@@ -150,36 +171,27 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // ── Road network (CraftPix road pack, autotiled) ─────────────────────────
+    // Two main roads cross at the town square; an axis-aligned L-route then
+    // connects the square to every biome gate. Each cell is stamped twice: the
+    // opaque cobble body, then the grass-overhang fringe on top.
+    const roadMask = this.buildPathMask()
+    {
+      const roadRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
+      roadRT.setDepth(1)
+      this.renderRoads(roadRT, roadMask)
+    }
+
     // ── Flower/tuft props (complete standalone sprites, never clipped) ────────
     {
       const rand = this.rng(7)
-      const cX = WORLD_WIDTH / 2
-      const cY = WORLD_HEIGHT / 2
-      // Keep props off the trail corridors: the two main roads run along the
-      // world center lines (wander ≤ ±2 tiles + half ribbon ≈ 112px) and the
-      // four diagonal branches connect fixed points (see diagonalBranches).
-      const diags: [number, number, number, number][] = [
-        [960, 960, 640, 640], [1600, 960, 1920, 640],
-        [960, 1600, 640, 1920], [1600, 1600, 1920, 1920],
-      ]
-      const nearTrail = (x: number, y: number): boolean => {
-        if (Math.abs(y - cY) < 140 || Math.abs(x - cX) < 140) return true
-        for (const [x1, y1, x2, y2] of diags) {
-          const dx = x2 - x1
-          const dy = y2 - y1
-          const t = Phaser.Math.Clamp(((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy), 0, 1)
-          if (Math.hypot(x - (x1 + dx * t), y - (y1 + dy * t)) < 140) return true
-        }
-        return false
-      }
-
       let placed = 0
       let attempts = 0
       while (placed < 70 && attempts < 700) {
         attempts++
         const x = 60 + rand() * (WORLD_WIDTH - 120)
         const y = 60 + rand() * (WORLD_HEIGHT - 120)
-        if (nearTrail(x, y)) continue
+        if (this.maskHasNearby(roadMask, x, y, 1)) continue   // keep off the roads
         if (rand() < 0.6) {
           this.add.image(x, y, `cp_flower${1 + Math.floor(rand() * 6)}`).setScale(3).setDepth(1)
         } else {
@@ -187,82 +199,6 @@ export class WorldScene extends Phaser.Scene {
         }
         placed++
       }
-    }
-
-    // ── Trails (blob-brush ribbons) ───────────────────────────────────────────
-    // The atlas ships a rounded 3×3 dirt blob (48px, fringed rim, transparent
-    // outside). Stamping it densely along a smoothly-interpolated centerline
-    // merges the blobs into one organic ribbon — later interiors overdraw
-    // earlier rims, so fringe survives only on the OUTSIDE edge. This is how
-    // the pack's demo map gets its winding trails; per-cell autotiling of the
-    // same set leaves notches at staircase steps.
-    const groundTex = this.textures.get('cp_ground')
-    if (!groundTex.has('trail_blob')) {
-      groundTex.add('trail_blob', 0, 8 * 16, 7 * 16, 48, 48)  // atlas cols 8-10, rows 7-9
-    }
-    const trailRT = this.add.renderTexture(0, 0, WORLD_WIDTH, WORLD_HEIGHT).setOrigin(0)
-    trailRT.setDepth(1)
-
-    const centerY = WORLD_HEIGHT / 2
-    const centerX = WORLD_WIDTH / 2
-
-    // Horizontal winding trail (Desert ↔ Ocean)
-    {
-      const rand = this.rng(42)
-      // Gentle wander (±2 tiles over long 16-cell segments) — higher
-      // amplitudes read as wobbly "intestines" rather than a country road
-      const offsets = this.buildWindingOffsets(WORLD_WIDTH / TILE_SIZE + 1, 2, 16, rand)
-      for (let i = 36; i <= 44; i++) offsets[i] = 0   // straight through town
-      this.stampTrail(trailRT, (t) => {
-        const px = t * WORLD_WIDTH
-        const i = Math.min(offsets.length - 2, Math.floor(px / TILE_SIZE))
-        const frac = px / TILE_SIZE - i
-        const yOff = offsets[i] + (offsets[i + 1] - offsets[i]) * frac
-        return { x: px, y: centerY + yOff * TILE_SIZE + TILE_SIZE / 2 }
-      })
-    }
-
-    // Vertical winding trail (Snow ↔ Swamp)
-    {
-      const rand = this.rng(137)
-      const offsets = this.buildWindingOffsets(WORLD_HEIGHT / TILE_SIZE + 1, 2, 16, rand)
-      for (let i = 36; i <= 44; i++) offsets[i] = 0
-      this.stampTrail(trailRT, (t) => {
-        const py = t * WORLD_HEIGHT
-        const i = Math.min(offsets.length - 2, Math.floor(py / TILE_SIZE))
-        const frac = py / TILE_SIZE - i
-        const xOff = offsets[i] + (offsets[i + 1] - offsets[i]) * frac
-        return { x: centerX + xOff * TILE_SIZE + TILE_SIZE / 2, y: py }
-      })
-    }
-
-    // Diagonal branch trails to the corner biomes (with perpendicular wander)
-    const diagonalBranches = [
-      // NW: from (960,960) to (640,640) — Pine Forest
-      { fromX: 960, fromY: 960, toX: 640, toY: 640 },
-      // NE: from (1600,960) to (1920,640) — Deciduous Forest
-      { fromX: 1600, fromY: 960, toX: 1920, toY: 640 },
-      // SW: from (960,1600) to (640,1920) — Grassland
-      { fromX: 960, fromY: 1600, toX: 640, toY: 1920 },
-      // SE: from (1600,1600) to (1920,1920) — Tropical Rainforest
-      { fromX: 1600, fromY: 1600, toX: 1920, toY: 1920 },
-    ]
-    for (const b of diagonalBranches) {
-      const rand = this.rng(b.fromX ^ (b.fromY << 8))
-      const steps = Math.abs(b.toX - b.fromX) / TILE_SIZE
-      const offsets = this.buildWindingOffsets(steps + 1, 1, 12, rand)
-      const perpX = -Math.sign(b.toY - b.fromY)
-      const perpY = Math.sign(b.toX - b.fromX)
-      this.stampTrail(trailRT, (t) => {
-        const s = t * steps
-        const i = Math.min(offsets.length - 2, Math.floor(s))
-        const frac = s - i
-        const wander = (offsets[i] + (offsets[i + 1] - offsets[i]) * frac) * TILE_SIZE
-        return {
-          x: b.fromX + (b.toX - b.fromX) * t + perpX * wander,
-          y: b.fromY + (b.toY - b.fromY) * t + perpY * wander,
-        }
-      })
     }
 
     // ── Trees (CraftPix grassland + forest — full sprites, shadows baked in) ──
@@ -284,37 +220,59 @@ export class WorldScene extends Phaser.Scene {
     this.add.image(1640, 1840, 'cp_stone2').setDepth(2)
 
     // ── Buildings ────────────────────────────────────────────────────────────
+    // Spread around a central plaza (the well, ~1280,1280) at varied distances
+    // and angles — deliberately NOT a tidy grid — so the town reads as an
+    // organic village rather than a square. Each building's frontage is dressed
+    // by decorateBuilding() so the props follow wherever a building sits.
     const buildingDefs = [
-      { label: 'Learning Center', x: 1050, y: 1100, w: 192, h: 192 },
-      { label: 'Combat Training', x: 1510, y: 1100, w: 252, h: 180 },
-      { label: 'Market',          x: 1050, y: 1420, w: 220, h: 157 },
-      { label: 'Combat Strategy', x: 1510, y: 1420, w: 196, h: 196 },
+      { label: 'Learning Center', x: 895,  y: 1010, w: 192, h: 192 },
+      { label: 'Tavern',          x: 1395, y: 870,  w: 220, h: 180 },
+      { label: 'Combat Training', x: 1780, y: 1150, w: 252, h: 180 },
+      { label: 'Market',          x: 935,  y: 1575, w: 220, h: 157 },
+      { label: 'Combat Strategy', x: 1715, y: 1610, w: 196, h: 196 },
     ]
 
-    for (const def of buildingDefs) {
+    this.buildings = []
+    buildingDefs.forEach((def, i) => {
       const b = new Building(this, def.x, def.y, def.label, def.w, def.h)
-      this.buildings.push({ building: b, label: def.label, x: def.x, y: def.y })
-    }
+      // Door is centred just below the footprint (clear of the collider).
+      const entry: BuildingEntry = {
+        building: b, label: def.label, x: def.x, y: def.y,
+        doorX: def.x, doorY: def.y + def.h / 2 + 40,
+      }
+      this.buildings.push(entry)
+      this.decorateBuilding(entry, i)
+    })
 
-    // ── Decorative world elements ─────────────────────────────────────────────
+    // ── Central plaza ─────────────────────────────────────────────────────────
+    // The open heart of the town: a well, the town sign, a ring of lamps and
+    // benches, and scattered greenery. With the buildings pushed outward this
+    // square stays clear for the player to spawn into and move through.
     this.add.image(1280, 1285, 'well').setDepth(3).setScale(3)
+    this.add.image(1280, 1160, 'sign').setDepth(3).setScale(3)
 
-    for (const [lx, ly] of [[1100, 1180], [1460, 1180], [1100, 1350], [1460, 1350]] as [number, number][]) {
+    // Lamps + benches loosely ringing the plaza (not perfectly symmetric).
+    for (const [lx, ly] of [[1120, 1205], [1455, 1170], [1150, 1395], [1430, 1380]] as [number, number][]) {
       this.add.image(lx, ly, 'lamppost').setDepth(3).setScale(2.5)
     }
-
-    for (const [bx, by] of [[1200, 1440], [1220, 1455], [1360, 1440], [1380, 1455]] as [number, number][]) {
-      this.add.image(bx, by, 'barrel').setDepth(3).setScale(2.5)
+    for (const [bx, by, flip] of [[1185, 1410, 0], [1380, 1415, 1]] as [number, number, number][]) {
+      this.add.image(bx, by, 'bench').setDepth(3).setScale(2.4).setFlipX(flip === 1)
     }
 
-    this.add.image(1280, 1170, 'sign').setDepth(3).setScale(3)
-
-    // Bushes framing the town square (CraftPix, 64px sprites at native size)
+    // Scattered greenery + a couple of in-town trees to break up the open grass.
     ;([
-      [1010, 1220, 'cp_bush1'], [1550, 1220, 'cp_bush2'],
-      [1010, 1380, 'cp_bush3'], [1550, 1380, 'cp_bush4'],
+      [1090, 1300, 'cp_bush1'], [1470, 1320, 'cp_bush4'],
+      [1230, 1145, 'cp_flower2'], [1335, 1150, 'cp_flower5'],
+      [1175, 1340, 'cp_tuft1'], [1395, 1345, 'cp_tuft2'],
     ] as [number, number, string][]).forEach(([rx, ry, key]) => {
-      this.add.image(rx, ry, key).setDepth(3)
+      this.add.image(rx, ry, key).setDepth(2)
+    })
+    // A few trees nestled in the gaps between buildings (decorative, no collider).
+    ;([
+      [1170, 980, 'cp_tree2'], [1600, 1010, 'cp_ftree2'],
+      [760, 1300, 'cp_tree4'], [1560, 1430, 'cp_tree1'], [1120, 1700, 'cp_ftree5'],
+    ] as [number, number, string][]).forEach(([tx, ty, key]) => {
+      this.add.image(tx, ty, key).setScale(1.4).setDepth(2)
     })
 
     // ── Chest ─────────────────────────────────────────────────────────────────
@@ -330,6 +288,7 @@ export class WorldScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5).setDepth(5)
 
     // ── Biome entrance gates ──────────────────────────────────────────────────
+    this.gateGlows.clear()   // scene instance is reused across restarts
     for (const gate of this.biomeGates) {
       this.drawBiomeGate(gate.x, gate.y, gate.name, gate.color)
     }
@@ -340,13 +299,11 @@ export class WorldScene extends Phaser.Scene {
       this.add.image(gate.x + 56, gate.y + 8, i % 2 === 0 ? 'cp_stone2' : 'cp_stone1').setDepth(3)
     })
 
-    // ── Benches near the town square ──────────────────────────────────────────
-    const benchPositions: [number, number][] = [
-      [1100, 1250], [1460, 1250], [1130, 1390], [1430, 1390],
-    ]
-    for (const [bx, by] of benchPositions) {
-      this.add.image(bx, by, 'bench').setScale(2.5).setDepth(3)
-    }
+    // ── Tavern terrace (outdoor tables + seated patrons, props) ───────────────
+    this.addTavernTerrace()
+
+    // ── Townsfolk (guides you can talk to) ────────────────────────────────────
+    this.npcs = TOWN_NPCS.map(def => new TownNpc(this, def))
 
     // ── Player ────────────────────────────────────────────────────────────────
     this.player = new Player(this, this.spawnX, this.spawnY)
@@ -364,6 +321,15 @@ export class WorldScene extends Phaser.Scene {
     this.cameras.main.setZoom(1)
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+
+    // ── Ambient animals (cats/dogs near town; farm + wild animals outside) ────
+    // The manager registers its own update/shutdown via scene events and is
+    // kept alive by those listeners, so we don't need to hold a reference.
+    new AnimalManager(this, {
+      worldWidth: WORLD_WIDTH, worldHeight: WORLD_HEIGHT,
+      townCenter: { x: 1280, y: 1280 }, townRadius: 580,
+      colliders: this.buildings.map(b => b.building.collider),
+    })
 
     // ── Input ─────────────────────────────────────────────────────────────────
     this.cursors = this.input.keyboard!.createCursorKeys()
@@ -396,6 +362,12 @@ export class WorldScene extends Phaser.Scene {
     this.popup.setScrollFactor(0)
     this.popup.setDepth(100)
     this.popup.setVisible(false)
+
+    // NPC dialogue box (camera-fixed) + click-to-advance while talking.
+    this.npcDialog = new NpcDialog(this)
+    this.input.on('pointerdown', () => {
+      if (this.npcDialog.isOpen) this.npcDialog.advance()
+    })
 
     this.scene.launch('UIScene')
   }
@@ -481,94 +453,89 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** Stamp a trail along a parametric centerline (t: 0→1) in four passes:
-   *  1. the fringed 48px blob every 8px — overlapping blobs fuse into a
-   *     ribbon, but each blob's rim also braids over its neighbours;
-   *  2. the solid dirt tile across the ribbon INTERIOR (3 stamps perpendicular
-   *     to the tangent), erasing the braiding so the fringe survives only on
-   *     the outside edge;
-   *  3. pebble/dirt-clod decals scattered over the interior so the dirt reads
-   *     as textured ground rather than a flat brown stripe;
-   *  4. sparse berry bushes along the grassy edge — the crisp edge itself is
-   *     the dirt blob's own grass rim (no tuft carpet, which read as mud).
-   *     All verified against a rendered simulation. */
-  private stampTrail(
-    rt: Phaser.GameObjects.RenderTexture,
-    centerline: (t: number) => { x: number; y: number },
-  ) {
-    // Estimate length from a coarse pass so step density stays uniform
-    let length = 0
-    let prev = centerline(0)
-    for (let i = 1; i <= 32; i++) {
-      const p = centerline(i / 32)
-      length += Math.hypot(p.x - prev.x, p.y - prev.y)
-      prev = p
-    }
-    const steps = Math.max(8, Math.ceil(length / 8))
-    const scale = { scaleX: 1, scaleY: 1 }        // decals
-    const bodyScale = { scaleX: 2, scaleY: 2 }    // dirt body (≈96px wide path)
+  // Road grid: 64px cells (matches the 4× ground tiling); roads are 3 cells wide.
+  private static readonly ROAD_CELL = 48   // 16px tile × 3; a 3-cell road is ~144px wide
+  private static readonly ROAD_HALF = 1
 
-    // Pass 1: the fringed organic dirt blob along the centerline
-    for (let i = 0; i <= steps; i++) {
-      const p = centerline(i / steps)
-      rt.stamp('cp_ground', 'trail_blob', p.x, p.y, bodyScale)
+  /** Build the boolean road mask: two main cross roads through the town square
+   *  plus an axis-aligned L-route (horizontal leg, then vertical leg) from the
+   *  square out to every biome gate. Each `true` cell is road. */
+  private buildPathMask(): boolean[][] {
+    const CELL = WorldScene.ROAD_CELL
+    const HALF = WorldScene.ROAD_HALF
+    const cols = Math.floor(WORLD_WIDTH / CELL)
+    const rows = Math.floor(WORLD_HEIGHT / CELL)
+    const mask: boolean[][] = Array.from({ length: rows }, () => new Array<boolean>(cols).fill(false))
+    const mark = (c: number, r: number) => {
+      if (r >= 0 && r < rows && c >= 0 && c < cols) mask[r][c] = true
+    }
+    const hRoad = (c0: number, c1: number, rC: number) => {
+      for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++)
+        for (let d = -HALF; d <= HALF; d++) mark(c, rC + d)
+    }
+    const vRoad = (r0: number, r1: number, cC: number) => {
+      for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++)
+        for (let d = -HALF; d <= HALF; d++) mark(cC + d, r)
     }
 
-    // Pass 2: fill the ribbon interior with solid dirt so the blob fringe
-    // survives only on the OUTSIDE edge (3 stamps perpendicular to the tangent)
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps
-      const p = centerline(t)
-      const ahead = centerline(Math.min(1, t + 0.01))
-      const dx = ahead.x - p.x
-      const dy = ahead.y - p.y
-      const len = Math.max(1, Math.hypot(dx, dy))
-      const nx = -dy / len
-      const ny = dx / len
-      for (const o of [-14, 0, 14]) {
-        rt.stamp('cp_ground', CP_DIRT, p.x + nx * o, p.y + ny * o, bodyScale)
+    // Roads only ever connect the town square to a biome gate — no full-map
+    // spans (those left dead-end paths running off to the empty map edges).
+    const cx = Math.round(WORLD_WIDTH / 2 / CELL)
+    const cy = Math.round(WORLD_HEIGHT / 2 / CELL)
+    for (const g of this.biomeGates) {
+      const gc = Phaser.Math.Clamp(Math.round(g.x / CELL), 0, cols - 1)
+      const gr = Phaser.Math.Clamp(Math.round(g.y / CELL), 0, rows - 1)
+      hRoad(cx, gc, cy)          // run out along the town's centre row…
+      vRoad(cy, gr, gc)          // …then turn to reach the gate
+    }
+    return mask
+  }
+
+  /** Autotile the road mask. Each cell is stamped twice — the opaque cobble
+   *  body ('road_body'), then the grass-overhang fringe ('road_grass') on top —
+   *  with the frame chosen by which sides border grass (see ROAD in tileFrames). */
+  private renderRoads(rt: Phaser.GameObjects.RenderTexture, mask: boolean[][]) {
+    const CELL = WorldScene.ROAD_CELL
+    const rows = mask.length
+    const cols = mask[0].length
+    const scale = { scaleX: CELL / 16, scaleY: CELL / 16 }   // stamp the 16px tile to fill a cell
+    const isP = (c: number, r: number) =>
+      r >= 0 && r < rows && c >= 0 && c < cols && mask[r][c]
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!mask[r][c]) continue
+        const n = !isP(c, r - 1), s = !isP(c, r + 1)
+        const w = !isP(c - 1, r), e = !isP(c + 1, r)
+        let frame: number
+        if (n && w) frame = ROAD.NW
+        else if (n && e) frame = ROAD.NE
+        else if (s && w) frame = ROAD.SW
+        else if (s && e) frame = ROAD.SE
+        else if (n) frame = ROAD.N
+        else if (s) frame = ROAD.S
+        else if (w) frame = ROAD.W
+        else if (e) frame = ROAD.E
+        else frame = ROAD.C[(c + r) % ROAD.C.length]   // interior — vary the cobble
+        const px = c * CELL + CELL / 2
+        const py = r * CELL + CELL / 2
+        rt.stamp('road_body', frame, px, py, scale)     // opaque cobble body
+        rt.stamp('road_fringe', frame, px, py, scale)   // grass overhang on top
       }
     }
+  }
 
-    // Pass 3: pebble texture scattered across the dirt interior (±9px of center)
-    const pebbleRand = this.rng(steps * 17 + 3)
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps
-      const p = centerline(t)
-      const ahead = centerline(Math.min(1, t + 0.01))
-      const dx = ahead.x - p.x
-      const dy = ahead.y - p.y
-      const len = Math.max(1, Math.hypot(dx, dy))
-      const nx = -dy / len
-      const ny = dx / len
-      if (pebbleRand() < 0.3) {
-        const o = (pebbleRand() - 0.5) * 18
-        const frame = CPD_PEBBLES[Math.floor(pebbleRand() * CPD_PEBBLES.length)]
-        rt.stamp('cp_details', frame, p.x + nx * o, p.y + ny * o, scale)
-      }
+  /** True when a road cell lies within `margin` cells of world point (x, y). */
+  private maskHasNearby(mask: boolean[][], x: number, y: number, margin: number): boolean {
+    const CELL = WorldScene.ROAD_CELL
+    const cc = Math.floor(x / CELL)
+    const cr = Math.floor(y / CELL)
+    for (let dr = -margin; dr <= margin; dr++) {
+      const row = mask[cr + dr]
+      if (!row) continue
+      for (let dc = -margin; dc <= margin; dc++) if (row[cc + dc]) return true
     }
-
-    // Pass 4: the path edge is the dirt blob's OWN grass rim (a crisp dark-green
-    // lip), kept clean — no tuft carpet, which read as a muddy band. Only
-    // SPARSE berry bushes sit along the grassy edge, like the pack's own paths.
-    const edgeRand = this.rng(steps * 31 + 7)
-    for (let i = 0; i <= steps; i++) {
-      if (i % 6 !== 0) continue
-      const t = i / steps
-      const p = centerline(t)
-      const ahead = centerline(Math.min(1, t + 0.01))
-      const dx = ahead.x - p.x
-      const dy = ahead.y - p.y
-      const len = Math.max(1, Math.hypot(dx, dy))
-      const nx = -dy / len
-      const ny = dx / len
-      if (edgeRand() < 0.5) {
-        const side = edgeRand() < 0.5 ? -1 : 1
-        const o = side * (42 + edgeRand() * 16)
-        const bush = `cp_bush${1 + Math.floor(edgeRand() * 6)}`
-        this.add.image(p.x + nx * o, p.y + ny * o, bush).setScale(1.0 + edgeRand() * 0.5).setDepth(2)
-      }
-    }
+    return false
   }
 
   /** Tiny seeded RNG (LCG) — returns a function that yields values in [0, 1). */
@@ -585,117 +552,177 @@ export class WorldScene extends Phaser.Scene {
     return Phaser.Math.Distance.Between(this.player.x, this.player.y, x, y) < range
   }
 
-  /**
-   * Returns an array of tile-unit offsets (one per tile along the path axis).
-   * Offsets start and end at 0, stay within [-maxOff, +maxOff], and change
-   * smoothly (cosine-interpolated between waypoints spaced waypointEvery tiles).
-   */
-  private buildWindingOffsets(
-    totalTiles: number,
-    maxOff: number,
-    waypointEvery: number,
-    rand: () => number,
-  ): number[] {
-    // Place waypoints; first and last are pinned to 0
-    const numWP = Math.ceil(totalTiles / waypointEvery) + 1
-    const wp: number[] = [0]
-    for (let i = 1; i < numWP - 1; i++) {
-      const prev = wp[i - 1]
-      const step = (rand() - 0.5) * maxOff * 1.5
-      wp.push(Math.round(Math.max(-maxOff, Math.min(maxOff, prev + step))))
-    }
-    wp.push(0)
-
-    // Cosine-interpolate to per-tile resolution
-    const offsets: number[] = []
-    for (let t = 0; t < totalTiles; t++) {
-      const pos = (t / (totalTiles - 1)) * (numWP - 1)
-      const i   = Math.min(Math.floor(pos), numWP - 2)
-      const mu  = pos - i
-      const cos = (1 - Math.cos(mu * Math.PI)) / 2  // smooth step
-      offsets.push(Math.round(wp[i] * (1 - cos) + wp[i + 1] * cos))
-    }
-    return offsets
-  }
-
-  /** Draw a biome entrance portal at world position (x,y) — an animated
-   *  magical vortex in the biome's color that reads as "step in to travel". */
+  /** Draw a biome entrance gate at world position (x,y) — the stone-arch sprite
+   *  tinted with the biome's color, standing on the ground point used for the
+   *  "Press E to enter" proximity check. */
   private drawBiomeGate(x: number, y: number, name: string, color: number) {
-    // Stone platform base grounding the portal
+    // Soft ground shadow to seat the gate
     const base = this.add.graphics().setDepth(3)
-    base.fillStyle(0x4a4a55, 1)
-    base.fillEllipse(x, y + 8, 76, 22)
-    base.fillStyle(0x5d5d6a, 1)
-    base.fillEllipse(x, y + 5, 76, 22)
-    base.fillStyle(0x44444f, 1)
-    base.fillEllipse(x, y + 5, 58, 15)
+    base.fillStyle(0x000000, 0.18)
+    base.fillEllipse(x, y + 14, 90, 20)
 
-    // Soft colored halo behind the vortex
-    const halo = this.add.graphics().setDepth(4)
-    for (let i = 4; i >= 1; i--) {
-      halo.fillStyle(color, 0.05 * i)
-      halo.fillEllipse(x, y - 32, 30 + i * 14, 60 + i * 16)
-    }
+    // Gate sprite, tinted to the biome color. Origin at the foot of the pillars
+    // so the arch stands on (x, y); the dark doorway sits above for "step in".
+    // The tint is lightened toward white first — a straight multiply by the dark
+    // forest/swamp colors would render the stone muddy and unreadable on grass.
+    const r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff
+    const lf = 0.45
+    const tint =
+      (Math.round(r + (255 - r) * lf) << 16) |
+      (Math.round(g + (255 - g) * lf) << 8) |
+       Math.round(b + (255 - b) * lf)
+    const gate = this.add.image(x, y + 16, 'biome_gate').setOrigin(0.5, 1).setDepth(5)
+    gate.setScale(2.4)
+    gate.setTint(tint)
 
-    // The vortex: nested ellipses, bright rim → deep center
-    const vortex = this.add.graphics().setDepth(5)
-    vortex.fillStyle(color, 0.95)
-    vortex.fillEllipse(0, 0, 44, 72)
-    vortex.fillStyle(0xffffff, 0.55)
-    vortex.fillEllipse(0, 0, 34, 58)
-    vortex.fillStyle(color, 0.9)
-    vortex.fillEllipse(0, 0, 26, 46)
-    vortex.fillStyle(0x16162a, 0.85)
-    vortex.fillEllipse(0, 0, 14, 28)
-    vortex.setPosition(x, y - 32)
-
-    // Slow breathing pulse on the vortex
-    this.tweens.add({
-      targets: vortex,
-      scaleX: 1.12, scaleY: 1.06,
-      duration: 1400,
-      yoyo: true, repeat: -1,
-      ease: 'Sine.easeInOut',
-    })
-    // Halo pulses opposite for shimmer
-    this.tweens.add({
-      targets: halo,
-      alpha: 0.55,
-      duration: 1400,
-      yoyo: true, repeat: -1,
-      ease: 'Sine.easeInOut',
-    })
-
-    // Rising sparkles around the portal mouth
-    for (let i = 0; i < 5; i++) {
-      const sp = this.add.graphics().setDepth(6)
-      sp.fillStyle(0xffffff, 0.9)
-      sp.fillCircle(0, 0, 2)
-      sp.fillStyle(color, 0.6)
-      sp.fillCircle(0, 0, 4)
-      const sx = x + (i - 2) * 12 + (i % 2 === 0 ? 4 : -4)
-      sp.setPosition(sx, y - 8)
-      sp.setAlpha(0)
-      this.tweens.add({
-        targets: sp,
-        y: y - 76,
-        alpha: { from: 0.9, to: 0 },
-        duration: 1800,
-        delay: i * 360,
-        repeat: -1,
-        ease: 'Sine.easeOut',
-        onRepeat: () => { sp.setPosition(sx, y - 8) },
-      })
-    }
+    // Door "opening" overlay — a black, door-shaped panel (arched top, squarer
+    // bottom) sized to the gate's doorway. It grows from the centre out when the
+    // player is in range (see updateGateGlows), so the gate reads as its door
+    // opening to a dark passage. Drawn centred on the doorway; starts closed.
+    // (Geometry is tuned to the Gates1 sprite at scale 2.4.)
+    const glow = this.add.graphics().setDepth(6)
+    glow.fillStyle(0x05050a, 1)
+    glow.fillRoundedRect(-26.5, -38.5, 53, 77, { tl: 22, tr: 22, bl: 5, br: 5 })
+    glow.setPosition(x, y - 49)
+    glow.setScale(0)
+    this.gateGlows.set(name, { glow, open: false })
 
     // Label underneath
-    this.add.text(x, y + 20, name, {
+    this.add.text(x, y + 22, name, {
       fontSize: '12px',
       fontFamily: 'Georgia, serif',
       color: '#ffd700',
       backgroundColor: '#00000099',
       padding: { x: 4, y: 2 },
     }).setOrigin(0.5, 0).setDepth(6)
+  }
+
+  /** Grow the dark doorway open on the gate the player can enter (black filling
+   *  from the centre out), shrink the rest closed. Each transition fires once,
+   *  tracked by the per-gate `open` flag. */
+  private updateGateGlows() {
+    const nearName = this.nearBiomeGate?.name ?? null
+    for (const [name, entry] of this.gateGlows) {
+      const wantOpen = name === nearName
+      if (wantOpen === entry.open) continue
+      entry.open = wantOpen
+      this.tweens.killTweensOf(entry.glow)
+      this.tweens.add({
+        targets: entry.glow,
+        scale: wantOpen ? 1 : 0,
+        duration: wantOpen ? 300 : 200,
+        ease: wantOpen ? 'Cubic.easeOut' : 'Quad.easeIn',
+      })
+    }
+  }
+
+  /**
+   * Dress the open ground in front of (below) and beside the Tavern with an
+   * outdoor terrace: a few round wooden tables, each ringed by seated patrons,
+   * plus a couple of barrels and a planter — so the tavern reads "lived-in"
+   * like the CraftPix reference. Everything here is purely decorative: drawn
+   * with Phaser graphics (chibi style matching TownNpc) at town-prop depth, no
+   * physics colliders. Positions are hand-placed to keep clear of the tavern
+   * door (~1280,1070), the building footprint (y < 1030), the centre road row,
+   * and the town NPCs near (1460,1250).
+   */
+  /**
+   * Dress a building's frontage so it reads as lived-in and the town doesn't
+   * look like bare houses on grass. Props are placed relative to the door, to
+   * the sides of the entrance (the door-return spot itself stays clear), so they
+   * follow wherever the building is positioned. A little per-building variety
+   * (bush/flower species, which side the lamp sits) keeps it from feeling tiled.
+   */
+  private decorateBuilding(e: BuildingEntry, i: number) {
+    const dx = e.doorX
+    const dy = e.doorY
+    const lampLeft = i % 2 === 0
+    // Lamp on one side of the door…
+    this.add.image(dx + (lampLeft ? -82 : 82), dy - 8, 'lamppost').setDepth(3).setScale(2.4)
+    // …a bench on the other.
+    this.add.image(dx + (lampLeft ? 78 : -78), dy + 6, 'bench')
+      .setDepth(3).setScale(2.3).setFlipX(!lampLeft)
+    // A pair of barrels tucked against the wall.
+    this.add.image(dx - 106, dy + 30, 'barrel').setDepth(3).setScale(2.2)
+    this.add.image(dx - 88,  dy + 44, 'barrel').setDepth(3).setScale(2.2)
+    // Greenery on the far side.
+    this.add.image(dx + 104, dy + 36, `cp_bush${(i % 6) + 1}`).setDepth(3)
+    this.add.image(dx + 66,  dy + 50, `cp_flower${(i % 6) + 1}`).setDepth(2)
+  }
+
+  private addTavernTerrace() {
+    // Three table groupings, tastefully spaced across the terrace strip
+    // (y ≈ 1040–1180), left and right of the door column.
+    //   patrons: [seatAngleDeg, npcSheetKey] — angle places a standing CraftPix
+    //   citizen around the table rim (a lively tavern crowd). Sheet keys cycle
+    //   through the citizen idle sheets + the lute player / drinks server for
+    //   variety; see NPC_SHEETS in townNpcs.ts.
+    // Anchor the terrace on the tavern's actual position so it follows the
+    // building wherever it sits. Tables fan out in the open ground in front of
+    // (below) the door, clear of the door-return spot.
+    const tav = this.buildings.find(b => b.label === 'Tavern')
+    const ox = tav ? tav.x : 1395
+    const oy = tav ? tav.doorY + 30 : 1100
+
+    const tables: { x: number; y: number; patrons: [number, string][] }[] = [
+      // Left table — three drinkers
+      { x: ox - 150, y: oy + 5,  patrons: [[205, 'npc_citizen1'], [335, 'npc_citizen3'], [80, 'npc_drinks']] },
+      // Right table — four patrons, busiest spot (a lute player among them)
+      { x: ox + 40,  y: oy + 20, patrons: [[205, 'npc_citizen5'], [335, 'npc_lute'], [70, 'npc_citizen2'], [120, 'npc_citizen4']] },
+      // Lower table — two, set further out from the door
+      { x: ox - 70,  y: oy + 95, patrons: [[215, 'npc_citizen2'], [325, 'npc_citizen1']] },
+    ]
+    for (const t of tables) this.drawTerraceTable(t.x, t.y, t.patrons)
+
+    // Dressing props (reuse loaded sprites) — barrels clustered beside the tables.
+    for (const [bx, by] of [[ox - 182, oy + 62], [ox - 159, oy + 74], [ox + 78, oy + 68]] as [number, number][]) {
+      this.add.image(bx, by, 'barrel').setDepth(3).setScale(2.2)
+    }
+  }
+
+  /** Draw one round wooden table at (x, y) with standing patrons around it.
+   *  Tables sit at depth 3; patrons in front sort above (depth 4), patrons on
+   *  the far side sort below (depth 2.5) so the table overlaps their legs and
+   *  they read as gathered around it. No collider — the player walks through. */
+  private drawTerraceTable(x: number, y: number, patrons: [number, string][]) {
+    const g = this.add.graphics().setDepth(3)
+    // Ground shadow
+    g.fillStyle(0x000000, 0.18); g.fillEllipse(x, y + 6, 78, 26)
+    // Table top (round wooden) with a darker rim + a couple of mugs
+    g.fillStyle(0x6b4a2a, 1); g.fillEllipse(x, y, 64, 38)
+    g.fillStyle(0x8a6238, 1); g.fillEllipse(x, y - 3, 56, 30)
+    g.lineStyle(2, 0x4a321c, 1); g.strokeEllipse(x, y - 3, 56, 30)
+    // Mugs on the table
+    g.fillStyle(0x3a2a18, 1)
+    g.fillRoundedRect(x - 16, y - 10, 8, 9, 2)
+    g.fillRoundedRect(x + 8, y - 8, 8, 9, 2)
+    g.fillStyle(0xe8d6a0, 1)
+    g.fillEllipse(x - 12, y - 11, 8, 3)
+    g.fillEllipse(x + 12, y - 9, 8, 3)
+
+    // Patrons standing around the rim
+    for (const [angleDeg, sheet] of patrons) {
+      const a = Phaser.Math.DegToRad(angleDeg)
+      const px = x + Math.cos(a) * 46
+      const py = y + Math.sin(a) * 24
+      this.drawStandingPatron(px, py, sheet, py < y)
+    }
+  }
+
+  /** A standing CraftPix citizen at (x, y) playing its idle loop. `behind` =
+   *  on the far side of the table (drawn under the table so it overlaps the
+   *  patron's legs, selling the "gathered round" look). */
+  private drawStandingPatron(x: number, y: number, sheet: string, behind: boolean) {
+    const sprite = this.add.sprite(x, y - 18, sheet, 0)
+      .setScale(1.9)
+      .setDepth(behind ? 2.5 : 4)
+    const idleKey = `${sheet}_idle`
+    if (this.anims.exists(idleKey)) {
+      sprite.anims.play(idleKey)
+      // Desync patrons from each other so the crowd doesn't move in lockstep.
+      sprite.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
+      sprite.anims.timeScale = Phaser.Math.FloatBetween(0.8, 1.2)
+    }
   }
 
   private generateTreePositions(count: number): [number, number][] {
@@ -786,10 +813,11 @@ export class WorldScene extends Phaser.Scene {
     this.player.setVelocity(0, 0)
 
     const color = BIOME_COLORS[biomeName] ?? 0xffd700
-    const locations = BIOME_LOCATIONS[biomeName] ?? ['Easy Area', 'Medium Area', 'Hard Area']
+    const locations: FiveLocations = BIOME_LOCATIONS[biomeName]
+      ?? ['Beginner Area', 'Easy Area', 'Medium Area', 'Hard Area', 'Expert Area']
 
     const panelW = 420
-    const panelH = 280
+    const panelH = 420
     const cam = this.cameras.main
     const cx = cam.scrollX + GAME_WIDTH / 2
     const cy = cam.scrollY + GAME_HEIGHT / 2
@@ -821,16 +849,16 @@ export class WorldScene extends Phaser.Scene {
     divider.lineBetween(-panelW / 2 + 20, -panelH / 2 + 52, panelW / 2 - 20, -panelH / 2 + 52)
     container.add(divider)
 
-    // Difficulty buttons
-    const difficultyData = [
-      { icon: '🌿', label: locations[0], difficulty: 'easy' as const,   emoji: 'Easy',   yOff: -60 },
-      { icon: '🔥', label: locations[1], difficulty: 'medium' as const, emoji: 'Medium', yOff:   0 },
-      { icon: '💀', label: locations[2], difficulty: 'hard' as const,   emoji: 'Hard',   yOff:  60 },
-    ]
-
-    for (const dd of difficultyData) {
-      this.createBiomeButton(container, dd.icon, dd.label, dd.difficulty, biomeName, dd.yOff, color)
-    }
+    // Difficulty buttons — one per mode, easiest → hardest, names + accents
+    // pulled from the shared DIFFICULTIES config.
+    const firstY = -118
+    const stepY = 52
+    DIFFICULTY_ORDER.forEach((diff, i) => {
+      const cfg = DIFFICULTIES[diff]
+      this.createBiomeButton(
+        container, cfg.icon, locations[i], diff, biomeName, firstY + i * stepY, color,
+      )
+    })
 
     // Cancel button
     const cancelBg = this.add.graphics()
@@ -860,13 +888,13 @@ export class WorldScene extends Phaser.Scene {
     container: Phaser.GameObjects.Container,
     icon: string,
     locationName: string,
-    difficulty: 'easy' | 'medium' | 'hard',
+    difficulty: Difficulty,
     biomeName: string,
     yOffset: number,
     borderColor: number
   ) {
-    const bw = 340
-    const bh = 44
+    const bw = 360
+    const bh = 42
     const by = yOffset - bh / 2
 
     const btnBg = this.add.graphics()
@@ -876,9 +904,8 @@ export class WorldScene extends Phaser.Scene {
     btnBg.strokeRoundedRect(-bw / 2, by, bw, bh, 8)
     container.add(btnBg)
 
-    const diffColors: Record<string, string> = { easy: '#88ff88', medium: '#ffcc44', hard: '#ff6666' }
-    const diffColor = diffColors[difficulty]
-    const diffLabel = difficulty.charAt(0).toUpperCase() + difficulty.slice(1)
+    const diffColor = DIFFICULTIES[difficulty].color
+    const diffLabel = DIFFICULTIES[difficulty].label
 
     const btnText = this.add.text(-bw / 2 + 16, yOffset, `${icon} ${locationName}`, {
       fontSize: '15px',
@@ -948,7 +975,7 @@ export class WorldScene extends Phaser.Scene {
       return
     }
 
-    if (!this.popupOpen && !this.biomeMenuOpen) {
+    if (!this.popupOpen && !this.biomeMenuOpen && !this.npcDialog.isOpen) {
       this.player.update(this.cursors, this.wasd)
     } else {
       this.player.setVelocity(0, 0)
@@ -999,6 +1026,17 @@ export class WorldScene extends Phaser.Scene {
 
     this.nearBiomeGate =
       this.biomeGates.find(gate => this.playerIsNear(gate.x, gate.y, 80)) ?? null
+    this.updateGateGlows()
+
+    this.nearNpc = this.npcs.find(n => this.playerIsNear(n.def.x, n.def.y, 80)) ?? null
+
+    // While talking to an NPC, that conversation owns the input.
+    if (this.npcDialog.isOpen) {
+      this.promptText.setVisible(false)
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) this.npcDialog.advance()
+      else if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.npcDialog.close()
+      return
+    }
 
     // Handle prompt display and E key interactions
     if (this.biomeMenuOpen) {
@@ -1017,7 +1055,9 @@ export class WorldScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         if (nearBuilding.label === 'Learning Center') {
           this.scene.stop('UIScene')
-          this.scene.start('ClassroomScene')
+          this.scene.start('ClassroomScene', {
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Combat Strategy') {
@@ -1038,6 +1078,17 @@ export class WorldScene extends Phaser.Scene {
           this.scene.launch('MarketScene')
           return
         }
+        if (nearBuilding.label === 'Tavern') {
+          // Full scene switch (like ClassroomScene/ChestScene). The tavern owns
+          // its own multiplayer 'tavern' zone; returnX/returnY drop the player
+          // back at the tavern door when they leave.
+          this.player.setVelocity(0, 0)
+          this.scene.stop('UIScene')
+          this.scene.start('TavernScene', {
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
+          return
+        }
         this.openPopup(nearBuilding.label)
       }
     } else if (this.nearChest && !this.popupOpen) {
@@ -1045,8 +1096,16 @@ export class WorldScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         this.player.setVelocity(0, 0)
         this.scene.stop('UIScene')
-        this.scene.start('ChestScene')
+        this.scene.start('ChestScene', {
+          returnX: this.chestPos.x, returnY: this.chestPos.y + 70,
+        })
         return
+      }
+    } else if (this.nearNpc && !this.popupOpen) {
+      this.promptText.setText(`Press E to talk to ${this.nearNpc.def.name}`).setVisible(true)
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        this.player.setVelocity(0, 0)
+        this.npcDialog.open(this.nearNpc.def.name, this.nearNpc.def.lines)
       }
     } else {
       this.promptText.setVisible(false)

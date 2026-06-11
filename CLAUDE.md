@@ -4,7 +4,7 @@ I am creating a fantasy themed 2d multiplayer RPG video game that is browser bas
 
 # About Me
 
-I am a highly educated game designer and software engineer with an interest in making learning fun.
+I am a highly educated game designer and software engineer with an interest in making learning fun. I am also a detail oriented graphics designer who pays close attention to all details when creating the look and feel for the game. I do my best to model the game after the design examples provided and review graphics closely to ensure they match the designs.
 
 # Rules
 

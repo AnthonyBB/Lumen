@@ -104,16 +104,6 @@ export const STRATEGIES: CombatStrategy[] = [
     action: 'use_strongest_attack',
     targetMode: 'lowest_hp',
   },
-  {
-    id: 'execute_strike',
-    name: 'Execute Strike',
-    description: 'Use the execute ability on any enemy below 10% HP.',
-    priority: 2,
-    condition: { type: 'enemy_hp_below', value: 10 },
-    action: 'use_skill',
-    skillId: 'execute',
-    targetMode: 'lowest_hp',
-  },
 
   // ── Crowd control / AoE ────────────────────────────────────────────────────
   {
@@ -367,7 +357,6 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
       'opener_fireball',
       'opening_buff',
       'early_poison',
-      'execute_strike',
       'finish_them',
       'focus_wounded',
       'group_threat',
@@ -440,7 +429,6 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
       'opener_fireball',
       'relentless_assault',
       'overwhelming_numbers',
-      'execute_strike',
       'late_game_burst',
       'lightning_strike',
       'lucky_strike',

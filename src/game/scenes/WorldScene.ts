@@ -489,9 +489,9 @@ export class WorldScene extends Phaser.Scene {
    *     the outside edge;
    *  3. pebble/dirt-clod decals scattered over the interior so the dirt reads
    *     as textured ground rather than a flat brown stripe;
-   *  4. a THICK grass lip on both edges — dense grass-tuft clumps plus
-   *     occasional small bushes — reproducing the lush overgrown border of
-   *     the pack's own paths. All verified against a rendered simulation. */
+   *  4. sparse berry bushes along the grassy edge — the crisp edge itself is
+   *     the dirt blob's own grass rim (no tuft carpet, which read as mud).
+   *     All verified against a rendered simulation. */
   private stampTrail(
     rt: Phaser.GameObjects.RenderTexture,
     centerline: (t: number) => { x: number; y: number },
@@ -548,13 +548,12 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Pass 4: a THICK lush grass lip straddling both edges — dense grass-tuft
-    // clumps (stamped onto the texture) with occasional small bushes (separate
-    // sprites) — this is what gives the overgrown grassy border of the pack's
-    // own paths, rather than a thin fringe. Verified against a simulation.
+    // Pass 4: the path edge is the dirt blob's OWN grass rim (a crisp dark-green
+    // lip), kept clean — no tuft carpet, which read as a muddy band. Only
+    // SPARSE berry bushes sit along the grassy edge, like the pack's own paths.
     const edgeRand = this.rng(steps * 31 + 7)
-    const tuftKeys = ['cp_tuft1', 'cp_tuft2']
     for (let i = 0; i <= steps; i++) {
+      if (i % 6 !== 0) continue
       const t = i / steps
       const p = centerline(t)
       const ahead = centerline(Math.min(1, t + 0.01))
@@ -563,19 +562,11 @@ export class WorldScene extends Phaser.Scene {
       const len = Math.max(1, Math.hypot(dx, dy))
       const nx = -dy / len
       const ny = dx / len
-      for (const side of [-1, 1]) {
-        if (edgeRand() < 0.78) {
-          const o = side * (28 + edgeRand() * 12)
-          const key = tuftKeys[Math.floor(edgeRand() * tuftKeys.length)]
-          rt.stamp(key, undefined, p.x + nx * o, p.y + ny * o, { scaleX: 2, scaleY: 2 })
-        }
-      }
-      // Occasional small bush accent sitting on the grassy edge (own sprite)
-      if (i % 3 === 0 && edgeRand() < 0.16) {
+      if (edgeRand() < 0.5) {
         const side = edgeRand() < 0.5 ? -1 : 1
         const o = side * (42 + edgeRand() * 16)
         const bush = `cp_bush${1 + Math.floor(edgeRand() * 6)}`
-        this.add.image(p.x + nx * o, p.y + ny * o, bush).setScale(1.1 + edgeRand() * 0.4).setDepth(2)
+        this.add.image(p.x + nx * o, p.y + ny * o, bush).setScale(1.0 + edgeRand() * 0.5).setDepth(2)
       }
     }
   }

@@ -220,16 +220,24 @@ export class ClassroomScene extends Phaser.Scene {
   // ─── ROOM ──────────────────────────────────────────────────────────────────
 
   private drawRoom() {
-    // Warm wood floor
-    const floor = this.add.graphics().setDepth(0)
-    floor.fillStyle(0xc49050, 1)
-    floor.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
-    floor.lineStyle(1, 0xaa7830, 0.45)
-    for (let y = 0; y < GAME_HEIGHT; y += 50) floor.lineBetween(0, y, GAME_WIDTH, y)
-    for (let x = 0; x < GAME_WIDTH; x += 130) floor.lineBetween(x, 0, x, GAME_HEIGHT)
-    floor.fillStyle(0xaa7830, 0.2)
-    for (let r = 0; r < 15; r++) for (let c = 0; c < 11; c++)
-      if ((r + c) % 3 === 0) floor.fillRect(c * 130, r * 50, 130, 50)
+    // Warm wood-plank floor — a single CraftPix wood tile (row 14, col 0 of the
+    // class_floor sheet) repeated uniformly at 3× onto one RenderTexture. Using
+    // one frame everywhere avoids the alternating-row seams that read like rails.
+    // Falls back to a flat fill if the sheet is missing.
+    const cell = 48
+    if (this.textures.exists('class_floor')) {
+      const floorRT = this.add.renderTexture(0, 0, GAME_WIDTH, GAME_HEIGHT).setOrigin(0).setDepth(0)
+      const WOOD = 140   // row 14, col 0; frame = row*10 + col
+      for (let y = 0; y < GAME_HEIGHT; y += cell) {
+        for (let x = 0; x < GAME_WIDTH; x += cell) {
+          floorRT.stamp('class_floor', WOOD, x + cell / 2, y + cell / 2, { scaleX: 3, scaleY: 3 })
+        }
+      }
+    } else {
+      const floor = this.add.graphics().setDepth(0)
+      floor.fillStyle(0xc49050, 1)
+      floor.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
+    }
 
     // Front wall (stone/plaster)
     const wall = this.add.graphics().setDepth(1)
@@ -310,41 +318,34 @@ export class ClassroomScene extends Phaser.Scene {
 
   // ─── DESKS & STUDENTS ──────────────────────────────────────────────────────
 
+  /** Crop the chapel "desk with open book" (class_objects cols 12–15, rows 8–9)
+   *  into one reusable texture. Frame = row * 19 + col. Idempotent. */
+  private deskTexture(): string {
+    const key = 'class_desk'
+    if (this.textures.exists(key)) return key
+    if (!this.textures.exists('class_objects')) return ''
+    const c0 = 12, r0 = 8, w = 4, h = 2
+    const rt = this.add.renderTexture(0, 0, w * 16, h * 16).setVisible(false)
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        rt.stamp('class_objects', (r0 + r) * 19 + (c0 + c), c * 16 + 8, r * 16 + 8)
+    rt.saveTexture(key)
+    rt.destroy()
+    return key
+  }
+
   private createDesks() {
+    const deskKey = this.deskTexture()
     let studentIdx = 0
     for (const d of DESK_DEFS) {
-      const g = this.add.graphics().setDepth(4)
-      // Shadow
-      g.fillStyle(0x000000, 0.14)
-      g.fillEllipse(d.x + 4, d.y + 34, 92, 14)
-      // Legs
-      g.fillStyle(0x7a5230, 1)
-      for (const [lx, ly] of [[-36, 10], [30, 10], [-36, 22], [30, 22]] as [number, number][])
-        g.fillRect(d.x + lx, d.y + ly, 6, 20)
-      // Surface
-      g.fillStyle(0xc4904a, 1)
-      g.fillRect(d.x - 44, d.y - 4, 88, 26)
-      g.lineStyle(1, 0xa07030, 1)
-      g.strokeRect(d.x - 44, d.y - 4, 88, 26)
-      g.lineStyle(1, 0xb07838, 0.35)
-      g.lineBetween(d.x - 28, d.y - 4, d.x - 28, d.y + 22)
-      g.lineBetween(d.x + 16, d.y - 4, d.x + 16, d.y + 22)
-
-      // Paper on desk
-      const paper = this.add.graphics().setDepth(5)
-      paper.fillStyle(0xf5f0e0, 1)
-      paper.fillRect(d.x - 20, d.y - 2, 26, 18)
-      paper.lineStyle(1, 0xaaaaaa, 0.4)
-      for (let l = 0; l < 3; l++) paper.lineBetween(d.x - 16, d.y + 3 + l * 4, d.x + 2, d.y + 3 + l * 4)
-
       // Seated student — a real CraftPix citizen sprite, drawn BEHIND the desk
       // (lower depth) so the desk front overlaps their lap and only the upper
       // body shows above the desktop, reading as "seated".
       if (d.occupied) {
         const sheet = `npc_citizen${(studentIdx % 5) + 1}`
         studentIdx++
-        const student = this.add.sprite(d.x, d.y + 16, sheet, 0)
-          .setOrigin(0.5, 1).setScale(1.6).setDepth(3.6)
+        const student = this.add.sprite(d.x, d.y + 8, sheet, 0)
+          .setOrigin(0.5, 1).setScale(1.7).setDepth(3.6)
         const idleKey = `${sheet}_idle`
         if (this.anims.exists(idleKey)) {
           student.play(idleKey)
@@ -352,6 +353,18 @@ export class ClassroomScene extends Phaser.Scene {
           student.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
           student.anims.timeScale = Phaser.Math.FloatBetween(0.8, 1.2)
         }
+      }
+
+      // Soft ground shadow + the wooden desk-with-book in front of the student.
+      const shadow = this.add.graphics().setDepth(3.7)
+      shadow.fillStyle(0x000000, 0.16).fillEllipse(d.x, d.y + 30, 96, 16)
+      if (deskKey) {
+        this.add.image(d.x, d.y + 6, deskKey).setScale(1.55).setDepth(4)
+      } else {
+        // Fallback: simple drawn desk.
+        const g = this.add.graphics().setDepth(4)
+        g.fillStyle(0xc4904a, 1).fillRect(d.x - 44, d.y - 4, 88, 26)
+        g.lineStyle(1, 0xa07030, 1).strokeRect(d.x - 44, d.y - 4, 88, 26)
       }
     }
   }
@@ -361,45 +374,27 @@ export class ClassroomScene extends Phaser.Scene {
   private createTeacher() {
     const tx = 640, ty = 248
 
-    // Teacher desk
-    const td = this.add.graphics().setDepth(5)
-    td.fillStyle(0x000000, 0.18)
-    td.fillEllipse(tx + 4, ty + 82, 210, 16)
-    td.fillStyle(0x9a6830, 1)
-    td.fillRect(tx - 104, ty + 52, 208, 30)
-    td.lineStyle(2, 0x7a4818, 1)
-    td.strokeRect(tx - 104, ty + 52, 208, 30)
-    td.fillStyle(0x8a5820, 1)
-    td.fillRect(tx - 104, ty + 66, 208, 16)
-    // Items on desk
-    td.fillStyle(0x2244aa, 1)
-    td.fillRect(tx - 82, ty + 40, 30, 18)
-    td.fillStyle(0xf5f0e0, 1)
-    td.fillRect(tx + 42, ty + 44, 26, 12)
-    td.fillStyle(0xffd700, 0.9)
-    td.fillRect(tx - 8, ty + 44, 8, 14)
+    // Teacher's lectern — the same chapel desk-with-book, scaled up. Shadow
+    // first, then the desk at depth 5 (in front of the professor at depth 4).
+    const tShadow = this.add.graphics().setDepth(4.7)
+    tShadow.fillStyle(0x000000, 0.2).fillEllipse(tx, ty + 100, 200, 20)
+    const deskKey = this.deskTexture()
+    if (deskKey) {
+      this.add.image(tx, ty + 73, deskKey).setScale(2.2).setDepth(5)
+    } else {
+      const td = this.add.graphics().setDepth(5)
+      td.fillStyle(0x9a6830, 1).fillRect(tx - 104, ty + 52, 208, 30)
+      td.lineStyle(2, 0x7a4818, 1).strokeRect(tx - 104, ty + 52, 208, 30)
+    }
 
     // Professor — a white-haired CraftPix citizen standing behind the lectern
-    // (lower depth, so the desk overlaps the legs). A small drawn mortarboard +
-    // tassel sits on the head to keep Prof. Lumina's scholarly look.
+    // (lower depth, so the desk overlaps the legs).
     const prof = this.add.sprite(tx, ty + 70, 'npc_citizen1', 0)
       .setOrigin(0.5, 1).setScale(2.0).setDepth(4)
     if (this.anims.exists('npc_citizen1_idle')) {
       prof.play('npc_citizen1_idle')
       prof.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
     }
-    // Mortarboard cap, centred over the sprite's head (head top ≈ ty + 6).
-    const cap = this.add.graphics().setDepth(6)
-    const capY = ty + 4
-    cap.fillStyle(0x141414, 1)
-    cap.fillRect(tx - 18, capY, 36, 6)            // board
-    cap.fillRect(tx - 9, capY - 6, 18, 7)         // crown
-    cap.fillStyle(0xffd700, 1)
-    cap.fillCircle(tx, capY + 1, 2.5)             // button
-    cap.lineStyle(2, 0xffd700, 1)
-    cap.lineBetween(tx + 14, capY + 2, tx + 22, capY + 14)  // tassel cord
-    cap.fillStyle(0xffd700, 1)
-    cap.fillRect(tx + 19, capY + 13, 6, 7)        // tassel
 
     // Name label
     const nb = this.add.graphics().setDepth(8)

@@ -8,7 +8,7 @@ import { NpcDialog } from '../objects/NpcDialog'
 import { TOWN_NPCS } from '../data/townNpcs'
 import { DIFFICULTIES, DIFFICULTY_ORDER, type Difficulty } from '../data/mobs'
 import { AnimalManager } from '../systems/AnimalManager'
-import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD } from '../data/tileFrames'
+import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD, ROAD_GRASS_TINT } from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
@@ -94,6 +94,9 @@ export class WorldScene extends Phaser.Scene {
   // Per-gate dark "doorway opening" overlay that grows from the centre out when
   // the player is in range, making the gate look like it opens.
   private gateGlows = new Map<string, { glow: Phaser.GameObjects.Graphics; open: boolean }>()
+  // Solid static bodies for the stone gates, so the player can't walk through a
+  // portal (entry is still by the "Press E" proximity prompt). Rebuilt per scene.
+  private gateColliders: Phaser.GameObjects.Zone[] = []
 
   // Spawn position — set via init() when returning from a biome, otherwise world centre
   private spawnX = WORLD_WIDTH / 2
@@ -289,8 +292,15 @@ export class WorldScene extends Phaser.Scene {
 
     // ── Biome entrance gates ──────────────────────────────────────────────────
     this.gateGlows.clear()   // scene instance is reused across restarts
+    this.gateColliders = []
     for (const gate of this.biomeGates) {
       this.drawBiomeGate(gate.x, gate.y, gate.name, gate.color)
+      // Solid body over the gate's lower stone (pillars + base). Bottom sits at
+      // the gate's ground point so the player bumps into it yet stays well
+      // inside the 80px "Press E" range that opens the biome menu.
+      const block = this.add.zone(gate.x, gate.y - 35, 104, 70)
+      this.physics.add.existing(block, true)
+      this.gateColliders.push(block)
     }
 
     // ── Stone accents around each biome gate (CraftPix) ──────────────────────
@@ -310,6 +320,9 @@ export class WorldScene extends Phaser.Scene {
 
     for (const entry of this.buildings) {
       this.physics.add.collider(this.player, entry.building.collider)
+    }
+    for (const block of this.gateColliders) {
+      this.physics.add.collider(this.player, block)
     }
 
     // ── Multiplayer: see and be seen by other players in town ───────────────
@@ -520,7 +533,8 @@ export class WorldScene extends Phaser.Scene {
         const px = c * CELL + CELL / 2
         const py = r * CELL + CELL / 2
         rt.stamp('road_body', frame, px, py, scale)     // opaque cobble body
-        rt.stamp('road_fringe', frame, px, py, scale)   // grass overhang on top
+        // grass overhang, tinted to match the world's darker grass
+        rt.stamp('road_fringe', frame, px, py, { ...scale, tint: ROAD_GRASS_TINT })
       }
     }
   }

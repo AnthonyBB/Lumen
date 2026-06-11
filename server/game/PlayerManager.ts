@@ -618,8 +618,8 @@ export class PlayerManager {
           ) {
             gear.magic_damage += a.value;
           }
-          // Other attribute types (mp_regen, xp_bonus, gold_find, dot/aoe,
-          // debuff_resist) are flavour bonuses not surfaced as core stats here.
+          // Other attribute types (mp_regen, gold_find, dot/aoe, debuff_resist)
+          // are flavour bonuses not surfaced as core stats here.
         }
       } else {
         // Legacy ItemDatabase item — apply its raw stats directly.

@@ -40,9 +40,17 @@ export type AttributeType =
   | 'crit_chance'
   | 'dot_bonus'
   | 'aoe_bonus'
-  | 'xp_bonus'
   | 'gold_find'
   | 'debuff_resist'
+
+/** All generated-gear attribute/bonus types, in display order. Single source of
+ *  truth for the market's attribute filter (client UI + server validation). */
+export const ATTRIBUTE_TYPES: AttributeType[] = [
+  'constitution', 'intelligence', 'dexterity', 'strength', 'spirit',
+  'damage_bonus', 'healing_bonus', 'mp_regen',
+  'fire_damage', 'ice_damage', 'lightning_damage', 'holy_damage', 'nature_damage',
+  'crit_chance', 'dot_bonus', 'aoe_bonus', 'gold_find', 'debuff_resist',
+]
 
 export interface ItemAttribute {
   type: AttributeType
@@ -195,7 +203,6 @@ const ATTR_PREFIX: Record<AttributeType, string[]> = {
   crit_chance:      ['Keen', 'Precise', 'Sharp', 'Deadly'],
   dot_bonus:        ['Withering', 'Venomous', 'Searing', 'Lingering'],
   aoe_bonus:        ['Sweeping', 'Booming', 'Wide', 'Thunderous'],
-  xp_bonus:         ['Enlightened', "Learner's", 'Studious', 'Insightful'],
   gold_find:        ['Gilded', 'Lucky', 'Prosperous', 'Golden'],
   debuff_resist:    ['Warding', 'Guarded', 'Resolute', 'Steady'],
 }
@@ -218,7 +225,6 @@ const ATTR_SUFFIX: Record<AttributeType, string[]> = {
   crit_chance:      ['of Sharp Eyes', 'of the Bullseye', 'of Lucky Strikes'],
   dot_bonus:        ['of Slow Burns', 'of Creeping Harm', 'of Lasting Sting'],
   aoe_bonus:        ['of Wide Blasts', 'of the Whirlwind', 'of Sweeping Force'],
-  xp_bonus:         ['of Learning', 'of Bright Ideas', 'of the Scholar'],
   gold_find:        ['of Riches', 'of Good Fortune', 'of the Merchant'],
   debuff_resist:    ['of Warding', 'of Steady Nerves', 'of the Bulwark'],
 }
@@ -232,7 +238,9 @@ const WEAPON_ICON: Record<SkillClass, string> = {
 }
 
 const SLOT_ICON: Record<Exclude<EquipSlot, 'weapon'>, string> = {
-  helmet: '🪖', chest: '🛡️', legs: '👖',
+  // ⛑️ (not 🪖) — the military-helmet emoji is Unicode 13 (2020) and renders as
+  // an empty box on Windows 10's older Segoe UI Emoji; ⛑️ is universally present.
+  helmet: '⛑️', chest: '🛡️', legs: '👖',
   boots: '👢', gloves: '🧤', ring: '💍', amulet: '📿',
 }
 
@@ -301,14 +309,14 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
     ['dot_bonus', 1], ['mp_regen', 1], ['constitution', 1],
   ],
   bard: [
-    ['spirit', 2], ['dexterity', 1], ['xp_bonus', 3], ['debuff_resist', 2],
+    ['spirit', 2], ['dexterity', 1], ['debuff_resist', 2],
     ['healing_bonus', 1], ['gold_find', 2], ['mp_regen', 1],
   ],
 }
 
 const GENERIC_ATTR_POOL: WeightedAttr[] = [
   ['constitution', 2], ['strength', 1], ['dexterity', 1], ['intelligence', 1],
-  ['spirit', 1], ['xp_bonus', 1], ['gold_find', 1], ['debuff_resist', 1],
+  ['spirit', 1], ['gold_find', 1], ['debuff_resist', 1],
 ]
 
 /** Base value range (at common rarity) per attribute type. */
@@ -321,14 +329,13 @@ const ATTR_BASE: Record<AttributeType, [number, number]> = {
   holy_damage: [2, 5], nature_damage: [2, 5],
   crit_chance: [1, 2],
   dot_bonus: [2, 4], aoe_bonus: [2, 4],
-  xp_bonus: [1, 2], gold_find: [1, 2],
+  gold_find: [1, 2],
   debuff_resist: [1, 3],
 }
 
 /** Hard caps for percent-style attributes (kept small per design). */
 const ATTR_CAP: Partial<Record<AttributeType, number>> = {
   crit_chance: 8,
-  xp_bonus: 10,
   gold_find: 10,
   debuff_resist: 25,
 }
@@ -342,7 +349,7 @@ const ATTR_POWER_WEIGHT: Record<AttributeType, number> = {
   holy_damage: 1.6, nature_damage: 1.6,
   crit_chance: 6,
   dot_bonus: 1.5, aoe_bonus: 1.5,
-  xp_bonus: 5, gold_find: 4,
+  gold_find: 4,
   debuff_resist: 2,
 }
 
@@ -364,20 +371,6 @@ const RARITY_ATTR_COUNT: Record<Rarity, [number, number]> = {
 /** Attribute value multiplier per rarity. */
 const RARITY_VALUE_MULT: Record<Rarity, number> = {
   common: 1, uncommon: 1.6, rare: 2.5, epic: 4, legendary: 6,
-}
-
-/** Power-score multiplier per rarity. */
-const RARITY_POWER_MULT: Record<Rarity, number> = {
-  common: 1, uncommon: 1.3, rare: 1.7, epic: 2.2, legendary: 2.8,
-}
-
-/** XP-requirement band per rarity (commons free-ish, legendaries 20k–60k). */
-const RARITY_XP_BAND: Record<Rarity, [number, number]> = {
-  common: [0, 200],
-  uncommon: [200, 1500],
-  rare: [1500, 8000],
-  epic: [8000, 20000],
-  legendary: [20000, 60000],
 }
 
 // ------------------------------------------------------------
@@ -439,13 +432,11 @@ function rollAttributes(rng: () => number, pool: WeightedAttr[], rarity: Rarity)
   return attrs
 }
 
-function computeXpRequired(attrs: ItemAttribute[], rarity: Rarity): number {
-  const power =
-    attrs.reduce((sum, a) => sum + a.value * ATTR_POWER_WEIGHT[a.type], 0) *
-    RARITY_POWER_MULT[rarity]
-  const raw = Math.round(Math.pow(power, 1.5) * 10)
-  const [lo, hi] = RARITY_XP_BAND[rarity]
-  return Math.min(hi, Math.max(lo, raw))
+// Gear no longer carries an XP requirement to equip — every item is usable as
+// soon as it's owned. The field is kept (always 0) for catalog/pricing shape
+// compatibility; the equip gate in the socket handler is now a no-op.
+function computeXpRequired(_attrs: ItemAttribute[], _rarity: Rarity): number {
+  return 0
 }
 
 /** Order an item's attributes by power (value × weight), strongest first.

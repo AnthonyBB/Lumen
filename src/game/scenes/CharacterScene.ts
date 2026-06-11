@@ -146,10 +146,8 @@ export class CharacterScene extends Phaser.Scene {
     panelBg.strokeRoundedRect(0, 0, panelW, panelH, 12)
     panel.add(panelBg)
 
-    // Wizard portrait
-    const wizard = this.add.graphics()
-    this.drawWizardPortrait(wizard, panelW / 2, 150)
-    panel.add(wizard)
+    // Character portrait — the player's front-facing sprite
+    this.addCharacterPortrait(panel, panelW / 2, 150)
 
     // Level badge (updated from stats)
     const levelY = 300
@@ -466,37 +464,20 @@ export class CharacterScene extends Phaser.Scene {
     }
   }
 
-  private drawWizardPortrait(g: Phaser.GameObjects.Graphics, cx: number, cy: number) {
-    const scale = 2.6
-    const ox = cx - 16 * scale
-    const oy = cy - 24 * scale
-    const s = (x: number, y: number): [number, number] => [ox + x * scale, oy + y * scale]
+  /** The player's own front-facing character sprite (same art as the overworld
+   *  avatar), added to the given panel container at local (cx, cy). */
+  private addCharacterPortrait(
+    container: Phaser.GameObjects.Container, cx: number, cy: number,
+  ) {
+    const shadow = this.add.graphics()
+    shadow.fillStyle(0x000000, 0.18)
+    shadow.fillEllipse(cx, cy + 70, 72, 12)
+    container.add(shadow)
 
-    g.fillStyle(0x4b0082, 1)
-    const [rb1x, rb1y] = s(7, 22)
-    g.fillRect(rb1x, rb1y, 18 * scale, 22 * scale)
-    g.fillStyle(0x3a006f, 1)
-    g.fillTriangle(...s(7, 44), ...s(0, 48), ...s(14, 44))
-    g.fillTriangle(...s(25, 44), ...s(32, 48), ...s(18, 44))
-    g.fillStyle(0xffd700, 1)
-    const [bx, by] = s(7, 34)
-    g.fillRect(bx, by, 18 * scale, 3 * scale)
-    g.fillStyle(0xffe0b2, 1)
-    g.fillCircle(...s(16, 16), 9 * scale)
-    g.fillStyle(0x1a1a2e, 1)
-    g.fillCircle(...s(13, 15), 2 * scale)
-    g.fillCircle(...s(20, 15), 2 * scale)
-    g.fillStyle(0x1a0050, 1)
-    g.fillEllipse(...s(16, 9), 24 * scale, 7 * scale)
-    g.fillStyle(0x2d0080, 1)
-    g.fillTriangle(...s(16, 0), ...s(7, 10), ...s(25, 10))
-    g.fillStyle(0xffd700, 1)
-    g.fillTriangle(...s(16, 1), ...s(14, 4), ...s(18, 4))
-    g.fillTriangle(...s(16, 7), ...s(14, 4), ...s(18, 4))
-    g.fillStyle(0x8b6914, 1)
-    const [sfx, sfy] = s(27, 10)
-    g.fillRect(sfx, sfy, 3 * scale, 36 * scale)
-    g.fillStyle(0x00ccff, 0.9)
-    g.fillCircle(...s(28, 9), 5 * scale)
+    if (this.textures.exists('character_idle')) {
+      const hero = this.add.sprite(cx, cy, 'character_idle', 12).setScale(3)
+      if (this.anims.exists('idle_down')) hero.play('idle_down')
+      container.add(hero)
+    }
   }
 }

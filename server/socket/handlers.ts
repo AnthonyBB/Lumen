@@ -37,7 +37,7 @@ import type {
   ItemRarity,
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
-import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
+import { EQUIPMENT_MAP, ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
 import { rollCombatDrops, DIFFICULTIES, type Difficulty } from '../game/loot.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
@@ -1069,6 +1069,9 @@ export function registerHandlers(
     'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
   ]);
 
+  // Valid attribute-filter values (the generated-gear attribute/bonus types).
+  const MARKET_ATTRIBUTES: ReadonlySet<string> = new Set(ATTRIBUTE_TYPES);
+
   // Synthetic seller for items sold to the system. Items sold this way stay on
   // the market (priced like a player listing, 2× base) so they — and any other
   // player — can buy them back. The space makes it impossible to collide with a
@@ -1149,21 +1152,39 @@ export function registerHandlers(
   };
 
   // ── market:get_listings ──────────────────────────────────────────────────
-  socket.on('market:get_listings', (payload: { slot?: unknown; search?: unknown }) => {
-    const player = requireJoinedPlayer('You must join before browsing the market.');
-    if (!player) return;
+  socket.on(
+    'market:get_listings',
+    (payload: { slot?: unknown; search?: unknown; attribute?: unknown }) => {
+      const player = requireJoinedPlayer('You must join before browsing the market.');
+      if (!player) return;
 
-    const slot =
-      typeof payload?.slot === 'string' && MARKET_SLOTS.has(payload.slot)
-        ? payload.slot
+      // slot omitted / unknown (e.g. the "All" tab) → no slot filter.
+      const slot =
+        typeof payload?.slot === 'string' && MARKET_SLOTS.has(payload.slot)
+          ? payload.slot
+          : undefined;
+      const search = typeof payload?.search === 'string' ? payload.search : '';
+      const attribute =
+        typeof payload?.attribute === 'string' && MARKET_ATTRIBUTES.has(payload.attribute)
+          ? payload.attribute
+          : undefined;
+
+      // Compose the search predicate with the attribute-presence filter; a
+      // listing must satisfy BOTH to appear.
+      const searchPred = buildSearchPredicate(search);
+      const attrPred = attribute
+        ? (l: MarketListing) => (l.itemData.attributes ?? []).some((a) => a.type === attribute)
         : undefined;
-    const search = typeof payload?.search === 'string' ? payload.search : '';
-    const predicate = buildSearchPredicate(search);
+      const parts = [searchPred, attrPred].filter(
+        (p): p is (l: MarketListing) => boolean => !!p,
+      );
+      const predicate = parts.length ? (l: MarketListing) => parts.every((p) => p(l)) : undefined;
 
-    socket.emit('market:listings', {
-      listings: marketManager.getListings({ slot, predicate }),
-    });
-  });
+      socket.emit('market:listings', {
+        listings: marketManager.getListings({ slot, predicate }),
+      });
+    },
+  );
 
   // ── market:my_listings ─────────────────────────────────────────────────────
   socket.on('market:my_listings', () => {

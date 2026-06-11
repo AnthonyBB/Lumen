@@ -27,6 +27,7 @@ import {
   RL_ROCKS_BROWN, RL_ROCKS_BROWN_MOSS, RL_ROCKS_GRAY, RL_ROCKS_GRAY_MOSS, RL_ROCKS_WATER,
   TD_MONSTERS,
   CPD_BLADES, CPD_SPECKS, CPD_TUFTS, CPD_MOUNDS,
+  ROAD, ROAD_GRASS_TINT,
 } from '../data/tileFrames'
 import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
 
@@ -64,16 +65,24 @@ type PathState = 'idle' | 'walking' | 'encounter_pause' | 'complete'
 
 const WALK_SPEED = 180  // world-px per second
 
-// S-curve waypoints as fractions of world size
+// Winding waypoints as fractions of world size. Kept close together with a
+// gentle left/right sway (fx ≈ 0.44–0.56) so each right-angle leg stays short —
+// the trail reads as a continuously winding path rather than long straight
+// "corridor" legs. Still exactly 3 encounters, so the campaign is unchanged.
 const WP_DEFS: { fx: number; fy: number; type: PathNode['type'] }[] = [
-  { fx: 0.50, fy: 0.94, type: 'start'     },
-  { fx: 0.28, fy: 0.74, type: 'walk'      },
-  { fx: 0.55, fy: 0.55, type: 'encounter' },
-  { fx: 0.78, fy: 0.38, type: 'walk'      },
-  { fx: 0.45, fy: 0.22, type: 'encounter' },
-  { fx: 0.22, fy: 0.10, type: 'walk'      },
-  { fx: 0.55, fy: 0.04, type: 'encounter' },
-  { fx: 0.55, fy: 0.04, type: 'end'       },
+  { fx: 0.50, fy: 0.95, type: 'start'     },
+  { fx: 0.44, fy: 0.88, type: 'walk'      },
+  { fx: 0.55, fy: 0.81, type: 'walk'      },
+  { fx: 0.45, fy: 0.74, type: 'encounter' },
+  { fx: 0.56, fy: 0.66, type: 'walk'      },
+  { fx: 0.45, fy: 0.59, type: 'walk'      },
+  { fx: 0.55, fy: 0.51, type: 'encounter' },
+  { fx: 0.45, fy: 0.43, type: 'walk'      },
+  { fx: 0.55, fy: 0.35, type: 'walk'      },
+  { fx: 0.46, fy: 0.27, type: 'walk'      },
+  { fx: 0.55, fy: 0.18, type: 'encounter' },
+  { fx: 0.49, fy: 0.10, type: 'walk'      },
+  { fx: 0.50, fy: 0.04, type: 'end'       },
 ]
 
 // ── BiomeScene ─────────────────────────────────────────────────────────────
@@ -218,14 +227,52 @@ export class BiomeScene extends Phaser.Scene {
       }
       return node
     })
+
+    // Bend each diagonal leg into a right angle by inserting a corner node, so
+    // the path reads as straight axis-aligned segments (which the road pack
+    // autotiles cleanly) while staying winding.  The auto-walker follows the
+    // corners, so movement still tracks the drawn road.  H-first vs V-first is
+    // seeded, keeping the per-biome route deterministic but varied.
+    this.pathNodes = this.insertPathCorners(this.pathNodes)
   }
 
+  /** Insert an axis-aligned corner between any two diagonally-offset nodes. */
+  private insertPathCorners(nodes: PathNode[]): PathNode[] {
+    const out: PathNode[] = []
+    for (let i = 0; i < nodes.length; i++) {
+      out.push(nodes[i])
+      const a = nodes[i]
+      const b = nodes[i + 1]
+      if (!b) break
+      if (a.x === b.x || a.y === b.y) continue   // already straight — no corner
+      const hFirst = this.rng.frac() < 0.5
+      out.push({
+        x: hFirst ? b.x : a.x,
+        y: hFirst ? a.y : b.y,
+        type: 'walk', cleared: false,
+        markerGfx: null, markerLabel: null, markerSprite: null,
+      })
+    }
+    return out
+  }
+
+  // Path grid: 48px cells (16px tile × 3); a 3-cell-wide road is ~144px across,
+  // comfortably wider than the 2× player sprite.
+  private static readonly PATH_CELL = 48
+  private static readonly PATH_HALF = 1
+
   private drawPath() {
-    for (let i = 0; i < this.pathNodes.length - 1; i++) {
-      const a = this.pathNodes[i]
-      const b = this.pathNodes[i + 1]
-      if (a.x === b.x && a.y === b.y) continue
-      this.drawPathBetweenWaypoints(a.x, a.y, b.x, b.y)
+    const mask = this.buildPathMask()
+    if (this.textures.exists('road_body')) {
+      const rt = this.add.renderTexture(0, 0, WORLD_W, WORLD_H).setOrigin(0).setDepth(2)
+      this.renderRoads(rt, mask)
+    } else {
+      // Fallback: stamp plain dirt tiles along the mask if the road pack is absent.
+      const CELL = BiomeScene.PATH_CELL
+      mask.forEach((row, r) => row.forEach((on, c) => {
+        if (on) this.add.image(c * CELL + CELL / 2, r * CELL + CELL / 2, 'roguelike',
+          (c + r) % 3 === 0 ? RL_DIRT2 : RL_DIRT).setScale(4).setDepth(2)
+      }))
     }
 
     this.pathNodes.forEach((node, i) => {
@@ -234,15 +281,66 @@ export class BiomeScene extends Phaser.Scene {
     })
   }
 
-  private drawPathBetweenWaypoints(x1: number, y1: number, x2: number, y2: number) {
-    const dist = Phaser.Math.Distance.Between(x1, y1, x2, y2)
-    const steps = Math.floor(dist / 48)
-    for (let i = 0; i <= steps; i++) {
-      const t = steps === 0 ? 0 : i / steps
-      const px = Phaser.Math.Linear(x1, x2, t)
-      const py = Phaser.Math.Linear(y1, y2, t)
-      this.add.image(px, py, 'roguelike', i % 3 === 0 ? RL_DIRT2 : RL_DIRT)
-        .setScale(4).setDepth(2)
+  /** Rasterize the (now axis-aligned) path segments into a boolean cell grid. */
+  private buildPathMask(): boolean[][] {
+    const CELL = BiomeScene.PATH_CELL
+    const HALF = BiomeScene.PATH_HALF
+    const cols = Math.floor(WORLD_W / CELL)
+    const rows = Math.floor(WORLD_H / CELL)
+    const mask: boolean[][] = Array.from({ length: rows }, () => new Array<boolean>(cols).fill(false))
+    const mark = (c: number, r: number) => {
+      if (r >= 0 && r < rows && c >= 0 && c < cols) mask[r][c] = true
+    }
+    const stroke = (x1: number, y1: number, x2: number, y2: number) => {
+      const c1 = Math.round(x1 / CELL), r1 = Math.round(y1 / CELL)
+      const c2 = Math.round(x2 / CELL), r2 = Math.round(y2 / CELL)
+      if (r1 === r2) {
+        for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++)
+          for (let d = -HALF; d <= HALF; d++) mark(c, r1 + d)
+      } else {
+        for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++)
+          for (let d = -HALF; d <= HALF; d++) mark(c1 + d, r)
+      }
+    }
+    for (let i = 0; i < this.pathNodes.length - 1; i++) {
+      const a = this.pathNodes[i], b = this.pathNodes[i + 1]
+      if (a.x === b.x && a.y === b.y) continue
+      stroke(a.x, a.y, b.x, b.y)
+    }
+    return mask
+  }
+
+  /** Autotile the path mask with the CraftPix road pack — opaque cobble body
+   *  plus a grass-overhang fringe, frame picked by which sides border grass.
+   *  Mirrors WorldScene's road renderer so the campaign matches the overworld. */
+  private renderRoads(rt: Phaser.GameObjects.RenderTexture, mask: boolean[][]) {
+    const CELL = BiomeScene.PATH_CELL
+    const rows = mask.length
+    const cols = mask[0].length
+    const scale = { scaleX: CELL / 16, scaleY: CELL / 16 }
+    const isP = (c: number, r: number) =>
+      r >= 0 && r < rows && c >= 0 && c < cols && mask[r][c]
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!mask[r][c]) continue
+        const n = !isP(c, r - 1), s = !isP(c, r + 1)
+        const w = !isP(c - 1, r), e = !isP(c + 1, r)
+        let frame: number
+        if (n && w) frame = ROAD.NW
+        else if (n && e) frame = ROAD.NE
+        else if (s && w) frame = ROAD.SW
+        else if (s && e) frame = ROAD.SE
+        else if (n) frame = ROAD.N
+        else if (s) frame = ROAD.S
+        else if (w) frame = ROAD.W
+        else if (e) frame = ROAD.E
+        else frame = ROAD.C[(c + r) % ROAD.C.length]
+        const px = c * CELL + CELL / 2
+        const py = r * CELL + CELL / 2
+        rt.stamp('road_body', frame, px, py, scale)
+        rt.stamp('road_fringe', frame, px, py, { ...scale, tint: ROAD_GRASS_TINT })
+      }
     }
   }
 

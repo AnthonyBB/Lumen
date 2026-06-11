@@ -123,6 +123,12 @@ export const ROAD = {
   SW: rd(0, 25),   SE: rd(8, 25),
 } as const
 
+// Multiplicative tint applied to the road pack's grass-overhang fringe so its
+// bright spring-green darkens to sit with the world's olive grass (base
+// 0x9cba5f). Pale green ⇒ a gentle darken/desaturate; lower it toward 0x9cba5f
+// for a stronger match, raise it toward white to keep more of the pack's green.
+export const ROAD_GRASS_TINT = 0xb6cf85
+
 // ── CraftPix grassland: Details.png decal sheet ─────────────────────────────
 // 192×224, 16px tiles, 12 cols × 14 rows. Small alpha decals stamped over the
 // flat grass fill — this is how the pack's own demo map gets its texture.

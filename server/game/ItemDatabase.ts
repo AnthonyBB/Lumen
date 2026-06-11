@@ -216,15 +216,16 @@ const CORE_ATTRS = new Set(['strength', 'constitution', 'dexterity', 'intelligen
 
 /**
  * The ids of ~3 generated starter items — picked deterministically from the
- * generated catalogue: the first zero-xp items (no XP gate) that carry at least
+ * generated catalogue: the first basic (common) items that carry at least
  * one core attribute bonus, each in a distinct equipment slot so the attribute
- * boosts are immediately visible across the paper doll.
+ * boosts are immediately visible across the paper doll.  (Gear no longer has an
+ * XP gate, so rarity — not xpRequired — keeps the starter kit suitably modest.)
  */
 function pickGeneratedStarterIds(): string[] {
   const ids: string[] = [];
   const usedSlots = new Set<EquipSlot>();
   for (const item of ALL_EQUIPMENT) {
-    if (item.xpRequired > 0) continue;
+    if (item.rarity !== 'common') continue;
     if (!item.attributes.some((a) => CORE_ATTRS.has(a.type))) continue;
     if (usedSlots.has(item.slot)) continue;
     usedSlots.add(item.slot);

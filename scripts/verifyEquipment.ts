@@ -11,7 +11,7 @@ const ALLOWED = new Set([
   'constitution', 'intelligence', 'dexterity', 'strength', 'spirit',
   'damage_bonus', 'healing_bonus', 'mp_regen',
   'fire_damage', 'ice_damage', 'lightning_damage', 'holy_damage', 'nature_damage',
-  'crit_chance', 'dot_bonus', 'aoe_bonus', 'xp_bonus', 'gold_find', 'debuff_resist',
+  'crit_chance', 'dot_bonus', 'aoe_bonus', 'gold_find', 'debuff_resist',
 ])
 
 const CLASSES = [
@@ -78,13 +78,10 @@ for (const c of CLASSES) {
 const names = new Set(items.map((i) => i.name))
 assert(names.size === items.length, `duplicate names: ${items.length - names.size}`)
 
-// 7. xp bands sane
-const xpByRarity: Record<string, number[]> = {}
-for (const it of items) (xpByRarity[it.rarity] ??= []).push(it.xpRequired)
-const legend = xpByRarity['legendary'] ?? []
-assert(Math.min(...legend) >= 20000 && Math.max(...legend) <= 60000, 'legendary xp out of band')
-const commons = xpByRarity['common'] ?? []
-assert(Math.max(...commons) <= 200, 'common xp out of band')
+// 7. no XP gate — gear carries no XP requirement, so every item must be 0
+for (const it of items) {
+  assert(it.xpRequired === 0, `${it.id} has a non-zero xpRequired (${it.xpRequired})`)
+}
 
 // 8. determinism across runs (re-import not possible in one process; regenerate)
 import { generateEquipment } from '../src/game/data/equipmentGen'
@@ -102,10 +99,8 @@ for (const it of items) rarityCount[it.rarity] = (rarityCount[it.rarity] ?? 0) +
 console.log('\nRarity distribution:')
 for (const r of RARITIES) {
   const n = rarityCount[r] ?? 0
-  const xs = xpByRarity[r] ?? [0]
   console.log(
-    `  ${r.padEnd(10)} ${String(n).padStart(4)}  (${((n / items.length) * 100).toFixed(1)}%)` +
-    `  xpRequired ${Math.min(...xs)}–${Math.max(...xs)}`,
+    `  ${r.padEnd(10)} ${String(n).padStart(4)}  (${((n / items.length) * 100).toFixed(1)}%)`,
   )
 }
 

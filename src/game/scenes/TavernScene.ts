@@ -94,6 +94,7 @@ export class TavernScene extends Phaser.Scene {
   private chatLog: { username: string; message: string; mine: boolean }[] = []
   private chatText!: Phaser.GameObjects.Text
   private chatInput: HTMLInputElement | null = null
+  private static readonly CHAT_INPUT_ID = 'lumen-tavern-chat'
 
   constructor() {
     super({ key: 'TavernScene' })
@@ -126,11 +127,12 @@ export class TavernScene extends Phaser.Scene {
     // and entirely clear of the right-hand chat panel (the room already ends
     // CHAT_W px short of the screen edge, so the room's own right border suffices).
     const border = 40
-    // The bar zone (shelves + counter + stools) now occupies the top ~210px
-    // below the wall band, and cushioned booths line the bottom wall; keep the
-    // walkable floor between them so the player never stands inside furniture.
+    // The bar zone (shelves + counter + stools) occupies the top ~210px below
+    // the wall band.  The bottom of the room is open floor EXCEPT the cushioned
+    // booth nook in the bottom-left corner — that's fenced off with its own
+    // collider below, so the bottom bound only needs to clear the stone border.
     const topClear = this.wallBand + 220   // below the bar stools
-    const bottomClear = 130                // above the bottom booths
+    const bottomClear = border             // just the bottom stone border
     this.physics.world.setBounds(
       this.roomX + border,
       this.roomY + topClear,
@@ -138,6 +140,17 @@ export class TavernScene extends Phaser.Scene {
       this.roomH - topClear - bottomClear,
     )
     this.player.setCollideWorldBounds(true)
+
+    // Fence off the cushioned booth nooks in BOTH bottom corners (built in
+    // buildInterior around boothY = roomY + roomH - 96) so the player can roam
+    // the open centre/exit lane but never stand on the cushions. Invisible
+    // static bodies match each nook's footprint.
+    const boothY = this.roomY + this.roomH - 96
+    for (const bx of [this.roomX + 196, this.roomX + this.roomW - 196]) {
+      const block = this.add.zone(bx, boothY - 4, 320, 150)
+      this.physics.add.existing(block, true)
+      this.physics.add.collider(this.player, block)
+    }
 
     this.cameras.main.setBounds(0, 0, GAME_WIDTH, GAME_HEIGHT)
     this.cameras.main.setZoom(1)
@@ -231,60 +244,67 @@ export class TavernScene extends Phaser.Scene {
     // higher ones naturally (kept within the 5–18 furniture band).
     const dy = (y: number) => 5 + Math.min(12, Math.max(0, (y - roomY) / roomH) * 12)
 
-    // ── The BAR — a tidy back-wall bar: bottle + wood shelves on the left, a
-    //    long golden counter in front, and the slatted keg rack off to the
-    //    right with clear floor around it (nothing blocking it). ──────────────
-    const barShelfY = roomY + this.wallBand + 30
-    this.addPiece('bottleShelf', roomX + 120, barShelfY,     3, 4)
-    this.addPiece('woodShelf',   roomX + 252, barShelfY + 4, 3, 4)
-    // Keg rack continues the back-bar wall, with clear floor in front (the
-    // barrel that used to block it is gone).
-    this.addPiece('kegStack',    roomX + 384, barShelfY + 4, 3, 4)
-    // Two counter segments make one long bar the patrons line up at.
+    // ── The BAR along the back wall: bottle + wood shelves, a long counter the
+    //    bartender works behind, and barrels stacked at the right end. ─────────
+    const barShelfY = roomY + this.wallBand + 26
+    this.addPiece('bottleShelf', roomX + 132, barShelfY,     3, 4)
+    this.addPiece('woodShelf',   roomX + 264, barShelfY + 4, 3, 4)
+    this.addPiece('kegStack',    roomX + 392, barShelfY + 4, 3, 4)
+    // Barrels stacked at the right end of the back bar.
+    this.addPiece('barrel', roomX + roomW - 152, barShelfY + 6,  3, 4)
+    this.addPiece('barrel', roomX + roomW - 96,  barShelfY + 20, 3, 5)
+
     const barCounterY = barShelfY + 104
-    this.addPiece('barCounter', roomX + 152, barCounterY, 3, 7)
-    this.addPiece('barCounter', roomX + 344, barCounterY, 3, 7)
-    // Stools tucked up to the counter (real stools, evenly spaced).
-    this.addPiece('chair', roomX + 150, barCounterY + 60, 3, 8)
-    this.addPiece('chair', roomX + 256, barCounterY + 60, 3, 8)
-    this.addPiece('chair', roomX + 362, barCounterY + 60, 3, 8)
+    this.addPiece('barCounter', roomX + 160, barCounterY, 3, 7)
+    this.addPiece('barCounter', roomX + 352, barCounterY, 3, 7)
 
-    // ── Communal tables with benches down the centre, on a long rug. ──────────
+    // The bartender — the only character in the room — works behind the counter,
+    // drawn below the counter's depth so it overlaps the waist down.
+    this.createBartender(roomX + 256, barCounterY - 6)
+
+    // Stools lined up at the front of the bar.
+    this.addPiece('chair', roomX + 150, barCounterY + 58, 3, 8)
+    this.addPiece('chair', roomX + 256, barCounterY + 58, 3, 8)
+    this.addPiece('chair', roomX + 362, barCounterY + 58, 3, 8)
+
+    // ── Two long communal tables down the centre on a rug. ────────────────────
     const midY = roomY + roomH * 0.56
-    this.addPiece('rug', cx - 30, midY + 24, 3.2, 4)     // rug sits under the tables
-    this.addPiece('communalTable', cx - 30, midY - 48, 3, dy(midY - 48))
-    this.addPiece('communalTable', cx - 30, midY + 84, 3, dy(midY + 84))
+    this.addPiece('rug', cx, midY + 12, 3.6, 4)
+    this.addPiece('communalTable', cx, midY - 52, 2.7, dy(midY - 52))
+    this.addPiece('communalTable', cx, midY + 70, 2.7, dy(midY + 70))
 
-    // ── Round tables + stools tucked into the right-hand side of the room. ────
-    const rightX = roomX + roomW - 140
-    this.addPiece('roundTable', rightX, roomY + this.wallBand + 96, 3, dy(roomY + this.wallBand + 96))
-    this.addPiece('chair',      rightX - 56, roomY + this.wallBand + 96, 3, 6)
-    this.addPiece('chair',      rightX + 56, roomY + this.wallBand + 150, 3, 7)
-    this.addPiece('roundTable', rightX, midY + 30, 3, dy(midY + 30))
-    this.addPiece('chair',      rightX - 56, midY + 30, 3, 8)
-    this.addPiece('chair',      rightX + 56, midY + 84, 3, 9)
+    // ── Round tables with stools flanking BOTH side walls. ────────────────────
+    const sideTop = roomY + this.wallBand + 252
+    const sideBot = midY + 100
+    for (const sx of [roomX + 116, roomX + roomW - 116]) {
+      this.addPiece('roundTable', sx, sideTop, 3, dy(sideTop))
+      this.addPiece('chair',      sx - 54, sideTop - 4, 3, dy(sideTop))
+      this.addPiece('chair',      sx + 54, sideTop + 50, 3, dy(sideTop + 50))
+      this.addPiece('roundTable', sx, sideBot, 3, dy(sideBot))
+      this.addPiece('chair',      sx - 54, sideBot - 4, 3, dy(sideBot))
+      this.addPiece('chair',      sx + 54, sideBot + 50, 3, dy(sideBot + 50))
+    }
 
-    // ── A cushioned booth nook in the bottom-left: two corner benches facing
-    //    each other across a small round table. ─────────────────────────────────
-    const boothY = roomY + roomH - 100
-    this.addPiece('booth',      roomX + 120, boothY, 3, dy(boothY))           // opens right
-    this.addPiece('roundTable', roomX + 210, boothY + 6, 1.8, dy(boothY) + 0.3) // table between
-    this.addPiece('boothR',     roomX + 300, boothY, 3, dy(boothY))           // opens left, faces it
+    // ── Cushioned booth nooks tucked into BOTH bottom corners (benches facing
+    //    across a small round table). ──────────────────────────────────────────
+    const boothY = roomY + roomH - 96
+    this.addPiece('booth',      roomX + 108, boothY, 3, dy(boothY))
+    this.addPiece('roundTable', roomX + 198, boothY + 6, 1.8, dy(boothY) + 0.3)
+    this.addPiece('boothR',     roomX + 288, boothY, 3, dy(boothY))
+    this.addPiece('booth',      roomX + roomW - 288, boothY, 3, dy(boothY))
+    this.addPiece('roundTable', roomX + roomW - 198, boothY + 6, 1.8, dy(boothY) + 0.3)
+    this.addPiece('boothR',     roomX + roomW - 108, boothY, 3, dy(boothY))
 
-    // ── A barrel tucked in the bottom-left corner. ────────────────────────────
-    this.addPiece('barrel', roomX + 60, roomY + roomH - 110, 3, dy(roomY + roomH - 110))
-
-    // ── Potted plants softening the corners. ──────────────────────────────────
-    this.addPiece('plant',     roomX + 64,          roomY + this.wallBand + 96, 3, 10)
-    this.addPiece('plantTall', roomX + roomW - 60,  roomY + roomH - 96,         3, 11)
-    this.addPiece('plant',     cx + 150,            roomY + roomH - 96,         3, 11)
+    // ── Potted plants softening the upper corners. ────────────────────────────
+    this.addPiece('plant',     roomX + 58,         roomY + this.wallBand + 60, 3, 10)
+    this.addPiece('plantTall', roomX + roomW - 58, roomY + this.wallBand + 60, 3, 10)
 
     // ── Hanging lanterns over the bar + tables, and a warm amber wash. ────────
-    this.addLantern(roomX + 200, roomY + this.wallBand + 14)
-    this.addLantern(roomX + 380, roomY + this.wallBand + 14)
-    this.addLantern(cx,          midY - 110)
-    this.addLantern(rightX,      roomY + this.wallBand + 14)
-    this.addLantern(roomX + 200, roomY + roomH - 150)
+    this.addLantern(roomX + 200,        roomY + this.wallBand + 14)
+    this.addLantern(roomX + 380,        roomY + this.wallBand + 14)
+    this.addLantern(cx,                 midY - 110)
+    this.addLantern(roomX + 116,        midY - 30)
+    this.addLantern(roomX + roomW - 116, midY - 30)
 
     const glow = this.add.graphics().setDepth(12)
     glow.fillStyle(0xff9933, 0.06)
@@ -299,6 +319,25 @@ export class TavernScene extends Phaser.Scene {
       fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffd27f',
       backgroundColor: '#00000088', padding: { x: 10, y: 4 },
     }).setOrigin(0.5, 0).setDepth(15)
+  }
+
+  /** The bartender — the only character in the room — standing behind the bar.
+   *  Drawn at depth 6 so the counter (depth 7) overlaps everything below the
+   *  waist, leaving the head and shoulders visible above the bar. */
+  private createBartender(x: number, y: number) {
+    const key = 'npc_drinks'   // the CraftPix "drinks trader" reads as a barkeep
+    if (this.textures.exists(key)) {
+      const keeper = this.add.sprite(x, y, key, 0).setOrigin(0.5, 1).setScale(2.1).setDepth(6)
+      if (this.anims.exists(`${key}_idle`)) {
+        keeper.play(`${key}_idle`)
+        keeper.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
+      }
+    } else {
+      // Fallback: a simple drawn figure if the sprite sheet is missing.
+      const g = this.add.graphics().setDepth(6)
+      g.fillStyle(0x6b4a2a, 1); g.fillRect(x - 11, y - 46, 22, 32)   // torso
+      g.fillStyle(0xffe0b2, 1); g.fillCircle(x, y - 52, 9)           // head
+    }
   }
 
   /** A small hanging lantern: a dark bracket with a warm glowing bulb. Drawn
@@ -462,7 +501,12 @@ export class TavernScene extends Phaser.Scene {
   }
 
   private buildChatInput() {
+    // Remove any stray prior input (e.g. orphaned by a dev HMR reload or a
+    // recreated Phaser game) so exactly one overlay ever exists.
+    document.getElementById(TavernScene.CHAT_INPUT_ID)?.remove()
+
     const input = document.createElement('input')
+    input.id = TavernScene.CHAT_INPUT_ID
     input.type = 'text'
     input.placeholder = 'Say something…'
     input.maxLength = 200
@@ -569,10 +613,10 @@ export class TavernScene extends Phaser.Scene {
   private cleanup() {
     this.remotePlayers.forEach((rp) => { rp.sprite.destroy(); rp.label.destroy() })
     this.remotePlayers.clear()
-    if (this.chatInput) {
-      this.chatInput.remove()
-      this.chatInput = null
-    }
+    this.chatInput?.remove()
+    this.chatInput = null
+    // Belt-and-suspenders: also clear any element left under the stable id.
+    document.getElementById(TavernScene.CHAT_INPUT_ID)?.remove()
   }
 
   update() {

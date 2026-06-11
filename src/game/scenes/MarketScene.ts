@@ -17,7 +17,7 @@ import {
   type ClientInventoryItem,
   type ClientPlayerInventory,
 } from '../systems/InventoryStore'
-import { EQUIPMENT_MAP, type EquipSlot } from '../data/equipmentGen'
+import { EQUIPMENT_MAP, ATTRIBUTE_TYPES, type EquipSlot, type AttributeType } from '../data/equipmentGen'
 
 // ── Types mirroring the server's MarketListing snapshot ─────────────────────
 
@@ -66,8 +66,10 @@ const RARITY_COLOR: Record<string, number> = {
   legendary: 0xffaa00,
 }
 
-// The 8 market tabs == generated EquipSlot values.
-const TABS: { slot: EquipSlot; label: string }[] = [
+// 'all' shows every slot; the rest == generated EquipSlot values.
+type TabSlot = EquipSlot | 'all'
+const TABS: { slot: TabSlot; label: string }[] = [
+  { slot: 'all', label: 'All' },
   { slot: 'weapon', label: 'Weapon' },
   { slot: 'helmet', label: 'Helmet' },
   { slot: 'chest', label: 'Chest' },
@@ -77,6 +79,11 @@ const TABS: { slot: EquipSlot; label: string }[] = [
   { slot: 'ring', label: 'Ring' },
   { slot: 'amulet', label: 'Amulet' },
 ]
+
+/** Friendly label for an attribute type, e.g. fire_damage → "Fire Damage". */
+function attrTypeLabel(type: string): string {
+  return type.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
 
 const RARITY_VALUE: Record<string, number> = {
   common: 10, uncommon: 25, rare: 60, epic: 140, legendary: 320,
@@ -100,7 +107,9 @@ export class MarketScene extends Phaser.Scene {
   // UI state
   private mode: Mode = 'buy'
   private sellView: SellView = 'items'
-  private activeSlot: EquipSlot = 'weapon'
+  private activeSlot: TabSlot = 'all'
+  private attrFilter: AttributeType | null = null
+  private attrMenu: Phaser.GameObjects.Container | null = null
   private search = ''
   private scrollOffset = 0
 
@@ -111,7 +120,7 @@ export class MarketScene extends Phaser.Scene {
   private searchText!: Phaser.GameObjects.Text
   private silverText!: Phaser.GameObjects.Text
 
-  private htmlInput: HTMLInputElement | null = null
+  private searchDebounce = 0
   private modalOpen = false
 
   constructor() {
@@ -122,7 +131,9 @@ export class MarketScene extends Phaser.Scene {
     this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
     this.mode = 'buy'
     this.sellView = 'items'
-    this.activeSlot = 'weapon'
+    this.activeSlot = 'all'
+    this.attrFilter = null
+    this.attrMenu = null
     this.search = ''
     this.scrollOffset = 0
     this.modalOpen = false
@@ -137,7 +148,11 @@ export class MarketScene extends Phaser.Scene {
       backgroundColor: '#000000aa', padding: { x: 10, y: 4 },
     }).setOrigin(0.5, 1).setDepth(60).setVisible(false)
 
-    this.buildSearchInput()
+    // Search is captured via Phaser keyboard (no HTML overlay → nothing to
+    // misalign under FIT scaling or orphan across scene/game restarts). Clear
+    // any stray input left by the old DOM-overlay implementation.
+    document.getElementById(MarketScene.SEARCH_INPUT_ID)?.remove()
+    this.input.keyboard!.on('keydown', this.onSearchKey, this)
 
     // ── Server state subscriptions ─────────────────────────────────────────
     const unsubInv = InventoryStore.onUpdate((inv) => {
@@ -182,7 +197,7 @@ export class MarketScene extends Phaser.Scene {
       this.socket?.off('market:cancelled', onCancelled)
       this.socket?.off('currency:update', onCurrency)
       this.socket?.off('error', onError)
-      this.destroySearchInput()
+      this.input.keyboard?.off('keydown', this.onSearchKey, this)
     })
 
     // Seed from whatever we already have, then ask the server for fresh data.
@@ -193,12 +208,14 @@ export class MarketScene extends Phaser.Scene {
 
     this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
       if (this.modalOpen) return
+      if (this.attrMenu) { this.closeAttrMenu(); return }
       this.scrollOffset = Math.max(0, this.scrollOffset + Math.sign(dy))
       this.rebuildList()
     })
 
     this.input.keyboard!.on('keydown-ESC', () => {
       if (this.modalOpen) return
+      if (this.attrMenu) { this.closeAttrMenu(); return }
       this.closeScene()
     })
 
@@ -206,7 +223,6 @@ export class MarketScene extends Phaser.Scene {
   }
 
   private closeScene() {
-    this.destroySearchInput()
     this.scene.stop('MarketScene')
     this.scene.resume('WorldScene')
   }
@@ -217,7 +233,12 @@ export class MarketScene extends Phaser.Scene {
     if (this.mode === 'sell' && this.sellView === 'mine') {
       this.socket?.emit('market:my_listings')
     } else {
-      this.socket?.emit('market:get_listings', { slot: this.activeSlot, search: this.search })
+      this.socket?.emit('market:get_listings', {
+        // 'all' → omit slot so the server returns every slot.
+        slot: this.activeSlot === 'all' ? undefined : this.activeSlot,
+        search: this.search,
+        attribute: this.attrFilter ?? undefined,
+      })
     }
   }
 
@@ -273,6 +294,7 @@ export class MarketScene extends Phaser.Scene {
   // ── Chrome: mode toggle + tabs + search ─────────────────────────────────
 
   private drawChrome() {
+    this.closeAttrMenu()
     this.chromeContainer.removeAll(true)
 
     // Mode toggle (BUY / SELL)
@@ -302,11 +324,12 @@ export class MarketScene extends Phaser.Scene {
       }, 120)
     }
 
-    // Item-type tabs
+    // Item-type tabs (All + 8 slots)
     const tabY = 120
-    const tabW = (PANEL_W - 7 * 6) / 8
+    const gap = 6
+    const tabW = (PANEL_W - (TABS.length - 1) * gap) / TABS.length
     TABS.forEach((tab, i) => {
-      const x = PANEL_X + i * (tabW + 6)
+      const x = PANEL_X + i * (tabW + gap)
       this.makeTab(tab.label, x, tabY, tabW, this.activeSlot === tab.slot, () => {
         if (this.activeSlot === tab.slot) return
         this.activeSlot = tab.slot; this.scrollOffset = 0
@@ -316,7 +339,7 @@ export class MarketScene extends Phaser.Scene {
       })
     })
 
-    // Search box (HTML input is positioned over this frame)
+    // Search box — typed via Phaser keyboard (see onSearchKey)
     const searchY = 166
     const sg = this.add.graphics()
     sg.fillStyle(COLOR_PANEL_ALT, 1)
@@ -329,13 +352,135 @@ export class MarketScene extends Phaser.Scene {
         fontSize: '11px', fontFamily: 'Arial, sans-serif', color: TEXT_DIM,
       }).setOrigin(0, 0.5))
 
-    // The HTML overlay shows the live text; this Phaser text is a fallback.
+    // Live typed text (or the placeholder when empty).
     this.searchText = this.add.text(PANEL_X + 10, searchY + 15, this.search || 'Search…', {
       fontSize: '13px', fontFamily: 'Arial, sans-serif',
       color: this.search ? TEXT_WHITE : TEXT_DIM,
     }).setOrigin(0, 0.5)
     this.chromeContainer.add(this.searchText)
-    this.positionSearchInput(PANEL_X, searchY, 420, 30)
+
+    // Attribute filter dropdown (right-aligned on the search row).
+    const attrW = 240
+    const attrX = PANEL_X + PANEL_W - attrW
+    this.makeAttrFilter(attrX, searchY, attrW)
+  }
+
+  /** The "Attribute: …" dropdown button; opens a popup menu of attribute types. */
+  private makeAttrFilter(x: number, y: number, w: number) {
+    const h = 30
+    const active = this.attrFilter !== null
+    const label = `Attribute: ${active ? attrTypeLabel(this.attrFilter!) : 'Any'}  ▾`
+
+    const g = this.add.graphics()
+    g.fillStyle(active ? COLOR_GOLD : COLOR_PANEL_ALT, active ? 0.9 : 1)
+    g.fillRoundedRect(x, y, w, h, 6)
+    g.lineStyle(1, COLOR_GOLD, active ? 1 : 0.5)
+    g.strokeRoundedRect(x, y, w, h, 6)
+    this.chromeContainer.add(g)
+    this.chromeContainer.add(this.add.text(x + w / 2, y + h / 2, label, {
+      fontSize: '13px', fontFamily: 'Arial, sans-serif',
+      color: active ? '#1a1a2e' : TEXT_GRAY, fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+
+    // Quick clear "✕" when a filter is active.
+    if (active) {
+      const cx = x + w - 16
+      this.chromeContainer.add(this.add.text(cx, y + h / 2, '✕', {
+        fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#1a1a2e', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5))
+      const clearHit = this.add.rectangle(cx, y + h / 2, 24, h, 0, 0)
+        .setInteractive({ useHandCursor: true })
+      clearHit.on('pointerdown', () => this.setAttrFilter(null))
+      this.chromeContainer.add(clearHit)
+      // The main hit covers everything left of the clear button.
+      const mainHit = this.add.rectangle(x + (w - 28) / 2, y + h / 2, w - 28, h, 0, 0)
+        .setInteractive({ useHandCursor: true })
+      mainHit.on('pointerdown', () => this.toggleAttrMenu(x, y + h + 4, w))
+      this.chromeContainer.add(mainHit)
+    } else {
+      const hit = this.add.rectangle(x + w / 2, y + h / 2, w, h, 0, 0)
+        .setInteractive({ useHandCursor: true })
+      hit.on('pointerdown', () => this.toggleAttrMenu(x, y + h + 4, w))
+      this.chromeContainer.add(hit)
+    }
+  }
+
+  private setAttrFilter(attr: AttributeType | null) {
+    this.closeAttrMenu()
+    if (this.attrFilter === attr) return
+    this.attrFilter = attr
+    this.scrollOffset = 0
+    this.drawChrome()
+    if (!(this.mode === 'sell' && this.sellView === 'mine')) this.requestListings()
+    this.rebuildList()
+  }
+
+  private toggleAttrMenu(x: number, y: number, anchorW: number) {
+    if (this.attrMenu) { this.closeAttrMenu(); return }
+    this.openAttrMenu(x, y, anchorW)
+  }
+
+  private closeAttrMenu() {
+    this.attrMenu?.destroy()
+    this.attrMenu = null
+  }
+
+  /** Popup grid of "Any" + all attribute types, anchored under the dropdown. */
+  private openAttrMenu(anchorX: number, anchorY: number, anchorW: number) {
+    const overlay = this.add.container(0, 0).setDepth(90)
+
+    // Click-away shade closes the menu.
+    const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.01)
+      .setOrigin(0, 0).setInteractive()
+    shade.on('pointerdown', () => this.closeAttrMenu())
+    overlay.add(shade)
+
+    const options: { label: string; value: AttributeType | null }[] = [
+      { label: 'Any', value: null },
+      ...ATTRIBUTE_TYPES.map((t) => ({ label: attrTypeLabel(t), value: t as AttributeType })),
+    ]
+    // Two columns to stay compact.
+    const cols = 2
+    const rows = Math.ceil(options.length / cols)
+    const cellW = 210
+    const cellH = 26
+    const pad = 8
+    const menuW = cols * cellW + pad * 2
+    // Right-align the menu with the dropdown so it never runs off-screen.
+    const menuX = Math.min(anchorX + anchorW - menuW, GAME_WIDTH - menuW - 8)
+    const menuH = rows * cellH + pad * 2
+    const menuY = anchorY
+
+    const bg = this.add.graphics()
+    bg.fillStyle(COLOR_PANEL, 1)
+    bg.fillRoundedRect(menuX, menuY, menuW, menuH, 8)
+    bg.lineStyle(1, COLOR_GOLD, 0.8)
+    bg.strokeRoundedRect(menuX, menuY, menuW, menuH, 8)
+    overlay.add(bg)
+
+    options.forEach((opt, i) => {
+      const c = i % cols
+      const r = Math.floor(i / cols)
+      const ox = menuX + pad + c * cellW
+      const oy = menuY + pad + r * cellH
+      const selected = this.attrFilter === opt.value
+      const cell = this.add.graphics()
+      cell.fillStyle(selected ? COLOR_GOLD : COLOR_PANEL_ALT, selected ? 0.9 : 0.0)
+      if (selected) cell.fillRoundedRect(ox, oy, cellW - 4, cellH - 2, 4)
+      overlay.add(cell)
+      overlay.add(this.add.text(ox + 8, oy + (cellH - 2) / 2, opt.label, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif',
+        color: selected ? '#1a1a2e' : TEXT_WHITE,
+      }).setOrigin(0, 0.5))
+      const hit = this.add.rectangle(ox + (cellW - 4) / 2, oy + (cellH - 2) / 2, cellW - 4, cellH - 2, 0, 0)
+        .setInteractive({ useHandCursor: true })
+      hit.on('pointerover', () => { if (!selected) { cell.clear(); cell.fillStyle(COLOR_HOVER, 1); cell.fillRoundedRect(ox, oy, cellW - 4, cellH - 2, 4) } })
+      hit.on('pointerout', () => { if (!selected) cell.clear() })
+      hit.on('pointerdown', () => this.setAttrFilter(opt.value))
+      overlay.add(hit)
+    })
+
+    this.attrMenu = overlay
   }
 
   private makeToggle(
@@ -380,60 +525,31 @@ export class MarketScene extends Phaser.Scene {
     this.chromeContainer.add(hit)
   }
 
-  // ── HTML search input overlay ───────────────────────────────────────────
+  // ── Search input (Phaser keyboard, no DOM overlay) ───────────────────────
 
-  private buildSearchInput() {
-    const input = document.createElement('input')
-    input.type = 'text'
-    input.placeholder = 'Search…'
-    input.maxLength = 40
-    Object.assign(input.style, {
-      position: 'absolute', zIndex: '40', boxSizing: 'border-box',
-      background: 'transparent', border: 'none', outline: 'none',
-      color: '#ffffff', font: '13px Arial, sans-serif', padding: '0 10px',
-    } as Partial<CSSStyleDeclaration>)
-    let debounce = 0
-    input.addEventListener('input', () => {
-      this.search = input.value
-      this.searchText.setText(this.search || 'Search…')
-        .setColor(this.search ? TEXT_WHITE : TEXT_DIM)
-      window.clearTimeout(debounce)
-      debounce = window.setTimeout(() => {
-        if (!(this.mode === 'sell' && this.sellView === 'mine')) this.requestListings()
-        else this.rebuildList()
-      }, 250)
-    })
-    // Don't let game keys (ESC handled here) pass to Phaser while typing.
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { input.blur(); this.closeScene() }
-      e.stopPropagation()
-    })
-    const parent = this.game.canvas.parentElement ?? document.body
-    parent.appendChild(input)
-    this.htmlInput = input
-  }
+  // Legacy DOM-overlay id — kept only so create() can sweep any stray element
+  // left behind by a previous build of this scene.
+  private static readonly SEARCH_INPUT_ID = 'lumen-market-search'
 
-  /** Position the overlay input to line up with the canvas-space search frame. */
-  private positionSearchInput(x: number, y: number, w: number, h: number) {
-    const input = this.htmlInput
-    if (!input) return
-    const canvas = this.game.canvas
-    const rect = canvas.getBoundingClientRect()
-    const scaleX = rect.width / GAME_WIDTH
-    const scaleY = rect.height / GAME_HEIGHT
-    Object.assign(input.style, {
-      left: `${rect.left + window.scrollX + x * scaleX}px`,
-      top: `${rect.top + window.scrollY + y * scaleY}px`,
-      width: `${w * scaleX}px`,
-      height: `${h * scaleY}px`,
-    } as Partial<CSSStyleDeclaration>)
-  }
-
-  private destroySearchInput() {
-    if (this.htmlInput) {
-      this.htmlInput.remove()
-      this.htmlInput = null
+  /** Edit the search string from raw keyboard input while the market is open. */
+  private onSearchKey(event: KeyboardEvent) {
+    if (this.modalOpen || this.attrMenu) return
+    const key = event.key
+    if (key === 'Backspace') {
+      if (!this.search) return
+      this.search = this.search.slice(0, -1)
+    } else if (key.length === 1 && this.search.length < 40) {
+      this.search += key                       // printable char (letters, digits, space, > + …)
+    } else {
+      return                                   // ignore Enter/Tab/arrows/modifiers
     }
+    this.searchText.setText(this.search || 'Search…')
+      .setColor(this.search ? TEXT_WHITE : TEXT_DIM)
+    window.clearTimeout(this.searchDebounce)
+    this.searchDebounce = window.setTimeout(() => {
+      if (!(this.mode === 'sell' && this.sellView === 'mine')) this.requestListings()
+      else this.rebuildList()
+    }, 250)
   }
 
   // ── List rendering ────────────────────────────────────────────────────────
@@ -482,17 +598,38 @@ export class MarketScene extends Phaser.Scene {
       return this.listings.map((l) => (y: number) => this.drawBuyRow(l, y))
     }
     if (this.sellView === 'mine') {
-      return this.myListings.map((l) => (y: number) => this.drawMyListingRow(l, y))
+      // Buy listings are filtered server-side; My Listings is a local list, so
+      // apply the attribute filter here for consistency.
+      return this.myListings
+        .filter((l) => this.listingHasAttr(l))
+        .map((l) => (y: number) => this.drawMyListingRow(l, y))
     }
-    // Sell items: own bag, filtered to the active tab slot.
-    const items = (this.inventory?.items ?? []).filter((it) => this.sellableInSlot(it))
+    // Sell items: own bag, filtered to the active tab slot + attribute filter.
+    const items = (this.inventory?.items ?? [])
+      .filter((it) => this.sellableInSlot(it) && this.bagItemHasAttr(it))
     return items.map((it) => (y: number) => this.drawSellRow(it, y))
   }
 
-  /** True when a bag item is sellable AND belongs to the active tab's slot. */
+  /** True when a bag item is sellable AND matches the active tab ('all' = any slot). */
   private sellableInSlot(item: ClientInventoryItem): boolean {
     const slot = this.slotOf(item)
-    return slot === this.activeSlot
+    if (!slot) return false
+    return this.activeSlot === 'all' || slot === this.activeSlot
+  }
+
+  /** Attribute-filter test for a market listing (no filter ⇒ always true). */
+  private listingHasAttr(l: MarketListing): boolean {
+    if (!this.attrFilter) return true
+    const gen = EQUIPMENT_MAP[l.itemType]
+    const attrs = gen ? gen.attributes : (l.itemData.attributes ?? [])
+    return attrs.some((a) => a.type === this.attrFilter)
+  }
+
+  /** Attribute-filter test for a bag item (no filter ⇒ always true). */
+  private bagItemHasAttr(item: ClientInventoryItem): boolean {
+    if (!this.attrFilter) return true
+    const gen = EQUIPMENT_MAP[item.itemType]
+    return !!gen && gen.attributes.some((a) => a.type === this.attrFilter)
   }
 
   /** The market slot for a bag item (generated gear has an exact slot). */
@@ -536,6 +673,12 @@ export class MarketScene extends Phaser.Scene {
 
   private attrLabel(type: string): string {
     return type.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+  }
+
+  /** Live catalogue icon for generated gear (so emoji fixes apply to already
+   *  listed items whose snapshot carries a stale glyph), else the snapshot icon. */
+  private iconFor(itemType: string, fallback: string): string {
+    return EQUIPMENT_MAP[itemType]?.icon ?? fallback
   }
 
   // ── Row drawers ───────────────────────────────────────────────────────────
@@ -607,7 +750,7 @@ export class MarketScene extends Phaser.Scene {
   private drawBuyRow(l: MarketListing, y: number) {
     const rarName = l.itemData.rarity.charAt(0).toUpperCase() + l.itemData.rarity.slice(1)
     this.drawRowFrame(
-      l.itemData.icon, l.itemData.rarity, l.itemData.name,
+      this.iconFor(l.itemType, l.itemData.icon), l.itemData.rarity, l.itemData.name,
       `${rarName}  ·  seller: ${l.sellerUsername}`,
       this.bonusSummary(l.itemData), y,
     )
@@ -639,7 +782,7 @@ export class MarketScene extends Phaser.Scene {
       attributes: EQUIPMENT_MAP[item.itemType]?.attributes,
     }
     this.drawRowFrame(
-      item.icon, item.rarity, item.name, rarName, this.bonusSummary(dataForModal), y,
+      this.iconFor(item.itemType, item.icon), item.rarity, item.name, rarName, this.bonusSummary(dataForModal), y,
     )
     const w = PANEL_W
     // Sell to system (base)
@@ -661,7 +804,7 @@ export class MarketScene extends Phaser.Scene {
   private drawMyListingRow(l: MarketListing, y: number) {
     const rarName = l.itemData.rarity.charAt(0).toUpperCase() + l.itemData.rarity.slice(1)
     this.drawRowFrame(
-      l.itemData.icon, l.itemData.rarity, l.itemData.name,
+      this.iconFor(l.itemType, l.itemData.icon), l.itemData.rarity, l.itemData.name,
       `${rarName}  ·  listed`, this.bonusSummary(l.itemData), y,
     )
     const w = PANEL_W
@@ -716,7 +859,7 @@ export class MarketScene extends Phaser.Scene {
     ib.lineStyle(2, rarCol, 0.9)
     ib.strokeRoundedRect(mx + 30, my + 56, 60, 60, 8)
     overlay.add(ib)
-    overlay.add(this.add.text(mx + 60, my + 86, data.icon, { fontSize: '32px' }).setOrigin(0.5, 0.5))
+    overlay.add(this.add.text(mx + 60, my + 86, this.iconFor(data.itemType, data.icon), { fontSize: '32px' }).setOrigin(0.5, 0.5))
     overlay.add(this.add.text(mx + 104, my + 62, data.name, {
       fontSize: '15px', fontFamily: 'Georgia, serif', color: '#dde0ff', fontStyle: 'bold',
       wordWrap: { width: mw - 130 },

@@ -23,18 +23,13 @@ export class Building extends Phaser.GameObjects.Container {
     const textureKey = textureMap[label] ?? 'building_learning'
 
     // Worn-dirt apron under the footprint so the building sits ON the ground
+    // (grounds the building without a drop shadow).
     const apron = scene.add.graphics()
     apron.fillStyle(0x9c7a50, 0.30)
     apron.fillEllipse(0, height / 2 - 6, width * 1.15, 36)
     apron.fillStyle(0x8a6a44, 0.25)
     apron.fillEllipse(0, height / 2 - 6, width * 0.9, 26)
     this.add(apron)
-
-    // Contact shadow hugging the base edge (no gap — a gap reads as floating)
-    const shadow = scene.add.graphics()
-    shadow.fillStyle(0x000000, 0.28)
-    shadow.fillEllipse(0, height / 2 - 4, width * 0.96, 14)
-    this.add(shadow)
 
     // Building image
     const img = scene.add.image(0, 0, textureKey)

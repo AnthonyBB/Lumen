@@ -318,7 +318,8 @@ export class WorldScene extends Phaser.Scene {
     })
 
     // ── Chest ─────────────────────────────────────────────────────────────────
-    this.add.image(this.chestPos.x, this.chestPos.y, 'chest').setDepth(4).setScale(2)
+    // Treasure chest sprite is 200×160; ~0.6× renders it ~120px wide.
+    this.add.image(this.chestPos.x, this.chestPos.y, 'chest').setDepth(4).setScale(0.6)
 
     this.add.text(this.chestPos.x, this.chestPos.y - 56, 'Chest', {
       fontSize: '13px',

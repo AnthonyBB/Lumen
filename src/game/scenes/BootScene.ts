@@ -81,7 +81,7 @@ export class BootScene extends Phaser.Scene {
     // (trees and rocks now come from the Kenney packs above)
 
     // ── CHEST (keep existing SVG) ────────────────────────────────────────────────
-    this.load.image('chest', '/assets/sprites/chest.svg')
+    this.load.image('chest', '/assets/craftpix/props/treasure_chest.png')
 
     // ── SHADOW (programmatic — 40x8 ellipse) ────────────────────────────────────
     const shadowGfx = this.make.graphics({ x: 0, y: 0 })

@@ -1,7 +1,7 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import { STRATEGIES, STRATEGY_PRESETS, CombatStrategy, StrategyPreset } from '../data/combatStrategies'
+import { STRATEGIES, CombatStrategy } from '../data/combatStrategies'
 
 // Display copy of the server's Combat Shard pricing (server enforces the real price)
 const STRATEGY_PRICE = 2
@@ -46,12 +46,44 @@ const TD_MERCHANT_NPC = td(1, 7)
 // Station tables are drawn with Graphics (drawCounter) — the tile pack's
 // furniture frames turned out to be fence/cart pieces, not tables.
 
+// ── Strategy categories ─────────────────────────────────────────────────────
+// The merchant groups strategies by purpose rather than by preset bundle.
+// Derived client-side (display only) so the data files / server stay untouched.
+type StrategyCategory = 'attack' | 'defense' | 'support' | 'utility'
+
+const STRATEGY_CATEGORY: Record<string, StrategyCategory> = {
+  // Attack — offence: finishers, focus fire, bursts, AoE
+  finish_them: 'attack', group_threat: 'attack', overwhelming_numbers: 'attack',
+  opener_fireball: 'attack', early_poison: 'attack', late_game_burst: 'attack',
+  high_hp_pressure: 'attack', focus_wounded: 'attack', high_threat_focus: 'attack',
+  lightning_strike: 'attack', lucky_strike: 'attack', opportunist: 'attack',
+  berserker_rage: 'attack', relentless_assault: 'attack', sustained_pressure: 'attack',
+  // Defense — survival stances
+  mp_conservation: 'defense', mp_critical_defend: 'defense',
+  defensive_posture: 'defense', iron_will: 'defense',
+  // Support — heals, rescues, cleanses, buffs
+  emergency_heal: 'support', critical_heal: 'support', debuff_counter: 'support',
+  support_heal: 'support', ally_critical_rescue: 'support', opening_buff: 'support',
+  comfortable_heal: 'support', endurance_heal: 'support',
+  // Utility — control, dispels, wildcards
+  crowd_control: 'utility', debuff_strip: 'utility', wild_card: 'utility',
+}
+
+const categoryOf = (id: string): StrategyCategory => STRATEGY_CATEGORY[id] ?? 'utility'
+
+const CATEGORY_META: { key: StrategyCategory; label: string; icon: string; desc: string }[] = [
+  { key: 'attack',  label: 'Attack',  icon: '⚔️', desc: 'Offence — finishers, focus fire, bursts and AoE.' },
+  { key: 'defense', label: 'Defense', icon: '🛡️', desc: 'Defensive stances and survival under pressure.' },
+  { key: 'support', label: 'Support', icon: '💚', desc: 'Heals, rescues, cleanses and buffs.' },
+  { key: 'utility', label: 'Utility', icon: '✨', desc: 'Crowd control, dispels and wildcards.' },
+]
+
 type HallView = 'room' | 'merchant' | 'teacher'
 
 export class StrategyScene extends Phaser.Scene {
   private view: HallView = 'room'
 
-  private selectedPreset: StrategyPreset | null = null
+  private selectedCategory: StrategyCategory = 'attack'
   private selectedStrategy: CombatStrategy | null = null
 
   // Server-reported shop state — only ever updated from 'shop:unlocks' /
@@ -90,7 +122,7 @@ export class StrategyScene extends Phaser.Scene {
 
   create() {
     this.view = 'room'
-    this.selectedPreset = null
+    this.selectedCategory = 'attack'
     this.selectedStrategy = null
     this.ownedPage = 0
 
@@ -197,9 +229,6 @@ export class StrategyScene extends Phaser.Scene {
     this.view = 'merchant'
     this.clearAllViews()
     this.escLabel.setText('ESC  Back')
-    if (!this.selectedPreset && STRATEGY_PRESETS.length > 0) {
-      this.selectedPreset = STRATEGY_PRESETS[0]
-    }
     this.drawLeftPanel()
     this.drawRightPanel()
   }
@@ -475,7 +504,7 @@ export class StrategyScene extends Phaser.Scene {
     this.leftContainer.add(hdrG)
 
     this.leftContainer.add(
-      this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + 19, 'MERCHANT — STRATEGY PRESETS', {
+      this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_TOP + 19, 'MERCHANT — STRATEGY TYPES', {
         fontSize: '13px',
         fontFamily: 'Arial, sans-serif',
         color: COLOR_TEXT_GOLD,
@@ -490,13 +519,14 @@ export class StrategyScene extends Phaser.Scene {
     div.lineBetween(LEFT_PANEL_X + 10, PANEL_TOP + 38, LEFT_PANEL_X + LEFT_PANEL_W - 10, PANEL_TOP + 38)
     this.leftContainer.add(div)
 
-    // Preset list
+    // Category list
     const listStartY = PANEL_TOP + 54
     const itemH = 68
 
-    STRATEGY_PRESETS.forEach((preset, index) => {
+    CATEGORY_META.forEach((cat, index) => {
+      const count = STRATEGIES.filter(s => categoryOf(s.id) === cat.key).length
       const itemY = listStartY + index * (itemH + 8)
-      const btn = this.createPresetButton(preset, LEFT_PANEL_X + 12, itemY, LEFT_PANEL_W - 24, itemH)
+      const btn = this.createCategoryButton(cat, count, LEFT_PANEL_X + 12, itemY, LEFT_PANEL_W - 24, itemH)
       this.leftContainer.add(btn)
     })
 
@@ -513,8 +543,9 @@ export class StrategyScene extends Phaser.Scene {
     )
   }
 
-  private createPresetButton(
-    preset: StrategyPreset,
+  private createCategoryButton(
+    cat: { key: StrategyCategory; label: string; icon: string; desc: string },
+    count: number,
     x: number,
     y: number,
     w: number,
@@ -522,23 +553,23 @@ export class StrategyScene extends Phaser.Scene {
   ): Phaser.GameObjects.Container {
     const container = this.add.container(x, y)
 
-    const isSelected = this.selectedPreset?.id === preset.id
+    const isSelected = this.selectedCategory === cat.key
 
     const bg = this.add.graphics()
     this.drawPresetButtonBg(bg, 0, 0, w, h, isSelected)
 
-    const iconText = this.add.text(12, h / 2, preset.icon, {
+    const iconText = this.add.text(12, h / 2, cat.icon, {
       fontSize: '22px',
     }).setOrigin(0, 0.5)
 
-    const nameText = this.add.text(48, h / 2 - 9, preset.name, {
+    const nameText = this.add.text(48, h / 2 - 9, cat.label, {
       fontSize: '15px',
       fontFamily: 'Georgia, serif',
       color: isSelected ? COLOR_TEXT_GOLD : COLOR_TEXT_WHITE,
       fontStyle: isSelected ? 'bold' : 'normal',
     }).setOrigin(0, 0.5)
 
-    const countText = this.add.text(48, h / 2 + 9, `${preset.strategies.length} rules`, {
+    const countText = this.add.text(48, h / 2 + 9, `${count} strategies`, {
       fontSize: '11px',
       fontFamily: 'Arial, sans-serif',
       color: COLOR_TEXT_DIM,
@@ -550,21 +581,21 @@ export class StrategyScene extends Phaser.Scene {
     const hit = this.add.zone(0, 0, w, h).setOrigin(0, 0)
     hit.setInteractive({ useHandCursor: true })
     hit.on('pointerover', () => {
-      if (this.selectedPreset?.id !== preset.id) {
+      if (this.selectedCategory !== cat.key) {
         bg.clear()
         this.drawPresetButtonBg(bg, 0, 0, w, h, false, true)
         nameText.setColor(COLOR_TEXT_GOLD)
       }
     })
     hit.on('pointerout', () => {
-      if (this.selectedPreset?.id !== preset.id) {
+      if (this.selectedCategory !== cat.key) {
         bg.clear()
         this.drawPresetButtonBg(bg, 0, 0, w, h, false)
         nameText.setColor(COLOR_TEXT_WHITE)
       }
     })
     hit.on('pointerdown', () => {
-      this.selectPreset(preset)
+      this.selectCategory(cat.key)
     })
     container.add(hit)
 
@@ -591,11 +622,12 @@ export class StrategyScene extends Phaser.Scene {
     this.rightInfoContainer.removeAll(true)
     this.rightListContainer.removeAll(true)
 
-    if (!this.selectedPreset) return
+    const cat = CATEGORY_META.find(c => c.key === this.selectedCategory)!
+    const catStrategies = STRATEGIES
+      .filter(s => categoryOf(s.id) === cat.key)
+      .sort((a, b) => a.priority - b.priority)
 
-    const preset = this.selectedPreset
-
-    // ── Top area: preset info ─────────────────────────────────────────────────
+    // ── Top area: category info ───────────────────────────────────────────────
     const infoH = 160
     const infoG = this.add.graphics()
     infoG.fillStyle(COLOR_PANEL, 1)
@@ -604,9 +636,9 @@ export class StrategyScene extends Phaser.Scene {
     infoG.strokeRoundedRect(RIGHT_PANEL_X, PANEL_TOP, RIGHT_PANEL_W, infoH, 8)
     this.rightInfoContainer.add(infoG)
 
-    // Preset name + icon
+    // Category name + icon
     this.rightInfoContainer.add(
-      this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 28, `${preset.icon}  ${preset.name}`, {
+      this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 28, `${cat.icon}  ${cat.label} Strategies`, {
         fontSize: '22px',
         fontFamily: 'Georgia, serif',
         color: COLOR_TEXT_GOLD,
@@ -616,7 +648,7 @@ export class StrategyScene extends Phaser.Scene {
 
     // Description
     this.rightInfoContainer.add(
-      this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 60, preset.description, {
+      this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 60, cat.desc, {
         fontSize: '13px',
         fontFamily: 'Arial, sans-serif',
         color: COLOR_TEXT_GRAY,
@@ -627,7 +659,7 @@ export class StrategyScene extends Phaser.Scene {
 
     // Strategy count
     this.rightInfoContainer.add(
-      this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 118, `Contains ${preset.strategies.length} rules  ·  Click a rule for details`, {
+      this.add.text(RIGHT_PANEL_X + 20, PANEL_TOP + 118, `${catStrategies.length} strategies  ·  buy the ones you like, then arrange them at the Teacher`, {
         fontSize: '11px',
         fontFamily: 'Arial, sans-serif',
         color: COLOR_TEXT_DIM,
@@ -651,7 +683,7 @@ export class StrategyScene extends Phaser.Scene {
     this.rightListContainer.add(listHdrG)
 
     this.rightListContainer.add(
-      this.add.text(RIGHT_PANEL_X + 20, listY + 18, 'RULES IN THIS PRESET  (suggested priority — buy the ones you like)', {
+      this.add.text(RIGHT_PANEL_X + 20, listY + 18, `${cat.label.toUpperCase()} STRATEGIES  ·  click a row for details`, {
         fontSize: '11px',
         fontFamily: 'Arial, sans-serif',
         color: COLOR_TEXT_GOLD,
@@ -664,16 +696,10 @@ export class StrategyScene extends Phaser.Scene {
     divLine.lineBetween(RIGHT_PANEL_X + 10, listY + 36, RIGHT_PANEL_X + RIGHT_PANEL_W - 10, listY + 36)
     this.rightListContainer.add(divLine)
 
-    // Sort strategies by priority
-    const presetStrategies = preset.strategies
-      .map(id => STRATEGIES.find(s => s.id === id))
-      .filter((s): s is NonNullable<typeof s> => s !== undefined)
-      .sort((a, b) => a.priority - b.priority)
-
     const itemH  = 44
     const startY = listY + 46
 
-    presetStrategies.forEach((strategy, index) => {
+    catStrategies.forEach((strategy, index) => {
       const iy = startY + index * (itemH + 4)
       if (iy + itemH > listY + listH - 10) return // clamp to panel
 
@@ -728,19 +754,8 @@ export class StrategyScene extends Phaser.Scene {
 
     // Ownership badge (server-reported): owned ✓ or a Buy button (2 🔶)
     const owned = this.unlockedStrategies.has(strategy.id)
-    const badgeW = 74
 
-    // Action badge (shifted left to make room for the ownership badge)
-    const actionLabel = this.formatAction(strategy)
-    const actionText = this.add.text(w - badgeW - 20, h / 2, actionLabel, {
-      fontSize: '11px',
-      fontFamily: 'Arial, sans-serif',
-      color: this.actionColor(strategy.action),
-      backgroundColor: '#0a0a22',
-      padding: { x: 5, y: 3 },
-    }).setOrigin(1, 0.5)
-
-    container.add([bg, rankBadge, rankText, nameText, condText, actionText])
+    container.add([bg, rankBadge, rankText, nameText, condText])
 
     // Row hit zone — added BEFORE the Buy button so the button (added later,
     // therefore on top) actually receives its clicks. Phaser routes input to
@@ -1250,8 +1265,8 @@ export class StrategyScene extends Phaser.Scene {
     this.time.delayedCall(2600, () => this.feedbackText.setVisible(false))
   }
 
-  private selectPreset(preset: StrategyPreset) {
-    this.selectedPreset = preset
+  private selectCategory(category: StrategyCategory) {
+    this.selectedCategory = category
     this.selectedStrategy = null
     this.tooltipContainer.setVisible(false)
     this.drawLeftPanel()

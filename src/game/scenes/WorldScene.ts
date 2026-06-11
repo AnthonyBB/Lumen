@@ -489,9 +489,9 @@ export class WorldScene extends Phaser.Scene {
    *     the outside edge;
    *  3. pebble/dirt-clod decals scattered over the interior so the dirt reads
    *     as textured ground rather than a flat brown stripe;
-   *  4. grass-blade decals straddling both edges, so the dirt/grass boundary
-   *     is softened with overhanging grass like the pack's demo map (rather
-   *     than a hard rim). All verified against a rendered simulation. */
+   *  4. a THICK grass lip on both edges — dense grass-tuft clumps plus
+   *     occasional small bushes — reproducing the lush overgrown border of
+   *     the pack's own paths. All verified against a rendered simulation. */
   private stampTrail(
     rt: Phaser.GameObjects.RenderTexture,
     centerline: (t: number) => { x: number; y: number },
@@ -504,16 +504,18 @@ export class WorldScene extends Phaser.Scene {
       length += Math.hypot(p.x - prev.x, p.y - prev.y)
       prev = p
     }
-    // Blobs at 1× (≈48px) every 8px give a skinny footpath like the demo map;
-    // step finely so the smaller blobs still overlap into a continuous ribbon.
     const steps = Math.max(8, Math.ceil(length / 8))
-    const scale = { scaleX: 1, scaleY: 1 }
+    const scale = { scaleX: 1, scaleY: 1 }        // decals
+    const bodyScale = { scaleX: 2, scaleY: 2 }    // dirt body (≈96px wide path)
 
+    // Pass 1: the fringed organic dirt blob along the centerline
     for (let i = 0; i <= steps; i++) {
       const p = centerline(i / steps)
-      rt.stamp('cp_ground', 'trail_blob', p.x, p.y, scale)
+      rt.stamp('cp_ground', 'trail_blob', p.x, p.y, bodyScale)
     }
 
+    // Pass 2: fill the ribbon interior with solid dirt so the blob fringe
+    // survives only on the OUTSIDE edge (3 stamps perpendicular to the tangent)
     for (let i = 0; i <= steps; i++) {
       const t = i / steps
       const p = centerline(t)
@@ -523,8 +525,8 @@ export class WorldScene extends Phaser.Scene {
       const len = Math.max(1, Math.hypot(dx, dy))
       const nx = -dy / len
       const ny = dx / len
-      for (const o of [-8, 0, 8]) {
-        rt.stamp('cp_ground', CP_DIRT, p.x + nx * o, p.y + ny * o, scale)
+      for (const o of [-14, 0, 14]) {
+        rt.stamp('cp_ground', CP_DIRT, p.x + nx * o, p.y + ny * o, bodyScale)
       }
     }
 
@@ -546,8 +548,12 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Pass 4: grassy overgrowth straddling both edges (~20px out from center)
+    // Pass 4: a THICK lush grass lip straddling both edges — dense grass-tuft
+    // clumps (stamped onto the texture) with occasional small bushes (separate
+    // sprites) — this is what gives the overgrown grassy border of the pack's
+    // own paths, rather than a thin fringe. Verified against a simulation.
     const edgeRand = this.rng(steps * 31 + 7)
+    const tuftKeys = ['cp_tuft1', 'cp_tuft2']
     for (let i = 0; i <= steps; i++) {
       const t = i / steps
       const p = centerline(t)
@@ -558,11 +564,18 @@ export class WorldScene extends Phaser.Scene {
       const nx = -dy / len
       const ny = dx / len
       for (const side of [-1, 1]) {
-        if (edgeRand() < 0.6) {
-          const o = side * (16 + edgeRand() * 8)
-          const frame = CPD_BLADES[Math.floor(edgeRand() * CPD_BLADES.length)]
-          rt.stamp('cp_details', frame, p.x + nx * o, p.y + ny * o, { scaleX: 2, scaleY: 2 })
+        if (edgeRand() < 0.78) {
+          const o = side * (28 + edgeRand() * 12)
+          const key = tuftKeys[Math.floor(edgeRand() * tuftKeys.length)]
+          rt.stamp(key, undefined, p.x + nx * o, p.y + ny * o, { scaleX: 2, scaleY: 2 })
         }
+      }
+      // Occasional small bush accent sitting on the grassy edge (own sprite)
+      if (i % 3 === 0 && edgeRand() < 0.16) {
+        const side = edgeRand() < 0.5 ? -1 : 1
+        const o = side * (42 + edgeRand() * 16)
+        const bush = `cp_bush${1 + Math.floor(edgeRand() * 6)}`
+        this.add.image(p.x + nx * o, p.y + ny * o, bush).setScale(1.1 + edgeRand() * 0.4).setDepth(2)
       }
     }
   }

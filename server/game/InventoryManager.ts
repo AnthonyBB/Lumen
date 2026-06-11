@@ -80,6 +80,13 @@ export class InventoryManager {
    * Call this when a player connects / logs in.
    */
   async loadInventory(userId: string, socketId?: string): Promise<void> {
+    // Record the stable username FIRST — before any early return — so that
+    // persistInventory() writes under the username even for a brand-new player
+    // whose document doesn't exist yet (and for the createInventory() that
+    // follows). Without this, a new player's inventory (and any shards earned)
+    // would persist under the ephemeral socket id and be lost on reconnect.
+    if (socketId) this.socketToUser.set(socketId, userId);
+
     if (!isDbConnected()) return;
 
     try {
@@ -96,9 +103,6 @@ export class InventoryManager {
       };
 
       this.inventories.set(storeKey, inventory);
-
-      // Record the stable username so persistence always uses the right key
-      if (socketId) this.socketToUser.set(socketId, userId);
 
       // ── Migration: legacy Shards of Knowledge → Skill Shards ──────────────
       // Converts any old shard_of_knowledge stack(s) into an equivalent

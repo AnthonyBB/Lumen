@@ -12,6 +12,7 @@ import { QuestionEngine } from './QuestionEngine.js';
 import { LearningSessionManager } from './LearningSessionManager.js';
 import { InventoryManager } from './InventoryManager.js';
 import { ChestManager } from './ChestManager.js';
+import { MarketManager } from './MarketManager.js';
 
 /** Known zones in the game world. */
 const STARTING_ZONES: string[] = ['town', 'forest', 'dungeon', 'academy'];
@@ -22,6 +23,7 @@ export class GameManager {
   public readonly learningSessionManager: LearningSessionManager;
   public readonly inventoryManager: InventoryManager;
   public readonly chestManager: ChestManager;
+  public readonly marketManager: MarketManager;
 
   /** zoneId → Zone */
   private zones: Map<string, Zone> = new Map();
@@ -32,6 +34,7 @@ export class GameManager {
     this.learningSessionManager = new LearningSessionManager(this.questionEngine, this.playerManager);
     this.inventoryManager = new InventoryManager();
     this.chestManager = new ChestManager(this.inventoryManager);
+    this.marketManager = new MarketManager();
 
     // Initialise all known zones
     for (const id of STARTING_ZONES) {

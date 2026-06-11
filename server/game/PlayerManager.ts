@@ -184,6 +184,15 @@ export class PlayerManager {
     return this.players.get(socketId);
   }
 
+  /**
+   * Find the socket id of an ONLINE player by username (case-insensitive), or
+   * null if they are not currently connected.  Used to credit an online seller's
+   * in-memory balance at the Market.
+   */
+  getSocketIdByUsername(username: string): string | null {
+    return this.usernameLookup.get(username.toLowerCase()) ?? null;
+  }
+
   // -------------------------------------------------------------------------
   // Mutations (server-authoritative)
   // -------------------------------------------------------------------------

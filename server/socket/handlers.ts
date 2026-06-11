@@ -33,10 +33,19 @@ import type {
   Subject,
   CharacterAllocatePayload,
   AttributeKey,
+  InventoryItem,
+  ItemRarity,
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
-import { getItemSlot } from '../game/ItemDatabase.js';
+import { getItemSlot, createItem } from '../game/ItemDatabase.js';
+import {
+  marketPrice,
+  buildItemSnapshot,
+  type MarketListing,
+} from '../game/MarketManager.js';
+import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
+import { randomUUID } from 'crypto';
 import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
 import {
   QUIZ_COMPLETE_SKILL_SHARDS,
@@ -991,6 +1000,284 @@ export function registerHandlers(
     const updatedInventory = inventoryManager.getInventory(socket.id)!;
     const updatedChest = chestManager.getChest(payload.chestId)!;
     socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
+  });
+
+  // ── Market ─────────────────────────────────────────────────────────────────
+  //
+  // Player-driven market.  Everything is server-authoritative: prices come from
+  // marketPrice() (server catalog), balances from PlayerManager, ownership from
+  // the server inventory, and listings persist in MongoDB (MarketManager).  The
+  // client only sends item-instance ids / listing ids and renders pushed state.
+
+  const { marketManager } = game;
+
+  /** The 8 market tabs (== generated EquipSlot values). */
+  const MARKET_SLOTS: ReadonlySet<string> = new Set([
+    'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
+  ]);
+
+  /**
+   * Parse a search string into either a NAME substring match or an ATTRIBUTE
+   * filter.  An attribute filter looks like `<attrName> <op> <value>` where
+   *   op ∈ > < >= <= =,  value may have a leading '+',  attrName is one of the
+   *   generated-gear attribute / bonus types (case-insensitive, spaces→'_').
+   * Anything that does not match that grammar is treated as a name substring.
+   */
+  const buildSearchPredicate = (
+    rawSearch: string,
+  ): ((l: MarketListing) => boolean) | undefined => {
+    const search = rawSearch.trim();
+    if (!search) return undefined;
+
+    const m = search.match(/^([a-zA-Z][a-zA-Z _]*?)\s*(>=|<=|=|>|<)\s*\+?(-?\d+(?:\.\d+)?)$/);
+    if (m) {
+      const attrName = m[1].trim().toLowerCase().replace(/\s+/g, '_');
+      const op = m[2];
+      const value = parseFloat(m[3]);
+      const cmp = (a: number): boolean => {
+        switch (op) {
+          case '>': return a > value;
+          case '<': return a < value;
+          case '>=': return a >= value;
+          case '<=': return a <= value;
+          case '=': return a === value;
+          default: return false;
+        }
+      };
+      return (l) => {
+        const attrs = l.itemData.attributes ?? [];
+        // Match the named attribute; a listing satisfies the filter if it has
+        // that attribute AND its value satisfies the comparison.
+        return attrs.some((a) => a.type.toLowerCase() === attrName && cmp(a.value));
+      };
+    }
+
+    // Plain name substring match (case-insensitive).
+    const needle = search.toLowerCase();
+    return (l) => l.itemData.name.toLowerCase().includes(needle);
+  };
+
+  /**
+   * Rehydrate a fresh bag InventoryItem from a listing snapshot.  A NEW UUID is
+   * stamped (the snapshot id belonged to the seller's instance).  Generated
+   * gear keeps its eq_NNNN itemType so EQUIPMENT_MAP lookups (equip/stats) work;
+   * legacy items are rebuilt from the ItemDatabase template when possible so the
+   * canonical stats are restored, falling back to the snapshot.
+   */
+  const itemFromSnapshot = (data: MarketListing['itemData']): InventoryItem => {
+    const legacy = createItem(data.itemType);
+    if (legacy) {
+      legacy.id = randomUUID();
+      return legacy;
+    }
+    return {
+      id: randomUUID(),
+      itemType: data.itemType,
+      name: data.name,
+      description: data.description ?? '',
+      rarity: data.rarity as ItemRarity,
+      stats: { ...(data.stats ?? {}) },
+      quantity: 1,
+      stackable: false,
+      icon: data.icon,
+    };
+  };
+
+  /** Push the player's own active listings as a `market:listings`. */
+  const pushMyListings = (username: string): void => {
+    socket.emit('market:listings', { listings: marketManager.listingsBySeller(username) });
+  };
+
+  // ── market:get_listings ──────────────────────────────────────────────────
+  socket.on('market:get_listings', (payload: { slot?: unknown; search?: unknown }) => {
+    const player = requireJoinedPlayer('You must join before browsing the market.');
+    if (!player) return;
+
+    const slot =
+      typeof payload?.slot === 'string' && MARKET_SLOTS.has(payload.slot)
+        ? payload.slot
+        : undefined;
+    const search = typeof payload?.search === 'string' ? payload.search : '';
+    const predicate = buildSearchPredicate(search);
+
+    socket.emit('market:listings', {
+      listings: marketManager.getListings({ slot, predicate }),
+    });
+  });
+
+  // ── market:my_listings ─────────────────────────────────────────────────────
+  socket.on('market:my_listings', () => {
+    const player = requireJoinedPlayer('You must join before viewing your listings.');
+    if (!player) return;
+    pushMyListings(player.username);
+  });
+
+  // ── market:list — list a bag item for other players (2× base) ──────────────
+  socket.on('market:list', (payload: { itemInstanceId?: unknown }) => {
+    if (typeof payload?.itemInstanceId !== 'string') {
+      socket.emit('error', { message: 'Invalid market list payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before selling items.');
+    if (!player) return;
+
+    const inv = inventoryManager.getInventory(socket.id);
+    const bagItem = inv?.items.find((i) => i.id === payload.itemInstanceId);
+    if (!inv || !bagItem) {
+      socket.emit('error', { message: 'You do not own that item.' });
+      return;
+    }
+
+    const price = 2 * marketPrice(bagItem);
+    const snapshot = buildItemSnapshot(bagItem);
+
+    // Remove from the bag FIRST so a player can never list the same instance
+    // twice; only then create the listing.
+    if (!inventoryManager.removeItem(socket.id, bagItem.id)) {
+      socket.emit('error', { message: 'Could not list that item.' });
+      return;
+    }
+    const listing = marketManager.createListing(player.username, snapshot, price);
+
+    pushInventoryUpdate();
+    socket.emit('market:listed', { listing });
+    console.log(`[market] ${player.username} listed ${snapshot.name} for ${price} silver`);
+  });
+
+  // ── market:sell_to_system — instant sell for base silver ───────────────────
+  socket.on('market:sell_to_system', (payload: { itemInstanceId?: unknown }) => {
+    if (typeof payload?.itemInstanceId !== 'string') {
+      socket.emit('error', { message: 'Invalid sell payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before selling items.');
+    if (!player) return;
+
+    const inv = inventoryManager.getInventory(socket.id);
+    const bagItem = inv?.items.find((i) => i.id === payload.itemInstanceId);
+    if (!inv || !bagItem) {
+      socket.emit('error', { message: 'You do not own that item.' });
+      return;
+    }
+
+    const base = marketPrice(bagItem);
+    if (!inventoryManager.removeItem(socket.id, bagItem.id)) {
+      socket.emit('error', { message: 'Could not sell that item.' });
+      return;
+    }
+    playerManager.addSilver(socket.id, base);
+
+    pushInventoryUpdate();
+    pushCurrency();
+    socket.emit('market:sold', { silver: base });
+    console.log(`[market] ${player.username} sold ${bagItem.name} to the system for ${base} silver`);
+  });
+
+  // ── market:buy — buy another player's listing ──────────────────────────────
+  //
+  // Server-authoritative validation, in order:
+  //  1. The listing must still exist.
+  //  2. The buyer must NOT be the seller (can't buy your own listing).
+  //  3. The buyer must have enough silver (getSilver >= price).
+  // Then, atomically from the buyer's view:
+  //  • spendSilver(buyer, price)  — fails closed if balance changed.
+  //  • add the rehydrated item to the buyer's bag.
+  //  • credit the seller `price` silver — works even if the seller is OFFLINE
+  //    (PlayerProgress $inc); if online, also update their in-memory balance and
+  //    push their currency.
+  //  • delete the listing (cache + DB).
+  socket.on('market:buy', async (payload: { listingId?: unknown }) => {
+    if (typeof payload?.listingId !== 'string') {
+      socket.emit('error', { message: 'Invalid buy payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before buying items.');
+    if (!player) return;
+
+    const listing = marketManager.getListing(payload.listingId);
+    if (!listing) {
+      socket.emit('error', { message: 'That listing is no longer available.' });
+      return;
+    }
+    if (listing.sellerUsername === player.username) {
+      socket.emit('error', { message: 'You cannot buy your own listing.' });
+      return;
+    }
+    if (playerManager.getSilver(socket.id) < listing.price) {
+      socket.emit('error', {
+        message: `Not enough silver — that costs ${listing.price} 🪙.`,
+      });
+      return;
+    }
+
+    // Take the silver first; spendSilver fails closed if the balance is short.
+    if (!playerManager.spendSilver(socket.id, listing.price)) {
+      socket.emit('error', { message: 'Not enough silver.' });
+      return;
+    }
+
+    // Hand the item to the buyer.
+    const newItem = itemFromSnapshot(listing.itemData);
+    inventoryManager.addItem(socket.id, newItem);
+
+    // Credit the seller — even if offline.
+    const sellerOnlineSocketId = playerManager.getSocketIdByUsername(listing.sellerUsername);
+    if (sellerOnlineSocketId) {
+      playerManager.addSilver(sellerOnlineSocketId, listing.price);
+      io.to(sellerOnlineSocketId).emit('currency:update', {
+        skillShards: playerManager.getSkillShards(sellerOnlineSocketId),
+        combatShards: playerManager.getCombatShards(sellerOnlineSocketId),
+        silver: playerManager.getSilver(sellerOnlineSocketId),
+      });
+    } else {
+      // Offline seller — credit directly in MongoDB. addSilver already persists
+      // for online sellers (it writes the in-memory balance through), so we only
+      // do the raw $inc when the seller is NOT online to avoid double-crediting.
+      PlayerProgress.findOneAndUpdate(
+        { userId: listing.sellerUsername },
+        { $inc: { silver: listing.price } },
+        { upsert: false },
+      ).catch((err) => console.error('[market] offline seller credit failed:', err));
+    }
+
+    // Remove the listing now the trade is done.
+    marketManager.removeListing(listing.listingId);
+
+    pushInventoryUpdate();
+    pushCurrency();
+    socket.emit('market:bought', { listingId: listing.listingId, item: newItem });
+    console.log(
+      `[market] ${player.username} bought ${listing.itemData.name} from ${listing.sellerUsername} for ${listing.price} silver`,
+    );
+  });
+
+  // ── market:cancel — pull your own listing and reclaim the item ─────────────
+  socket.on('market:cancel', (payload: { listingId?: unknown }) => {
+    if (typeof payload?.listingId !== 'string') {
+      socket.emit('error', { message: 'Invalid cancel payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before cancelling listings.');
+    if (!player) return;
+
+    const listing = marketManager.getListing(payload.listingId);
+    if (!listing) {
+      socket.emit('error', { message: 'That listing no longer exists.' });
+      return;
+    }
+    if (listing.sellerUsername !== player.username) {
+      socket.emit('error', { message: 'You can only cancel your own listings.' });
+      return;
+    }
+
+    // Return the item to the bag, then drop the listing.
+    const returned = itemFromSnapshot(listing.itemData);
+    inventoryManager.addItem(socket.id, returned);
+    marketManager.removeListing(listing.listingId);
+
+    pushInventoryUpdate();
+    socket.emit('market:cancelled', { listingId: listing.listingId });
+    console.log(`[market] ${player.username} cancelled listing for ${listing.itemData.name}`);
   });
 
   // ── disconnect ───────────────────────────────────────────────────────────

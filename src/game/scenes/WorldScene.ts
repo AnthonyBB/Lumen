@@ -1032,6 +1032,12 @@ export class WorldScene extends Phaser.Scene {
           this.scene.launch('SkillShopScene')
           return
         }
+        if (nearBuilding.label === 'Market') {
+          this.player.setVelocity(0, 0)
+          this.scene.pause('WorldScene')
+          this.scene.launch('MarketScene')
+          return
+        }
         this.openPopup(nearBuilding.label)
       }
     } else if (this.nearChest && !this.popupOpen) {

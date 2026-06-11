@@ -147,7 +147,9 @@ io.on('connection', (socket) => {
 // Start — connect DB then listen
 // ---------------------------------------------------------------------------
 
-connectDB().then(() => {
+connectDB().then(async () => {
+  // Load persisted market listings into memory now the DB is connected.
+  await game.marketManager.load()
   httpServer.listen(PORT, () => {
     console.log(`🌟 Lumen server running on http://localhost:${PORT}`)
     console.log(`   CORS origin: ${CLIENT_ORIGIN}`)

@@ -45,6 +45,9 @@ function normaliseSubjectGrades(raw: Partial<Record<Subject, number>> | undefine
 /** Pass count at which a topic counts as COMPLETE. */
 export const TOPIC_PASSES_TO_COMPLETE = 3;
 
+/** Skill shards granted for completing any quiz (effort reward, every test). */
+export const QUIZ_COMPLETE_SKILL_SHARDS = 1;
+
 /** Shard awards granted once per grade completion. */
 export const GRADE_COMPLETE_SKILL_SHARDS = 10;
 export const GRADE_COMPLETE_COMBAT_SHARDS = 5;

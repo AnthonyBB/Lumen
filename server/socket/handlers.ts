@@ -35,6 +35,7 @@ import type {
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
 import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
 import {
+  QUIZ_COMPLETE_SKILL_SHARDS,
   GRADE_COMPLETE_SKILL_SHARDS,
   GRADE_COMPLETE_COMBAT_SHARDS,
 } from '../game/PlayerManager.js';
@@ -419,11 +420,15 @@ export function registerHandlers(
       ? playerManager.getTopicPasses(socket.id, completedSession.topicId)
       : 0;
     let gradeCompleted = false;
-    let skillShardsAwarded = 0;
     let combatShardAwarded = 0;
     let newGrade = completedSession
       ? playerManager.getSubjectGrade(socket.id, completedSession.subject)
       : 1;
+
+    // Every completed quiz earns 1 skill shard (effort reward), regardless of
+    // pass/fail. Grade completion adds the larger bonus below.
+    let skillShardsAwarded = QUIZ_COMPLETE_SKILL_SHARDS;
+    inventoryManager.addCurrency(socket.id, 'skill_shard', QUIZ_COMPLETE_SKILL_SHARDS);
 
     if (passed && completedSession) {
       const { topicId, subject } = completedSession;
@@ -432,14 +437,14 @@ export function registerHandlers(
       // Did this pass complete BOTH topics of the subject's current grade?
       if (playerManager.isCurrentGradeComplete(socket.id, subject)) {
         gradeCompleted = true;
-        skillShardsAwarded = GRADE_COMPLETE_SKILL_SHARDS;
+        skillShardsAwarded += GRADE_COMPLETE_SKILL_SHARDS;
         combatShardAwarded = GRADE_COMPLETE_COMBAT_SHARDS;
-        inventoryManager.addCurrency(socket.id, 'skill_shard', skillShardsAwarded);
+        inventoryManager.addCurrency(socket.id, 'skill_shard', GRADE_COMPLETE_SKILL_SHARDS);
         inventoryManager.addCurrency(socket.id, 'combat_shard', combatShardAwarded);
         newGrade = playerManager.advanceSubjectGrade(socket.id, subject);
         console.log(
           `[learning] ${socket.id} completed grade in ${subject} → grade ${newGrade} ` +
-          `(+${skillShardsAwarded} skill, +${combatShardAwarded} combat shards)`,
+          `(+${GRADE_COMPLETE_SKILL_SHARDS} skill, +${combatShardAwarded} combat shards)`,
         );
       }
       playerManager.persistProgress(socket.id);

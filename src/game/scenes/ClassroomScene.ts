@@ -882,7 +882,7 @@ export class ClassroomScene extends Phaser.Scene {
     const passed = res.passed
     const gradeUp = res.gradeCompleted
     const W = 720
-    const H = 430 + this.questionResults.length * 36 + (gradeUp ? 110 : 0)
+    const H = 430 + this.questionResults.length * 36 + (gradeUp ? 110 : 30)
 
     const bg = this.add.graphics()
     bg.fillStyle(0x0c0c24, 0.98)
@@ -942,6 +942,16 @@ export class ClassroomScene extends Phaser.Scene {
       fontSize: '16px', fontFamily: 'Georgia, serif', color: done ? '#66ffaa' : '#bbbbff', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
     y += 40
+
+    // Per-quiz skill shard (every completed test earns 1). On a grade-up the
+    // total — including the grade bonus — is shown in the celebration instead.
+    if (!gradeUp && res.skillShardsAwarded > 0) {
+      this.resultsPanel.add(this.add.text(0, y,
+        `+${res.skillShardsAwarded} 🔷  Skill Shard earned!`, {
+        fontSize: '17px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5))
+      y += 32
+    }
 
     // Grade-up celebration (only when the server says both topics completed)
     if (gradeUp) {

@@ -11,6 +11,7 @@ dist-ssr
 # committed. Deployments need these copied in as a separate build step.
 graphics/
 public/assets/craftpix/
+public/assets/icons/
 
 # Claude Code local files and session artifacts
 .claude/worktrees/

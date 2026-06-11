@@ -69,7 +69,10 @@ export class ChestManager {
         chestId,
         ownerId:  userId,
         items:    (doc.items as InventoryItem[]) ?? [],
-        maxSlots: (doc.maxSlots as number) ?? 20,
+        // Tabbed chest = 4 tabs × 30 slots. Raise any legacy chest (saved with
+        // maxSlots: 20) up to the current capacity so existing players get the
+        // extra space; capacity is never trusted from the client.
+        maxSlots: Math.max((doc.maxSlots as number) ?? 120, 120),
       };
 
       this.chests.set(chestId, chest);
@@ -86,7 +89,7 @@ export class ChestManager {
    * Create a new chest and register it.
    * If a chest with that id already exists it is returned unchanged.
    */
-  createChest(ownerId: string, chestId: string, maxSlots = 20): ChestStorage {
+  createChest(ownerId: string, chestId: string, maxSlots = 120): ChestStorage {
     const existing = this.chests.get(chestId);
     if (existing) return existing;
 

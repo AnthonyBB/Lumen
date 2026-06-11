@@ -4,7 +4,7 @@
  * Fields:
  *  userId    — stable username / user ID (indexed, unique)
  *  items     — items stored in the chest
- *  maxSlots  — capacity cap (default 20)
+ *  maxSlots  — capacity cap (default 120 = 4 tabs × 30 slots)
  *  updatedAt — last write timestamp
  */
 
@@ -22,7 +22,7 @@ const chestStorageSchema = new Schema(
   {
     userId:    { type: String, required: true, index: true, unique: true },
     items:     { type: [inventoryItemSchema], default: [] },
-    maxSlots:  { type: Number, default: 20 },
+    maxSlots:  { type: Number, default: 120 },
     updatedAt: { type: Date, default: Date.now },
   },
   { collection: 'chest_storages' },

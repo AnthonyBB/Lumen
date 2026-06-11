@@ -38,6 +38,7 @@ import type {
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
+import { rollCombatDrops, DIFFICULTIES, type Difficulty } from '../game/loot.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
   marketPrice,
@@ -109,14 +110,21 @@ const CHAT_RATE_MS = 1000;
 // ---------------------------------------------------------------------------
 
 /**
- * Very lightweight HTML sanitiser — strips tags and trims whitespace.
- * For a production deployment use a dedicated library (e.g. `sanitize-html`).
+ * Very lightweight chat sanitiser — strips HTML, control characters, and
+ * collapses whitespace, then trims and length-caps.
+ *
+ * NOTE: real profanity / moderation filtering is OUT OF SCOPE for this pass.
+ * This is a kids'/educational game (see CLAUDE.md); a production deployment
+ * should add a dedicated moderation pipeline (e.g. `sanitize-html` + a profanity
+ * service) before exposing free-form chat broadly.
  */
 function sanitiseChat(raw: string): string {
   return raw
-    .replace(/<[^>]*>/g, '')       // strip HTML tags
-    .replace(/&[a-z]+;/gi, '')     // strip HTML entities
-    .replace(/[^\x20-\x7E\s]/g, '') // keep only printable ASCII + whitespace
+    .replace(/<[^>]*>/g, '')          // strip HTML tags
+    .replace(/&[a-z]+;/gi, '')        // strip HTML entities
+    .replace(/[\x00-\x1F\x7F]/g, ' ') // drop control chars (incl. newlines/tabs)
+    .replace(/[^\x20-\x7E]/g, '')     // keep only printable ASCII
+    .replace(/\s+/g, ' ')             // collapse runs of whitespace
     .trim()
     .slice(0, MAX_CHAT_LENGTH);
 }
@@ -363,7 +371,9 @@ export function registerHandlers(
   // by the server-validated learning session flow (see learning:answer).
   // Learning XP also no longer flows through here — ClassroomScene uses
   // server learning sessions, which award XP via LearningSessionManager.
-  socket.on('player:award_xp', async (payload: { xp: unknown; silver?: unknown }) => {
+  socket.on('player:award_xp', async (payload: {
+    xp: unknown; silver?: unknown; difficulty?: unknown; level?: unknown; campaignComplete?: unknown;
+  }) => {
     if (!isSafeNumber(payload?.xp, 0, 500)) {
       socket.emit('error', { message: 'Invalid award_xp payload.' });
       return;
@@ -395,6 +405,45 @@ export function registerHandlers(
       `[award_xp] ${player.username} +${xpAmount} XP, +${silverAmount} silver → ${newXp} XP (Lv ${newLevel})` +
       (leveledUp ? ' *** LEVEL UP ***' : ''),
     );
+
+    // ── Combat loot drops (server-authoritative) ──────────────────────────────
+    // Only when this award reports a battle outcome (difficulty present). The
+    // server rolls the drop and adds the item(s) to the bag — the client never
+    // chooses loot. `combat:loot` is always emitted (possibly empty) so the
+    // client's one-shot listener resolves and the loot toast can render.
+    const diff: Difficulty | null =
+      typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
+        ? (payload.difficulty as Difficulty)
+        : null;
+    if (diff) {
+      const dropLevel = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
+      const campaignComplete = payload?.campaignComplete === true;
+      const drops = rollCombatDrops(dropLevel, diff, campaignComplete);
+      if (drops.length) {
+        for (const eq of drops) {
+          inventoryManager.addItem(socket.id, {
+            id: randomUUID(),
+            itemType: eq.id,            // eq_NNNN — EQUIPMENT_MAP supplies stats on equip
+            name: eq.name,
+            description: eq.description,
+            rarity: eq.rarity as ItemRarity,
+            stats: {},
+            quantity: 1,
+            stackable: false,
+            icon: eq.icon,
+          });
+        }
+        pushInventoryUpdate();
+        console.log(
+          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}dropped ${drops.length}: ` +
+          drops.map((d) => `${d.name} [${d.rarity}]`).join(', '),
+        );
+      }
+      socket.emit('combat:loot', {
+        campaignComplete,
+        items: drops.map((d) => ({ name: d.name, icon: d.icon, rarity: d.rarity })),
+      });
+    }
   });
 
   // ── learning:start ───────────────────────────────────────────────────────
@@ -618,11 +667,15 @@ export function registerHandlers(
       return;
     }
 
-    // Broadcast to the zone the player is in
+    // Broadcast to the zone the player is in. SECURITY: the username comes from
+    // the server-side joined player (never a client-claimed name), and zone
+    // scoping means tavern chat only reaches sockets in the 'tavern' zone —
+    // town players never see it, and vice-versa.
     io.to(player.zone).emit('chat:message', {
       playerId: socket.id,
       username: player.username,
       message: sanitised,
+      ts: now,
     });
   });
 
@@ -1016,6 +1069,13 @@ export function registerHandlers(
     'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
   ]);
 
+  // Synthetic seller for items sold to the system. Items sold this way stay on
+  // the market (priced like a player listing, 2× base) so they — and any other
+  // player — can buy them back. The space makes it impossible to collide with a
+  // real username, and the buy handler's offline-credit ($inc, upsert:false) is
+  // a safe no-op for this seller, so the rebuy silver leaves the economy.
+  const MARKET_VENDOR = 'Market Vendor';
+
   /**
    * Parse a search string into either a NAME substring match or an ATTRIBUTE
    * filter.  An attribute filter looks like `<attrName> <op> <value>` where
@@ -1161,16 +1221,19 @@ export function registerHandlers(
     }
 
     const base = marketPrice(bagItem);
+    const snapshot = buildItemSnapshot(bagItem);
     if (!inventoryManager.removeItem(socket.id, bagItem.id)) {
       socket.emit('error', { message: 'Could not sell that item.' });
       return;
     }
     playerManager.addSilver(socket.id, base);
+    // Keep the item on the market under the vendor so it can be bought back.
+    const vendorListing = marketManager.createListing(MARKET_VENDOR, snapshot, 2 * base);
 
     pushInventoryUpdate();
     pushCurrency();
-    socket.emit('market:sold', { silver: base });
-    console.log(`[market] ${player.username} sold ${bagItem.name} to the system for ${base} silver`);
+    socket.emit('market:sold', { silver: base, listing: vendorListing });
+    console.log(`[market] ${player.username} sold ${bagItem.name} to the system for ${base} silver (relisted at ${2 * base})`);
   });
 
   // ── market:buy — buy another player's listing ──────────────────────────────

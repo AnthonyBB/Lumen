@@ -392,7 +392,7 @@ export interface ChestStorage {
   chestId: string;        // e.g. 'chest_world_001'
   ownerId: string;        // socketId of player who owns this chest
   items: InventoryItem[]; // items stored inside
-  maxSlots: number;       // default 20
+  maxSlots: number;       // default 120 = 4 tabs × 30 slots
 }
 
 export interface ChestTransferPayload {

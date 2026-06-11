@@ -16,7 +16,7 @@
  */
 
 import type { PlayerInventory, InventoryItem, EquipmentSlotKey } from '../types/index.js';
-import { getStarterItems } from './ItemDatabase.js';
+import { getStarterItems, getGeneratedStarterItems } from './ItemDatabase.js';
 import { isDbConnected } from '../db/connection.js';
 import { PlayerInventoryModel } from '../db/models/PlayerInventoryModel.js';
 
@@ -126,7 +126,10 @@ export class InventoryManager {
 
     const inventory: PlayerInventory = {
       playerId,
-      items:     getStarterItems(),
+      // Legacy starter weapons/armor PLUS ~3 generated attribute-bearing pieces
+      // so the new attribute-bonus system is demonstrable on first join.  This
+      // is the first-join-only path, so the generated grant never duplicates.
+      items:     [...getStarterItems(), ...getGeneratedStarterItems()],
       equipment: {},
       gold:      0,
     };

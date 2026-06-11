@@ -31,8 +31,12 @@ import type {
   ShopUnlocksPayload,
   Player,
   Subject,
+  CharacterAllocatePayload,
+  AttributeKey,
 } from '../types/index.js';
+import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
+import { getItemSlot } from '../game/ItemDatabase.js';
 import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
 import {
   QUIZ_COMPLETE_SKILL_SHARDS,
@@ -153,6 +157,18 @@ export function registerHandlers(
     if (inventory) socket.emit('inventory:updated', inventory);
   };
 
+  /**
+   * Recompute the player's derived stats from their attributes + equipped gear,
+   * apply the derived Max HP to their real combat HP, and push `stats:update`.
+   * Server-authoritative — the client only renders this; it never sends stats.
+   */
+  const pushStats = (): void => {
+    const inventory = inventoryManager.getInventory(socket.id);
+    const equipment = inventory?.equipment ?? {};
+    const payload = playerManager.applyDerivedStats(socket.id, equipment);
+    if (payload) socket.emit('stats:update', payload);
+  };
+
   /** Push the player's shard balances so the HUD currency counters refresh.
    *  Shards are a tracked currency (PlayerManager), not inventory items. */
   const pushCurrency = (): void => {
@@ -171,6 +187,44 @@ export function registerHandlers(
   // ── currency:get — HUD requests current shard balances ────────────────────
   socket.on('currency:get', () => {
     pushCurrency();
+  })
+
+  // ── stats:get — Character / Equipment screens request the stat breakdown ──
+  //
+  // Read-only.  Recomputes attributes + derived combat stats from the player's
+  // allocation and equipped gear (all server-side) and pushes `stats:update`.
+  socket.on('stats:get', () => {
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) return;
+    pushStats();
+  })
+
+  // ── character:allocate — spend one allocation point into an attribute ─────
+  //
+  // Server-authoritative validation:
+  //  1. The player must exist (joined).
+  //  2. `attribute` must be one of the five known attributes.
+  //  3. The player must have an unspent point (level*3 − sum(allocated) > 0).
+  // On success the point is recorded, persisted, and the recomputed stats
+  // (with the new derived Max HP) are pushed.
+  socket.on('character:allocate', (payload: CharacterAllocatePayload) => {
+    const player = requireJoinedPlayer('You must join before allocating points.');
+    if (!player) return;
+
+    const attribute = payload?.attribute;
+    if (typeof attribute !== 'string' || !(ATTRIBUTE_KEYS as readonly string[]).includes(attribute)) {
+      socket.emit('error', { message: 'Invalid attribute.' });
+      return;
+    }
+
+    if (!playerManager.allocatePoint(socket.id, attribute as AttributeKey)) {
+      socket.emit('error', { message: 'You have no unspent points to allocate.' });
+      return;
+    }
+
+    playerManager.persistProgress(socket.id);
+    pushStats();
+    console.log(`[allocate] ${player.username} put a point into ${attribute}`);
   })
 
   // ── zone:get ──────────────────────────────────────────────────────────────
@@ -240,6 +294,9 @@ export function registerHandlers(
     const joinInventory = inventoryManager.getInventory(socket.id);
     if (joinInventory) socket.emit('inventory:data', joinInventory);
     pushCurrency();
+    // Derive Max HP from attributes + gear and push the stats breakdown so the
+    // Character / Equipment screens render the moment the player joins.
+    pushStats();
 
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {
@@ -610,22 +667,35 @@ export function registerHandlers(
       return;
     }
 
-    // Catalog lookup: itemType is the stable generated-equipment id
+    // Resolve the destination slot + name, supporting BOTH item models:
+    //  • Generated gear (EQUIPMENT_MAP) — server-derived slot + XP gate.
+    //  • Legacy ItemDatabase gear (worn_sword, etc.) — its catalogue slot, no
+    //    XP gate.  Its {attack,defense,hp} stats fold into derived stats during
+    //    stat computation (see PlayerManager.computeStats).
+    let slotKey: EquipmentSlotKey;
+    let label: string;
+
     const catalogItem = EQUIPMENT_MAP[bagItem.itemType];
-    if (!catalogItem) {
-      socket.emit('error', { message: 'That item is not equippable gear.' });
-      return;
+    if (catalogItem) {
+      // XP gate — enforced server-side; player.xp is server-authoritative
+      if (player.xp < catalogItem.xpRequired) {
+        socket.emit('error', {
+          message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
+        });
+        return;
+      }
+      slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
+      label = catalogItem.name;
+    } else {
+      const legacySlot = getItemSlot(bagItem.itemType);
+      if (!legacySlot) {
+        socket.emit('error', { message: 'That item is not equippable gear.' });
+        return;
+      }
+      slotKey = legacySlot;
+      label = bagItem.name;
     }
 
-    // XP gate — enforced server-side; player.xp is server-authoritative
-    if (player.xp < catalogItem.xpRequired) {
-      socket.emit('error', {
-        message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
-      });
-      return;
-    }
-
-    const slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
     const success = inventoryManager.equipGeneratedItem(socket.id, payload.itemId, slotKey);
     if (!success) {
       socket.emit('error', { message: 'Could not equip that item.' });
@@ -633,8 +703,10 @@ export function registerHandlers(
     }
 
     pushInventoryUpdate();
+    // Recompute derived stats (Max HP can change) and push the breakdown.
+    pushStats();
     console.log(
-      `[equip] ${player.username} equipped ${catalogItem.name} (${catalogItem.id}) in ${slotKey}`,
+      `[equip] ${player.username} equipped ${label} in ${slotKey}`,
     );
   });
 
@@ -662,6 +734,8 @@ export function registerHandlers(
     }
 
     pushInventoryUpdate();
+    // Recompute derived stats (Max HP can drop) and push the breakdown.
+    pushStats();
     console.log(`[equip] ${player.username} unequipped slot ${payload.slot}`);
   });
 

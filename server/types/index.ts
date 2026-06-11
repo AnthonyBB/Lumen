@@ -42,6 +42,49 @@ export interface Player {
   combatShards: number;
   /** Silver balance (persisted) — money for buying/selling items at the Market. */
   silver: number;
+  /** Points the player has allocated per character attribute (persisted).
+   *  Total earned points = level*3; a base attribute = 5 + attributePoints[attr]. */
+  attributePoints: Record<AttributeKey, number>;
+}
+
+// ---------------------------------------------------------------------------
+// Character stats (attributes + derived combat stats)
+// ---------------------------------------------------------------------------
+
+/** The five character attributes the player can raise with allocation points. */
+export type AttributeKey =
+  | 'strength'
+  | 'constitution'
+  | 'dexterity'
+  | 'intelligence'
+  | 'spirit';
+
+export const ATTRIBUTE_KEYS: readonly AttributeKey[] = [
+  'strength', 'constitution', 'dexterity', 'intelligence', 'spirit',
+];
+
+/** One attribute row in a stats push: base value + gear bonus + total. */
+export interface StatRow {
+  key: string;
+  label: string;
+  base: number;
+  gear: number;
+  total: number;
+  /** Present + true when the value is a percentage (e.g. crit chance). */
+  isPercent?: boolean;
+}
+
+/** Server → client `stats:update` payload. */
+export interface StatsUpdatePayload {
+  attributes: StatRow[];
+  derived: StatRow[];
+  unspentPoints: number;
+  level: number;
+}
+
+/** Client → server `character:allocate` payload. */
+export interface CharacterAllocatePayload {
+  attribute: AttributeKey;
 }
 
 /** Safe subset of a player that can be broadcast to other clients. */

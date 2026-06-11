@@ -29,6 +29,9 @@ export interface IPlayerProgress extends Document {
   combatShards: number
   /** Silver balance — money for buying/selling items at the Market. */
   silver: number
+  /** Allocated points per character attribute (strength/constitution/... ).
+   *  Total earned = level*3; base attribute = 5 + allocated. */
+  attributePoints: Record<string, number>
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -84,6 +87,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       type: Number,
       default: 0,
       min: 0,
+    },
+    attributePoints: {
+      type: Schema.Types.Mixed,
+      default: () => ({}),
     },
   },
   { timestamps: true },

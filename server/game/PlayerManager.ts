@@ -7,9 +7,24 @@
  *  - Duplicate username detection prevents impersonation within a session.
  */
 
-import type { Player, PublicPlayer, Subject } from '../types/index.js';
+import type {
+  Player,
+  PublicPlayer,
+  Subject,
+  AttributeKey,
+  StatRow,
+  StatsUpdatePayload,
+  EquipmentSlots,
+} from '../types/index.js';
+import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
+import { EQUIPMENT_MAP, type AttributeType } from './data/equipmentGen.js';
+
+/** Round to one decimal place (keeps percent-style stats readable). */
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
 
 /** Starting stats for a brand-new player joining the server. */
 const INITIAL_STATS = {
@@ -41,6 +56,44 @@ function normaliseSubjectGrades(raw: Partial<Record<Subject, number>> | undefine
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Character attributes
+// ---------------------------------------------------------------------------
+
+/** Base value of every attribute before any allocated points or gear. */
+export const ATTRIBUTE_BASE = 5;
+
+/** Allocation points granted per level. Total earned = level * this. */
+export const POINTS_PER_LEVEL = 3;
+
+/** A fresh attributePoints map with all five attributes at 0. */
+function defaultAttributePoints(): Record<AttributeKey, number> {
+  return { strength: 0, constitution: 0, dexterity: 0, intelligence: 0, spirit: 0 };
+}
+
+/** Sanitise a loaded attributePoints map (clamp to >=0 integers, fill gaps). */
+function normaliseAttributePoints(
+  raw: Partial<Record<string, number>> | undefined,
+): Record<AttributeKey, number> {
+  const out = defaultAttributePoints();
+  if (raw) {
+    for (const k of ATTRIBUTE_KEYS) {
+      const v = raw[k];
+      if (typeof v === 'number' && Number.isFinite(v)) out[k] = Math.max(0, Math.floor(v));
+    }
+  }
+  return out;
+}
+
+/** Human-readable labels for stat rows pushed to the client. */
+const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
+  strength: 'Strength',
+  constitution: 'Constitution',
+  dexterity: 'Dexterity',
+  intelligence: 'Intelligence',
+  spirit: 'Spirit',
+};
 
 /** Pass count at which a topic counts as COMPLETE. */
 export const TOPIC_PASSES_TO_COMPLETE = 3;
@@ -104,6 +157,7 @@ export class PlayerManager {
       skillShards: 0,
       combatShards: 0,
       silver: 0,
+      attributePoints: defaultAttributePoints(),
     };
 
     this.players.set(socketId, player);
@@ -188,6 +242,7 @@ export class PlayerManager {
     skillShards: number;
     combatShards: number;
     silver: number;
+    attributePoints: Record<AttributeKey, number>;
   }> {
     try {
       const doc = await PlayerProgress.findOne({ userId }).lean();
@@ -203,6 +258,7 @@ export class PlayerManager {
           skillShards: Math.max(0, doc.skillShards ?? 0),
           combatShards: Math.max(0, doc.combatShards ?? 0),
           silver: Math.max(0, doc.silver ?? 0),
+          attributePoints: normaliseAttributePoints(doc.attributePoints),
         };
       }
     } catch (err) {
@@ -213,6 +269,7 @@ export class PlayerManager {
       subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
       skillShards: 0, combatShards: 0, silver: 0,
+      attributePoints: defaultAttributePoints(),
     };
   }
 
@@ -233,6 +290,7 @@ export class PlayerManager {
       skillShards?: number;
       combatShards?: number;
       silver?: number;
+      attributePoints?: Record<AttributeKey, number>;
     },
   ): void {
     const player = this.players.get(socketId);
@@ -241,6 +299,10 @@ export class PlayerManager {
     player.level = Math.min(50, Math.max(1, progress.level));
     player.maxHp = 100 + (player.level - 1) * 20;
     player.hp = player.maxHp;
+    player.attributePoints = this.clampAllocatedToCap(
+      normaliseAttributePoints(progress.attributePoints),
+      player.level,
+    );
     player.subjectGrades = normaliseSubjectGrades(progress.subjectGrades);
     player.topicPasses = { ...(progress.topicPasses ?? {}) };
     player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
@@ -275,6 +337,7 @@ export class PlayerManager {
         skillShards: player.skillShards,
         combatShards: player.combatShards,
         silver: player.silver,
+        attributePoints: player.attributePoints,
       },
       { upsert: true, new: true },
     ).catch((err) => {
@@ -432,6 +495,230 @@ export class PlayerManager {
   updateLastMessageAt(socketId: string, ts: number): void {
     const player = this.players.get(socketId);
     if (player) player.lastMessageAt = ts;
+  }
+
+  // -------------------------------------------------------------------------
+  // Character attributes / allocation
+  // -------------------------------------------------------------------------
+
+  /** Total allocation points the player has earned (level * POINTS_PER_LEVEL). */
+  getTotalPoints(socketId: string): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    return player.level * POINTS_PER_LEVEL;
+  }
+
+  /** Sum of all points the player has spent across attributes. */
+  private getSpentPoints(player: Player): number {
+    return ATTRIBUTE_KEYS.reduce((s, k) => s + (player.attributePoints[k] ?? 0), 0);
+  }
+
+  /** Points the player has earned but not yet allocated (never negative). */
+  getUnspentPoints(socketId: string): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    return Math.max(0, player.level * POINTS_PER_LEVEL - this.getSpentPoints(player));
+  }
+
+  /**
+   * Defensive clamp: if a loaded allocation exceeds what `level` permits (e.g.
+   * the formula changed), proportionally trim from the largest attributes so
+   * the total never exceeds level*POINTS_PER_LEVEL.
+   */
+  private clampAllocatedToCap(
+    points: Record<AttributeKey, number>,
+    level: number,
+  ): Record<AttributeKey, number> {
+    const cap = Math.max(0, level) * POINTS_PER_LEVEL;
+    let total = ATTRIBUTE_KEYS.reduce((s, k) => s + points[k], 0);
+    if (total <= cap) return points;
+    // Trim from the largest attribute repeatedly until within cap.
+    const out = { ...points };
+    while (total > cap) {
+      let largest: AttributeKey = ATTRIBUTE_KEYS[0];
+      for (const k of ATTRIBUTE_KEYS) if (out[k] > out[largest]) largest = k;
+      if (out[largest] <= 0) break;
+      out[largest] -= 1;
+      total -= 1;
+    }
+    return out;
+  }
+
+  /**
+   * Allocate one point into `attribute` if the player has an unspent point.
+   * Server-authoritative — returns false (changing nothing) when the player is
+   * unknown, the attribute is invalid, or there are no unspent points.
+   * Persistence and stat recompute are the caller's responsibility.
+   */
+  allocatePoint(socketId: string, attribute: AttributeKey): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    if (!ATTRIBUTE_KEYS.includes(attribute)) return false;
+    if (this.getUnspentPoints(socketId) <= 0) return false;
+    player.attributePoints[attribute] = (player.attributePoints[attribute] ?? 0) + 1;
+    return true;
+  }
+
+  /** A player's BASE attribute value = ATTRIBUTE_BASE + allocated points. */
+  private baseAttribute(player: Player, attr: AttributeKey): number {
+    return ATTRIBUTE_BASE + (player.attributePoints[attr] ?? 0);
+  }
+
+  /**
+   * Compute the full attribute + derived-stat breakdown for a player, folding
+   * in their equipped gear.  Generated items (EQUIPMENT_MAP) contribute to
+   * attributes and to derived bonuses depending on their attribute type;
+   * legacy ItemDatabase items contribute their {attack,defense,hp} stats
+   * directly to the matching derived stat.
+   *
+   * Returns the `stats:update` payload AND the derived maxHp so the caller can
+   * apply it to combat HP.
+   */
+  computeStats(
+    socketId: string,
+    equipment: EquipmentSlots,
+  ): { payload: StatsUpdatePayload; maxHp: number } | null {
+    const player = this.players.get(socketId);
+    if (!player) return null;
+
+    // ── Gear contributions ──────────────────────────────────────────────────
+    const attrGear: Record<AttributeKey, number> = defaultAttributePoints();
+    // Direct derived-stat gear bonuses.
+    const gear = {
+      hp: 0, attack: 0, defense: 0,
+      damage_bonus: 0, magic_damage: 0, healing_bonus: 0, crit_chance: 0,
+    };
+
+    for (const item of Object.values(equipment)) {
+      if (!item) continue;
+      const generated = EQUIPMENT_MAP[item.itemType];
+      if (generated) {
+        for (const a of generated.attributes) {
+          const t = a.type as AttributeType;
+          if ((ATTRIBUTE_KEYS as readonly string[]).includes(t)) {
+            attrGear[t as AttributeKey] += a.value;
+          } else if (t === 'damage_bonus') {
+            gear.damage_bonus += a.value;
+          } else if (t === 'healing_bonus') {
+            gear.healing_bonus += a.value;
+          } else if (t === 'crit_chance') {
+            gear.crit_chance += a.value;
+          } else if (
+            t === 'fire_damage' || t === 'ice_damage' || t === 'lightning_damage' ||
+            t === 'holy_damage' || t === 'nature_damage'
+          ) {
+            gear.magic_damage += a.value;
+          }
+          // Other attribute types (mp_regen, xp_bonus, gold_find, dot/aoe,
+          // debuff_resist) are flavour bonuses not surfaced as core stats here.
+        }
+      } else {
+        // Legacy ItemDatabase item — apply its raw stats directly.
+        const s = item.stats ?? {};
+        if (typeof s.hp === 'number') gear.hp += s.hp;
+        if (typeof s.attack === 'number') gear.attack += s.attack;
+        if (typeof s.defense === 'number') gear.defense += s.defense;
+      }
+    }
+
+    // ── Attributes (base from allocation + gear) ────────────────────────────
+    const attributes: StatRow[] = ATTRIBUTE_KEYS.map((k) => {
+      const base = this.baseAttribute(player, k);
+      const g = attrGear[k];
+      return { key: k, label: ATTRIBUTE_LABELS[k], base, gear: g, total: base + g };
+    });
+
+    // TOTAL attribute values (base + gear) drive the derived formulas.
+    const tot = (k: AttributeKey) => this.baseAttribute(player, k) + attrGear[k];
+    const STR = tot('strength');
+    const CON = tot('constitution');
+    const DEX = tot('dexterity');
+    const INT = tot('intelligence');
+    const SPI = tot('spirit');
+    // Base-only attribute values (gear excluded) for the "base" derived column.
+    const bSTR = this.baseAttribute(player, 'strength');
+    const bCON = this.baseAttribute(player, 'constitution');
+    const bDEX = this.baseAttribute(player, 'dexterity');
+    const bINT = this.baseAttribute(player, 'intelligence');
+    const bSPI = this.baseAttribute(player, 'spirit');
+
+    /** Build a derived row; total uses gear-inclusive attrs + gear direct bonus. */
+    const derivedRow = (
+      key: string, label: string,
+      baseVal: number, totalVal: number,
+      isPercent?: boolean,
+    ): StatRow => {
+      const gearBonus = round1(totalVal - baseVal);
+      return {
+        key, label,
+        base: round1(baseVal),
+        gear: gearBonus,
+        total: round1(totalVal),
+        ...(isPercent ? { isPercent: true } : {}),
+      };
+    };
+
+    const derived: StatRow[] = [
+      // Max HP = 50 + CON*10 + gear hp
+      derivedRow('maxHp', 'Max HP',
+        50 + bCON * 10,
+        50 + CON * 10 + gear.hp),
+      // Attack Power = 5 + STR*2 + gear attack + gear damage_bonus
+      derivedRow('attack', 'Attack Power',
+        5 + bSTR * 2,
+        5 + STR * 2 + gear.attack + gear.damage_bonus),
+      // Magic Power = 5 + INT*2 + gear magic-school damage + gear damage_bonus
+      derivedRow('magic', 'Magic Power',
+        5 + bINT * 2,
+        5 + INT * 2 + gear.magic_damage + gear.damage_bonus),
+      // Defense = STR + CON + gear defense
+      derivedRow('defense', 'Defense',
+        bSTR + bCON,
+        STR + CON + gear.defense),
+      // Speed = 10 + DEX*2
+      derivedRow('speed', 'Speed',
+        10 + bDEX * 2,
+        10 + DEX * 2),
+      // Healing Power = SPI*2 + gear healing_bonus
+      derivedRow('healing', 'Healing Power',
+        bSPI * 2,
+        SPI * 2 + gear.healing_bonus),
+      // Crit Chance % = DEX*0.5 + gear crit_chance
+      derivedRow('crit', 'Crit Chance',
+        bDEX * 0.5,
+        DEX * 0.5 + gear.crit_chance,
+        true),
+    ];
+
+    const maxHp = 50 + CON * 10 + gear.hp;
+
+    return {
+      payload: {
+        attributes,
+        derived,
+        unspentPoints: this.getUnspentPoints(socketId),
+        level: player.level,
+      },
+      maxHp,
+    };
+  }
+
+  /**
+   * Recompute the player's derived Max HP from their attributes + gear and
+   * apply it as the real combat maxHp, clamping current hp to the new max.
+   * Returns the stats payload so the caller can push `stats:update`.
+   */
+  applyDerivedStats(
+    socketId: string,
+    equipment: EquipmentSlots,
+  ): StatsUpdatePayload | null {
+    const player = this.players.get(socketId);
+    if (!player) return null;
+    const result = this.computeStats(socketId, equipment);
+    if (!result) return null;
+    player.maxHp = result.maxHp;
+    if (player.hp > player.maxHp) player.hp = player.maxHp;
+    return result.payload;
   }
 
   // -------------------------------------------------------------------------

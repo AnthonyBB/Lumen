@@ -103,6 +103,7 @@ export class PlayerManager {
       strategyLoadout: [],
       skillShards: 0,
       combatShards: 0,
+      silver: 0,
     };
 
     this.players.set(socketId, player);
@@ -186,6 +187,7 @@ export class PlayerManager {
     strategyLoadout: string[];
     skillShards: number;
     combatShards: number;
+    silver: number;
   }> {
     try {
       const doc = await PlayerProgress.findOne({ userId }).lean();
@@ -200,6 +202,7 @@ export class PlayerManager {
           strategyLoadout: doc.strategyLoadout ?? [],
           skillShards: Math.max(0, doc.skillShards ?? 0),
           combatShards: Math.max(0, doc.combatShards ?? 0),
+          silver: Math.max(0, doc.silver ?? 0),
         };
       }
     } catch (err) {
@@ -209,7 +212,7 @@ export class PlayerManager {
       xp: 0, level: 1,
       subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
-      skillShards: 0, combatShards: 0,
+      skillShards: 0, combatShards: 0, silver: 0,
     };
   }
 
@@ -229,6 +232,7 @@ export class PlayerManager {
       strategyLoadout?: string[];
       skillShards?: number;
       combatShards?: number;
+      silver?: number;
     },
   ): void {
     const player = this.players.get(socketId);
@@ -247,6 +251,7 @@ export class PlayerManager {
     );
     player.skillShards = Math.max(0, Math.floor(progress.skillShards ?? 0));
     player.combatShards = Math.max(0, Math.floor(progress.combatShards ?? 0));
+    player.silver = Math.max(0, Math.floor(progress.silver ?? 0));
   }
 
   /**
@@ -269,6 +274,7 @@ export class PlayerManager {
         strategyLoadout: player.strategyLoadout,
         skillShards: player.skillShards,
         combatShards: player.combatShards,
+        silver: player.silver,
       },
       { upsert: true, new: true },
     ).catch((err) => {
@@ -310,6 +316,35 @@ export class PlayerManager {
     if (balance < amount) return false;
     if (kind === 'skill') player.skillShards -= amount;
     else player.combatShards -= amount;
+    this.persistProgress(socketId);
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Silver currency — money for buying/selling items at the Market.
+  // -------------------------------------------------------------------------
+
+  getSilver(socketId: string): number {
+    return this.players.get(socketId)?.silver ?? 0;
+  }
+
+  /** Add silver (server-side callers only). Persists. */
+  addSilver(socketId: string, amount: number): void {
+    if (amount <= 0) return;
+    const player = this.players.get(socketId);
+    if (!player) return;
+    player.silver += amount;
+    this.persistProgress(socketId);
+  }
+
+  /** Spend silver. Returns false and changes nothing if the player can't
+   *  afford it — the only balance check, server-side. */
+  spendSilver(socketId: string, amount: number): boolean {
+    if (amount <= 0) return false;
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    if (player.silver < amount) return false;
+    player.silver -= amount;
     this.persistProgress(socketId);
     return true;
   }

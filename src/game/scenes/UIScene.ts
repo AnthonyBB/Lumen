@@ -117,30 +117,34 @@ export class UIScene extends Phaser.Scene {
       fontSize: '10px', fontFamily: 'Arial', color: '#aaddff',
     }).setOrigin(0.5, 0)
 
-    // ── Inventory bar (bottom-left) ───────────────────────────────────────────
+    // ── Currency bar (bottom-left) ────────────────────────────────────────────
     const invBg = this.add.graphics()
     invBg.fillStyle(0x000000, 0.5)
-    invBg.fillRoundedRect(6, GAME_HEIGHT - 60, 180, 50, 8)
+    invBg.fillRoundedRect(6, GAME_HEIGHT - 74, 184, 64, 8)
     invBg.lineStyle(1, 0xffd700, 0.5)
-    invBg.strokeRoundedRect(6, GAME_HEIGHT - 60, 180, 50, 8)
+    invBg.strokeRoundedRect(6, GAME_HEIGHT - 74, 184, 64, 8)
 
-    this.add.text(14, GAME_HEIGHT - 54, 'Shards', {
+    this.add.text(14, GAME_HEIGHT - 68, 'Currency', {
       fontSize: '11px', fontFamily: 'Arial', color: '#88eeff', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
     // Shard counters — server-authoritative tracked currency (NOT inventory
     // items). Updated only by the server's `currency:update` push.
-    const skillShardCount = this.add.text(12, GAME_HEIGHT - 36, '🔷 Skill x0', {
+    const skillShardCount = this.add.text(12, GAME_HEIGHT - 50, '🔷 Skill x0', {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
     }).setOrigin(0, 0)
-    const combatShardCount = this.add.text(92, GAME_HEIGHT - 36, '🔶 Combat x0', {
+    const combatShardCount = this.add.text(98, GAME_HEIGHT - 50, '🔶 Combat x0', {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
+    }).setOrigin(0, 0)
+    const silverCount = this.add.text(12, GAME_HEIGHT - 30, '🪙 Silver 0', {
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#e8e8e8', fontStyle: 'bold',
     }).setOrigin(0, 0)
 
     const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-    const onCurrency = (data: { skillShards?: number; combatShards?: number }) => {
+    const onCurrency = (data: { skillShards?: number; combatShards?: number; silver?: number }) => {
       skillShardCount.setText(`🔷 Skill x${data?.skillShards ?? 0}`)
       combatShardCount.setText(`🔶 Combat x${data?.combatShards ?? 0}`)
+      silverCount.setText(`🪙 Silver ${data?.silver ?? 0}`)
     }
     socket?.on('currency:update', onCurrency)
     socket?.emit('currency:get')   // request the initial balances

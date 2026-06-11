@@ -27,6 +27,8 @@ export interface IPlayerProgress extends Document {
   skillShards: number
   /** Combat Shard balance — a tracked currency, NOT an inventory item. */
   combatShards: number
+  /** Silver balance — money for buying/selling items at the Market. */
+  silver: number
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -74,6 +76,11 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       min: 0,
     },
     combatShards: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    silver: {
       type: Number,
       default: 0,
       min: 0,

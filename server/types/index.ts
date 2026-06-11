@@ -40,6 +40,8 @@ export interface Player {
   skillShards: number;
   /** Combat Shard balance (persisted) — a tracked currency, NOT a bag item. */
   combatShards: number;
+  /** Silver balance (persisted) — money for buying/selling items at the Market. */
+  silver: number;
 }
 
 /** Safe subset of a player that can be broadcast to other clients. */

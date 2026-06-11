@@ -60,6 +60,11 @@ export interface BattleResult {
 /** XP for defeating a mob scales with its level — higher biomes pay more. */
 const xpForMob = (level: number) => 10 + level * 2
 
+/** Silver dropped per defeated enemy: scales with level × difficulty tier. */
+const SILVER_TIER_MULT: Record<'easy' | 'medium' | 'hard', number> = { easy: 1, medium: 1.5, hard: 2 }
+const silverForMob = (level: number, difficulty: 'easy' | 'medium' | 'hard') =>
+  Math.max(1, Math.round(level * SILVER_TIER_MULT[difficulty]))
+
 /** Fallback player initiative speed when no equipment-derived speed is set. */
 const DEFAULT_PLAYER_SPEED = 25
 
@@ -145,6 +150,7 @@ export class BattleScene extends Phaser.Scene {
   private playerSpeed = DEFAULT_PLAYER_SPEED
   private playerDefense = 0   // equipment-derived defense will feed this later
   private xpGained = 0
+  private silverGained = 0
 
   /** Skills shown in the bar: basic Attack + server-confirmed purchases only. */
   private battleSkills: Skill[] = [BASIC_ATTACK]
@@ -164,6 +170,7 @@ export class BattleScene extends Phaser.Scene {
     this.playerHp    = data.playerHp
     this.playerMaxHp = data.playerMaxHp
     this.xpGained    = 0
+    this.silverGained = 0
     this.phase       = 'player_turn'
     this.selectedSkill = null
     this.mobs        = []
@@ -658,6 +665,7 @@ export class BattleScene extends Phaser.Scene {
       mob.alive = false
       const xp = xpForMob(mob.level)
       this.xpGained += xp
+      this.silverGained += silverForMob(mob.level, this.battleData.difficulty)
       this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg}!  Enemy defeated! (+${xp} XP)`, '#44ff88')
     } else {
       this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg} damage!`, '#44ffcc')
@@ -803,14 +811,17 @@ export class BattleScene extends Phaser.Scene {
   private doVictory() {
     this.phase = 'victory'
 
-    // Award XP
-    if (this.xpGained > 0) {
+    // Award XP + silver (server caps both)
+    if (this.xpGained > 0 || this.silverGained > 0) {
       const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-      socket?.emit('player:award_xp', { xp: Math.min(this.xpGained, 500) })
+      socket?.emit('player:award_xp', {
+        xp: Math.min(this.xpGained, 500),
+        silver: Math.min(this.silverGained, 5000),
+      })
     }
 
     this.cameras.main.flash(600, 1, 0.84, 0)
-    this.setLog(`⚔  All enemies defeated!  +${this.xpGained} XP earned!`, '#ffd700')
+    this.setLog(`⚔  All enemies defeated!  +${this.xpGained} XP  ·  +${this.silverGained} silver!`, '#ffd700')
 
     this.time.delayedCall(1400, () => {
       this.endBattle({ victory: true, playerHp: this.playerHp, xpGained: this.xpGained })

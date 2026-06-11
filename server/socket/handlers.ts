@@ -159,6 +159,7 @@ export function registerHandlers(
     socket.emit('currency:update', {
       skillShards: playerManager.getSkillShards(socket.id),
       combatShards: playerManager.getCombatShards(socket.id),
+      silver: playerManager.getSilver(socket.id),
     });
   };
 
@@ -296,17 +297,24 @@ export function registerHandlers(
   // by the server-validated learning session flow (see learning:answer).
   // Learning XP also no longer flows through here — ClassroomScene uses
   // server learning sessions, which award XP via LearningSessionManager.
-  socket.on('player:award_xp', async (payload: { xp: unknown }) => {
+  socket.on('player:award_xp', async (payload: { xp: unknown; silver?: unknown }) => {
     if (!isSafeNumber(payload?.xp, 0, 500)) {
       socket.emit('error', { message: 'Invalid award_xp payload.' });
       return;
     }
+    // Silver from combat is client-reported (combat resolves client-side) and
+    // capped server-side, mirroring the XP cap — a generous ceiling that still
+    // blocks absurd payloads. Optional: absent on non-combat XP awards.
+    const silverAmount = isSafeNumber(payload?.silver, 0, 5000)
+      ? Math.floor(payload.silver as number)
+      : 0;
 
     const player = requireJoinedPlayer('You must join before earning XP.');
     if (!player) return;
 
     const xpAmount = Math.floor(payload.xp as number); // ensure integer
     const { newXp, newLevel, leveledUp } = playerManager.addXp(socket.id, xpAmount);
+    if (silverAmount > 0) playerManager.addSilver(socket.id, silverAmount);
     playerManager.persistProgress(socket.id);
 
     socket.emit('player:xp_updated', {
@@ -315,9 +323,10 @@ export function registerHandlers(
       leveledUp,
       xpAwarded: xpAmount,
     });
+    if (silverAmount > 0) pushCurrency();
 
     console.log(
-      `[award_xp] ${player.username} +${xpAmount} XP → ${newXp} XP (Lv ${newLevel})` +
+      `[award_xp] ${player.username} +${xpAmount} XP, +${silverAmount} silver → ${newXp} XP (Lv ${newLevel})` +
       (leveledUp ? ' *** LEVEL UP ***' : ''),
     );
   });

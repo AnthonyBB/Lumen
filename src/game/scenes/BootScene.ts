@@ -63,6 +63,37 @@ export class BootScene extends Phaser.Scene {
     this.load.image('cp_mushroom_red',   `${fObj}/Red_mushroom1.png`)
     this.load.image('cp_mushroom_brown', `${fObj}/Brown_mushroom.png`)
 
+    // ── CRAFTPIX FOREST props for the Pine Forest biome (Mossy Clearing) ─────────
+    // Big trees (mix of round-bushy and pine, ~128px) for the dense canopy.
+    for (const i of [1, 2, 3, 5, 6, 7, 11, 13]) this.load.image(`cpf_tree${i}`, `${fObj}/Tree${i}.png`)
+    // Small round trees (~64px) for layering inside the clusters.
+    for (const i of [4, 10, 12, 14]) this.load.image(`cpf_treesm${i}`, `${fObj}/Tree${i}.png`)
+    // Low bushes.
+    for (const i of [1, 2, 4, 7, 10]) this.load.image(`cpf_bush${i}`, `${fObj}/Bush${i}.png`)
+    // Stumps / snags / a fallen log.
+    for (const i of [1, 3, 5]) this.load.image(`cpf_stump${i}`, `${fObj}/Broken_tree${i}.png`)
+    // Red & brown mushrooms.
+    this.load.image('cpf_redmush1',  `${fObj}/Red_mushroom1.png`)
+    this.load.image('cpf_redmush2',  `${fObj}/Red_mushroom2.png`)
+    this.load.image('cpf_redmush3',  `${fObj}/Red_mushroom3.png`)
+    this.load.image('cpf_brownmush', `${fObj}/Brown_mushroom1.png`)
+    // Gray/white boulders sitting in grass.
+    this.load.image('cpf_stone1', `${fObj}/Beige_stone_grass1.png`)
+    this.load.image('cpf_stone2', `${fObj}/Beige_stone_grass3.png`)
+    this.load.image('cpf_stone3', `${fObj}/Beige_stone_grass5.png`)
+    this.load.image('cpf_stone4', `${fObj}/Light_stone_grass3.png`)
+    // Stone pillar (statue) + ruined pillars feature.
+    this.load.image('cpf_pillar', `${fObj}/Light_stone_grass1.png`)
+    this.load.image('cpf_ruin',   `${fObj}/Ruin_grass2.png`)
+    // Reeds for pond fringes.
+    this.load.image('cpf_reeds1', `${fObj}/reeds1.png`)
+    this.load.image('cpf_reeds2', `${fObj}/reeds2.png`)
+    this.load.image('cpf_reeds3', `${fObj}/reeds3.png`)
+    // Lily-pad decal sheet for ponds (240×192, 6 cols × 6 rows of 40×32 pads).
+    this.load.spritesheet('cpf_lilis', `${fObj.replace('/Objects_separated', '')}/Water_lilis.png`, {
+      frameWidth: 40, frameHeight: 32,
+    })
+
     // ── BUILDINGS ───────────────────────────────────────────────────────────────
     // building_learning = purple house (magical / scholarly)
     // building_combat   = large stone house

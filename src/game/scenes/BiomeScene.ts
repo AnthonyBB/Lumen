@@ -21,11 +21,12 @@ import {
   RL_WATER_LILY, RL_WATER_ROCK, RL_SAND_ISLAND,
   RL_FLOWERS_ORANGE, RL_FLOWERS_WHITE, RL_FLOWERS_BLUE,
   RL_TREE_GREEN_SM, RL_TREE_TEAL_SM, RL_BUSH_GREEN, RL_BUSH_ORANGE, RL_BUSH_TEAL,
-  RL_PINE_GREEN_SM, RL_PINE_TEAL_SM, RL_CACTUS,
+  RL_PINE_TEAL_SM, RL_CACTUS,
   RL_TREE_GREEN_TALL, RL_TREE_ORANGE_TALL, RL_TREE_TEAL_TALL,
-  RL_PINE_GREEN_TALL, RL_PINE_TEAL_TALL, RL_TREE_BERRY_TALL,
+  RL_PINE_TEAL_TALL, RL_TREE_BERRY_TALL,
   RL_ROCKS_BROWN, RL_ROCKS_BROWN_MOSS, RL_ROCKS_GRAY, RL_ROCKS_GRAY_MOSS, RL_ROCKS_WATER,
-  TT_MUSHROOMS, TD_MONSTERS,
+  TD_MONSTERS,
+  CPD_BLADES, CPD_SPECKS, CPD_TUFTS, CPD_MOUNDS,
 } from '../data/tileFrames'
 import { MOBS_BY_BIOME, TIER_LEVEL_BANDS, spawnMob } from '../data/mobs'
 
@@ -666,18 +667,172 @@ export class BiomeScene extends Phaser.Scene {
       [RL_CACTUS, RL_CACTUS, RL_BUSH_ORANGE], RL_ROCKS_BROWN)
   }
 
+  /** Place a forest prop with per-instance scale/depth, skipping the path corridor.
+   *  `anchorBottom` draws the sprite standing on (x,y) so trees overlap naturally. */
+  private placeForestProp(
+    key: string, x: number, y: number, scale: number, depth: number,
+    anchorBottom = true,
+  ): boolean {
+    if (this.isNearWaypoint(x, y)) return false
+    const img = this.add.image(x, y, key).setScale(scale).setDepth(depth)
+    if (anchorBottom) img.setOrigin(0.5, 0.92)
+    return true
+  }
+
+  /** A small rounded pond: water blob + soft shoreline ring, lily-pad decals,
+   *  and a fringe of reeds/grass around the rim. Drawn under everything (depth ≤ 7). */
+  private drawForestPond(
+    cx: number, cy: number, rw: number, rh: number,
+    rng: Phaser.Math.RandomDataGenerator,
+  ) {
+    const g = this.add.graphics().setDepth(4)
+    // dirt/grass shore ring
+    g.fillStyle(0x6a5a3a, 1).fillEllipse(cx, cy, rw * 2 + 34, rh * 2 + 30)
+    g.fillStyle(0x4f7a36, 1).fillEllipse(cx, cy, rw * 2 + 18, rh * 2 + 16)
+    // water body with a lighter inner highlight
+    g.fillStyle(0x2f6f9e, 1).fillEllipse(cx, cy, rw * 2, rh * 2)
+    g.fillStyle(0x4a8fc0, 1).fillEllipse(cx - rw * 0.18, cy - rh * 0.2, rw * 1.3, rh * 1.1)
+    g.fillStyle(0x66a6d4, 0.5).fillEllipse(cx - rw * 0.3, cy - rh * 0.35, rw * 0.6, rh * 0.45)
+
+    // lily pads floating on the surface (decal sheet, 36 frames)
+    const padCount = rng.integerInRange(3, 6)
+    for (let i = 0; i < padCount; i++) {
+      const a = rng.frac() * Math.PI * 2
+      const r = rng.frac() * 0.7
+      const px = cx + Math.cos(a) * rw * r
+      const py = cy + Math.sin(a) * rh * r
+      this.add.image(px, py, 'cpf_lilis', rng.integerInRange(0, 35))
+        .setScale(1.6 + rng.frac() * 0.8).setDepth(5)
+    }
+
+    // reed + grass fringe hugging the rim
+    const fringe = rng.integerInRange(14, 20)
+    for (let i = 0; i < fringe; i++) {
+      const a = rng.frac() * Math.PI * 2
+      const px = cx + Math.cos(a) * (rw + rng.integerInRange(2, 22))
+      const py = cy + Math.sin(a) * (rh + rng.integerInRange(2, 18))
+      const key = rng.pick(['cpf_reeds1', 'cpf_reeds2', 'cpf_reeds3'])
+      this.add.image(px, py, key).setOrigin(0.5, 0.95)
+        .setScale(1.6 + rng.frac() * 0.7).setDepth(6)
+    }
+  }
+
   private drawPineForest(rng: Phaser.Math.RandomDataGenerator) {
-    this.drawBiomeGround('Pine Forest')
-    // Dense pines (mostly tall green, some teal and small) + mossy rocks
-    this.scatterProps(90, 0, WORLD_W, 0, WORLD_H, rng, 0.8,
-      [RL_PINE_GREEN_TALL, RL_PINE_GREEN_TALL, RL_PINE_TEAL_TALL, RL_PINE_GREEN_SM],
-      RL_ROCKS_GRAY_MOSS)
-    // Red mushrooms on the forest floor (Tiny Town)
-    for (let i = 0; i < 25; i++) {
+    const rt = this.drawBiomeGround('Pine Forest')
+
+    // ── Dense ground texture: grass blades, specks, tufts and dirt mounds ──────
+    const detail: { frames: number[]; count: number; scale: number }[] = [
+      { frames: CPD_BLADES, count: 900, scale: 4 },
+      { frames: CPD_SPECKS, count: 500, scale: 4 },
+      { frames: CPD_TUFTS,  count: 260, scale: 4 },
+      { frames: CPD_MOUNDS, count: 90,  scale: 4 },
+    ]
+    for (const d of detail) {
+      for (let i = 0; i < d.count; i++) {
+        const x = rng.integerInRange(0, WORLD_W)
+        const y = rng.integerInRange(0, WORLD_H)
+        rt.stamp('cp_details', rng.pick(d.frames), x, y, { scaleX: d.scale, scaleY: d.scale })
+      }
+    }
+
+    // ── Ponds (fixed spots, well clear of the winding path) ────────────────────
+    const ponds: [number, number, number, number][] = [
+      [560, 1620, 150, 95],
+      [3150, 760, 170, 110],
+      [2050, 1780, 120, 78],
+    ]
+    for (const [px, py, pw, ph] of ponds) {
+      if (this.isNearWaypoint(px, py)) continue
+      this.drawForestPond(px, py, pw, ph, rng)
+    }
+
+    // ── Ground-hugging detail props (low depth, layered under trees) ───────────
+    const stones = ['cpf_stone1', 'cpf_stone2', 'cpf_stone3', 'cpf_stone4']
+    const bushes = ['cpf_bush1', 'cpf_bush2', 'cpf_bush4', 'cpf_bush7', 'cpf_bush10']
+    const stumps = ['cpf_stump1', 'cpf_stump3', 'cpf_stump5']
+    const redMush = ['cpf_redmush1', 'cpf_redmush2', 'cpf_redmush3']
+
+    // boulders
+    for (let i = 0; i < 34; i++) {
+      const x = rng.integerInRange(60, WORLD_W - 60)
+      const y = rng.integerInRange(60, WORLD_H - 60)
+      this.placeForestProp(rng.pick(stones), x, y, 1.5 + rng.frac() * 1.0, 8)
+    }
+    // bushes
+    for (let i = 0; i < 90; i++) {
       const x = rng.integerInRange(40, WORLD_W - 40)
       const y = rng.integerInRange(40, WORLD_H - 40)
-      if (this.isNearWaypoint(x, y)) continue
-      this.add.image(x, y, 'tiny_town', TT_MUSHROOMS).setScale(3).setDepth(9)
+      this.placeForestProp(rng.pick(bushes), x, y, 1.5 + rng.frac() * 0.9, 9)
+    }
+    // stumps / fallen logs / snags
+    for (let i = 0; i < 26; i++) {
+      const x = rng.integerInRange(60, WORLD_W - 60)
+      const y = rng.integerInRange(60, WORLD_H - 60)
+      this.placeForestProp(rng.pick(stumps), x, y, 1.5 + rng.frac() * 0.7, 9)
+    }
+    // red mushroom clumps (2-4 caps together)
+    for (let c = 0; c < 26; c++) {
+      const bx = rng.integerInRange(60, WORLD_W - 60)
+      const by = rng.integerInRange(60, WORLD_H - 60)
+      const n = rng.integerInRange(2, 4)
+      for (let k = 0; k < n; k++) {
+        this.placeForestProp(
+          rng.pick(redMush),
+          bx + rng.integerInRange(-26, 26), by + rng.integerInRange(-18, 18),
+          1.6 + rng.frac() * 0.7, 9,
+        )
+      }
+    }
+    // scattered brown mushrooms
+    for (let i = 0; i < 22; i++) {
+      const x = rng.integerInRange(60, WORLD_W - 60)
+      const y = rng.integerInRange(60, WORLD_H - 60)
+      this.placeForestProp('cpf_brownmush', x, y, 1.5 + rng.frac() * 0.6, 9)
+    }
+    // grass tufts (small ground decals as standalone sprites for extra lushness)
+    for (let i = 0; i < 70; i++) {
+      const x = rng.integerInRange(40, WORLD_W - 40)
+      const y = rng.integerInRange(40, WORLD_H - 40)
+      this.placeForestProp(rng.pick(bushes), x, y, 0.9 + rng.frac() * 0.5, 8)
+    }
+
+    // ── Stone pillar statue + ruined pillars feature (fixed, off the path) ─────
+    const statueSpots: [number, number, string, number][] = [
+      [3100, 1500, 'cpf_ruin', 2.0],
+      [820, 540, 'cpf_pillar', 2.2],
+    ]
+    for (const [sx, sy, skey, sc] of statueSpots) {
+      this.placeForestProp(skey, sx, sy, sc, 11)
+    }
+
+    // ── Trees in clusters: big round/pine canopy + small inner trees ───────────
+    const bigTrees = ['cpf_tree1', 'cpf_tree2', 'cpf_tree3', 'cpf_tree5',
+                      'cpf_tree6', 'cpf_tree7', 'cpf_tree11', 'cpf_tree13']
+    const smallTrees = ['cpf_treesm4', 'cpf_treesm10', 'cpf_treesm12', 'cpf_treesm14']
+
+    const CLUSTERS = 30
+    for (let c = 0; c < CLUSTERS; c++) {
+      const cx = rng.integerInRange(80, WORLD_W - 80)
+      const cy = rng.integerInRange(80, WORLD_H - 80)
+      const n = rng.integerInRange(4, 8)
+      for (let k = 0; k < n; k++) {
+        const x = cx + rng.integerInRange(-130, 130)
+        const y = cy + rng.integerInRange(-100, 100)
+        // depth keyed to y so lower (front) trees overlap higher ones; capped < 15
+        const depth = 12 + Math.min(2, Math.floor((y / WORLD_H) * 3))
+        if (rng.frac() < 0.28) {
+          this.placeForestProp(rng.pick(smallTrees), x, y, 1.3 + rng.frac() * 0.5, Math.min(13, depth))
+        } else {
+          this.placeForestProp(rng.pick(bigTrees), x, y, 1.25 + rng.frac() * 0.55, Math.min(14, depth))
+        }
+      }
+    }
+    // a sprinkle of lone trees to fill gaps between clusters
+    for (let i = 0; i < 45; i++) {
+      const x = rng.integerInRange(80, WORLD_W - 80)
+      const y = rng.integerInRange(80, WORLD_H - 80)
+      const depth = Math.min(14, 12 + Math.floor((y / WORLD_H) * 2))
+      this.placeForestProp(rng.pick(bigTrees), x, y, 1.2 + rng.frac() * 0.6, depth)
     }
   }
 

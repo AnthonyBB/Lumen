@@ -31,10 +31,29 @@ import type {
   ShopUnlocksPayload,
   Player,
   Subject,
-  Difficulty,
+  CharacterAllocatePayload,
+  AttributeKey,
+  InventoryItem,
+  ItemRarity,
 } from '../types/index.js';
+import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
-import { CURRICULUM, SUBCATEGORY_MAP } from '../game/data/curriculum.js';
+import { rollCombatDrops, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { getItemSlot, createItem } from '../game/ItemDatabase.js';
+import {
+  marketPrice,
+  buildItemSnapshot,
+  type MarketListing,
+} from '../game/MarketManager.js';
+import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
+import { randomUUID } from 'crypto';
+import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
+import {
+  QUIZ_COMPLETE_SKILL_SHARDS,
+  GRADE_COMPLETE_SKILL_SHARDS,
+  GRADE_COMPLETE_COMBAT_SHARDS,
+} from '../game/PlayerManager.js';
+import { QUIZ_PASS_THRESHOLD } from '../game/LearningSessionManager.js';
 import { SKILL_TREES, type CombatSkill } from '../game/data/skillTrees.js';
 import { STRATEGIES, type CombatStrategy } from '../game/data/combatStrategies.js';
 
@@ -80,7 +99,6 @@ const EQUIP_SLOT_TO_KEY: Record<EquipSlot, EquipmentSlotKey> = {
 };
 
 const VALID_SUBJECTS: ReadonlySet<Subject> = new Set(['math', 'science', 'history', 'language']);
-const VALID_DIFFICULTIES: ReadonlySet<Difficulty> = new Set(['easy', 'medium', 'hard']);
 
 /** Maximum chat message length (characters). */
 const MAX_CHAT_LENGTH = 200;
@@ -92,14 +110,21 @@ const CHAT_RATE_MS = 1000;
 // ---------------------------------------------------------------------------
 
 /**
- * Very lightweight HTML sanitiser — strips tags and trims whitespace.
- * For a production deployment use a dedicated library (e.g. `sanitize-html`).
+ * Very lightweight chat sanitiser — strips HTML, control characters, and
+ * collapses whitespace, then trims and length-caps.
+ *
+ * NOTE: real profanity / moderation filtering is OUT OF SCOPE for this pass.
+ * This is a kids'/educational game (see CLAUDE.md); a production deployment
+ * should add a dedicated moderation pipeline (e.g. `sanitize-html` + a profanity
+ * service) before exposing free-form chat broadly.
  */
 function sanitiseChat(raw: string): string {
   return raw
-    .replace(/<[^>]*>/g, '')       // strip HTML tags
-    .replace(/&[a-z]+;/gi, '')     // strip HTML entities
-    .replace(/[^\x20-\x7E\s]/g, '') // keep only printable ASCII + whitespace
+    .replace(/<[^>]*>/g, '')          // strip HTML tags
+    .replace(/&[a-z]+;/gi, '')        // strip HTML entities
+    .replace(/[\x00-\x1F\x7F]/g, ' ') // drop control chars (incl. newlines/tabs)
+    .replace(/[^\x20-\x7E]/g, '')     // keep only printable ASCII
+    .replace(/\s+/g, ' ')             // collapse runs of whitespace
     .trim()
     .slice(0, MAX_CHAT_LENGTH);
 }
@@ -121,7 +146,6 @@ export function registerHandlers(
 ): void {
   const {
     playerManager,
-    questionEngine,
     learningSessionManager,
     inventoryManager,
     chestManager,
@@ -150,9 +174,74 @@ export function registerHandlers(
     if (inventory) socket.emit('inventory:updated', inventory);
   };
 
+  /**
+   * Recompute the player's derived stats from their attributes + equipped gear,
+   * apply the derived Max HP to their real combat HP, and push `stats:update`.
+   * Server-authoritative — the client only renders this; it never sends stats.
+   */
+  const pushStats = (): void => {
+    const inventory = inventoryManager.getInventory(socket.id);
+    const equipment = inventory?.equipment ?? {};
+    const payload = playerManager.applyDerivedStats(socket.id, equipment);
+    if (payload) socket.emit('stats:update', payload);
+  };
+
+  /** Push the player's shard balances so the HUD currency counters refresh.
+   *  Shards are a tracked currency (PlayerManager), not inventory items. */
+  const pushCurrency = (): void => {
+    socket.emit('currency:update', {
+      skillShards: playerManager.getSkillShards(socket.id),
+      combatShards: playerManager.getCombatShards(socket.id),
+      silver: playerManager.getSilver(socket.id),
+    });
+  };
+
   // ── players:get_online ────────────────────────────────────────────────────
   socket.on('players:get_online', () => {
     socket.emit('players:online', onlinePlayers.size)
+  })
+
+  // ── currency:get — HUD requests current shard balances ────────────────────
+  socket.on('currency:get', () => {
+    pushCurrency();
+  })
+
+  // ── stats:get — Character / Equipment screens request the stat breakdown ──
+  //
+  // Read-only.  Recomputes attributes + derived combat stats from the player's
+  // allocation and equipped gear (all server-side) and pushes `stats:update`.
+  socket.on('stats:get', () => {
+    const player = playerManager.getPlayer(socket.id);
+    if (!player) return;
+    pushStats();
+  })
+
+  // ── character:allocate — spend one allocation point into an attribute ─────
+  //
+  // Server-authoritative validation:
+  //  1. The player must exist (joined).
+  //  2. `attribute` must be one of the five known attributes.
+  //  3. The player must have an unspent point (level*3 − sum(allocated) > 0).
+  // On success the point is recorded, persisted, and the recomputed stats
+  // (with the new derived Max HP) are pushed.
+  socket.on('character:allocate', (payload: CharacterAllocatePayload) => {
+    const player = requireJoinedPlayer('You must join before allocating points.');
+    if (!player) return;
+
+    const attribute = payload?.attribute;
+    if (typeof attribute !== 'string' || !(ATTRIBUTE_KEYS as readonly string[]).includes(attribute)) {
+      socket.emit('error', { message: 'Invalid attribute.' });
+      return;
+    }
+
+    if (!playerManager.allocatePoint(socket.id, attribute as AttributeKey)) {
+      socket.emit('error', { message: 'You have no unspent points to allocate.' });
+      return;
+    }
+
+    playerManager.persistProgress(socket.id);
+    pushStats();
+    console.log(`[allocate] ${player.username} put a point into ${attribute}`);
   })
 
   // ── zone:get ──────────────────────────────────────────────────────────────
@@ -208,10 +297,23 @@ export function registerHandlers(
     // Tell the joining player about themselves and the current zone
     socket.emit('player:joined', { player, zonePlayers });
 
-    // Push the freshly-loaded inventory so HUD counters render immediately —
-    // the client's inventory:get can race ahead of this async join handler.
+    // Migrate any shards that were stored as bag items (older builds) into the
+    // tracked shard balances, then drop them from the bag.
+    const drained = inventoryManager.drainShardItems(socket.id);
+    if (drained.skill > 0) playerManager.addShards(socket.id, 'skill', drained.skill);
+    if (drained.combat > 0) playerManager.addShards(socket.id, 'combat', drained.combat);
+    if (drained.skill > 0 || drained.combat > 0) {
+      console.log(`[migrate] folded bag shards into balances for ${username}: +${drained.skill} skill, +${drained.combat} combat`);
+    }
+
+    // Push the freshly-loaded inventory + shard balances so HUD counters render
+    // immediately — the client's get requests can race this async join handler.
     const joinInventory = inventoryManager.getInventory(socket.id);
     if (joinInventory) socket.emit('inventory:data', joinInventory);
+    pushCurrency();
+    // Derive Max HP from attributes + gear and push the stats breakdown so the
+    // Character / Equipment screens render the moment the player joins.
+    pushStats();
 
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {
@@ -269,17 +371,26 @@ export function registerHandlers(
   // by the server-validated learning session flow (see learning:answer).
   // Learning XP also no longer flows through here — ClassroomScene uses
   // server learning sessions, which award XP via LearningSessionManager.
-  socket.on('player:award_xp', async (payload: { xp: unknown }) => {
+  socket.on('player:award_xp', async (payload: {
+    xp: unknown; silver?: unknown; difficulty?: unknown; level?: unknown; campaignComplete?: unknown;
+  }) => {
     if (!isSafeNumber(payload?.xp, 0, 500)) {
       socket.emit('error', { message: 'Invalid award_xp payload.' });
       return;
     }
+    // Silver from combat is client-reported (combat resolves client-side) and
+    // capped server-side, mirroring the XP cap — a generous ceiling that still
+    // blocks absurd payloads. Optional: absent on non-combat XP awards.
+    const silverAmount = isSafeNumber(payload?.silver, 0, 5000)
+      ? Math.floor(payload.silver as number)
+      : 0;
 
     const player = requireJoinedPlayer('You must join before earning XP.');
     if (!player) return;
 
     const xpAmount = Math.floor(payload.xp as number); // ensure integer
     const { newXp, newLevel, leveledUp } = playerManager.addXp(socket.id, xpAmount);
+    if (silverAmount > 0) playerManager.addSilver(socket.id, silverAmount);
     playerManager.persistProgress(socket.id);
 
     socket.emit('player:xp_updated', {
@@ -288,58 +399,89 @@ export function registerHandlers(
       leveledUp,
       xpAwarded: xpAmount,
     });
+    if (silverAmount > 0) pushCurrency();
 
     console.log(
-      `[award_xp] ${player.username} +${xpAmount} XP → ${newXp} XP (Lv ${newLevel})` +
+      `[award_xp] ${player.username} +${xpAmount} XP, +${silverAmount} silver → ${newXp} XP (Lv ${newLevel})` +
       (leveledUp ? ' *** LEVEL UP ***' : ''),
     );
+
+    // ── Combat loot drops (server-authoritative) ──────────────────────────────
+    // Only when this award reports a battle outcome (difficulty present). The
+    // server rolls the drop and adds the item(s) to the bag — the client never
+    // chooses loot. `combat:loot` is always emitted (possibly empty) so the
+    // client's one-shot listener resolves and the loot toast can render.
+    const diff: Difficulty | null =
+      typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
+        ? (payload.difficulty as Difficulty)
+        : null;
+    if (diff) {
+      const dropLevel = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
+      const campaignComplete = payload?.campaignComplete === true;
+      const drops = rollCombatDrops(dropLevel, diff, campaignComplete);
+      if (drops.length) {
+        for (const eq of drops) {
+          inventoryManager.addItem(socket.id, {
+            id: randomUUID(),
+            itemType: eq.id,            // eq_NNNN — EQUIPMENT_MAP supplies stats on equip
+            name: eq.name,
+            description: eq.description,
+            rarity: eq.rarity as ItemRarity,
+            stats: {},
+            quantity: 1,
+            stackable: false,
+            icon: eq.icon,
+          });
+        }
+        pushInventoryUpdate();
+        console.log(
+          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}dropped ${drops.length}: ` +
+          drops.map((d) => `${d.name} [${d.rarity}]`).join(', '),
+        );
+      }
+      socket.emit('combat:loot', {
+        campaignComplete,
+        items: drops.map((d) => ({ name: d.name, icon: d.icon, rarity: d.rarity })),
+      });
+    }
   });
 
   // ── learning:start ───────────────────────────────────────────────────────
+  //
+  // Starts a 5-question quiz for a single curriculum topic.  Server-authoritative
+  // validation:
+  //  1. topicId must be a known curriculum topic (curriculum.ts catalog).
+  //  2. The topic's grade MUST equal the player's CURRENT grade in that
+  //     subject — players cannot skip ahead or replay completed grades.
   socket.on('learning:start', (payload: LearningStartPayload) => {
-    if (
-      typeof payload?.subject !== 'string' ||
-      !VALID_SUBJECTS.has(payload.subject as Subject) ||
-      typeof payload?.difficulty !== 'string' ||
-      !VALID_DIFFICULTIES.has(payload.difficulty as Difficulty)
-    ) {
-      socket.emit('error', { message: 'Invalid learning start payload. Provide a valid subject and difficulty.' });
+    if (typeof payload?.topicId !== 'string') {
+      socket.emit('error', { message: 'Invalid learning start payload. Provide a topicId.' });
       return;
     }
 
-    // Optional subcategory — must be a known curriculum id belonging to the
-    // requested subject.  Unknown ids are rejected (never trusted blindly).
-    let subcategory: string | undefined;
-    if (payload.subcategory !== undefined) {
-      if (typeof payload.subcategory !== 'string') {
-        socket.emit('error', { message: 'Invalid subcategory.' });
-        return;
-      }
-      const subcat = SUBCATEGORY_MAP[payload.subcategory];
-      if (!subcat || subcat.subject !== payload.subject) {
-        socket.emit('error', { message: 'Unknown subcategory for that subject.' });
-        return;
-      }
-      subcategory = subcat.id;
-    }
-
-    // Content-mode gating: child mode (user-chosen or defaulting from ageGroup)
-    // may only access easy/medium difficulty questions.
-    const contentMode = (socket.data.contentMode as string | null) ??
-      ((socket.data.ageGroup as string) === 'child' ? 'child' : 'adolescent');
-    if (contentMode === 'child' && payload.difficulty === 'hard') {
-      socket.emit('error', { message: 'Hard difficulty requires Adolescent+ content mode.' });
+    const topic = TOPIC_MAP[payload.topicId];
+    if (!topic) {
+      socket.emit('error', { message: 'Unknown topic.' });
       return;
     }
 
     const player = requireJoinedPlayer('You must join before starting a learning session.');
     if (!player) return;
 
+    // Grade gate — the topic must be at the player's current grade for the subject.
+    const currentGrade = player.subjectGrades[topic.subject];
+    if (topic.grade !== currentGrade) {
+      socket.emit('error', {
+        message: `That topic is grade ${topic.grade}, but your current ${topic.subject} grade is ${currentGrade}.`,
+      });
+      return;
+    }
+
     const result = learningSessionManager.startSession(
       socket.id,
-      payload.subject as Subject,
-      payload.difficulty as Difficulty,
-      subcategory,
+      topic.id,
+      topic.subject,
+      topic.grade,
     );
 
     if ('error' in result) {
@@ -351,21 +493,21 @@ export function registerHandlers(
 
     socket.emit('learning:session_started', {
       sessionId: session.sessionId,
+      topicId: topic.id,
       firstQuestion,
     });
 
     console.log(
-      `[learning] ${socket.id} started session ${session.sessionId} ` +
-      `(${payload.subject}/${subcategory ?? 'any'}/${payload.difficulty})`,
+      `[learning] ${socket.id} started quiz ${session.sessionId} (${topic.id} · grade ${topic.grade})`,
     );
   });
 
   // ── curriculum:get ───────────────────────────────────────────────────────
   //
-  // Returns the K-12 subject → subcategory taxonomy so clients can render the
-  // subcategory picker.  Safe to send: contains no questions or answers.
+  // Returns the grade-level topic catalog so clients can render the classroom.
+  // Safe to send: contains no questions or answers.
   socket.on('curriculum:get', () => {
-    socket.emit('curriculum:data', { curriculum: CURRICULUM });
+    socket.emit('curriculum:data', { topics: GRADE_TOPICS });
   });
 
   // ── learning:answer ──────────────────────────────────────────────────────
@@ -379,8 +521,8 @@ export function registerHandlers(
       return;
     }
 
-    // Capture the session BEFORE submitting — we need its subcategory for
-    // the Combat Shard award after completion.
+    // Capture the session BEFORE submitting — we need its topic/subject/grade
+    // for the grade-progression rewards once the quiz completes.
     const session = learningSessionManager.getSession(payload.sessionId);
 
     const result = learningSessionManager.submitAnswer(
@@ -397,46 +539,8 @@ export function registerHandlers(
 
     const { correct, attemptsLeft, explanation, xpEarned, sessionComplete, perfectScore, nextQuestion } = result;
 
-    // ── Server-authoritative shard awards ────────────────────────────────────
-    // 🔷 Skill Shard: 1 per 5 cumulative correct answers (persisted per user).
-    // 🔶 Combat Shard: a subcategory is complete only when EVERY question in
-    //    it has been answered correctly at least 3 times (tracked per user
-    //    across sessions; awarded once per subcategory).
-    let skillShardsAwarded = 0;
-    let combatShardAwarded = false;
-
-    if (correct) {
-      skillShardsAwarded = playerManager.recordCorrectAnswer(socket.id);
-      if (skillShardsAwarded > 0) {
-        inventoryManager.addCurrency(socket.id, 'skill_shard', skillShardsAwarded);
-        console.log(`[learning] ${socket.id} reached a 5-correct milestone — skill shard awarded`);
-      }
-
-      if (session?.subcategory) {
-        const subcatQuestionIds = questionEngine.getQuestionIdsForSubcategory(session.subcategory);
-        const newlyMastered = playerManager.recordQuestionMastery(
-          socket.id,
-          payload.questionId,
-          session.subcategory,
-          subcatQuestionIds,
-        );
-        if (newlyMastered) {
-          combatShardAwarded = true;
-          inventoryManager.addCurrency(socket.id, 'combat_shard', 1);
-          console.log(
-            `[learning] ${socket.id} mastered subcategory "${session.subcategory}" ` +
-            `(every question correct ≥3×) — combat shard awarded`,
-          );
-        }
-      }
-    }
-
-    // Persist XP / level / cumulative-correct progress on every correct
-    // answer and at session end (XP is added inside LearningSessionManager).
-    if (correct || sessionComplete) {
-      playerManager.persistProgress(socket.id);
-    }
-
+    // Mid-quiz answer result (no reward fields — rewards are computed once on
+    // completion and delivered via the separate `learning:complete` event).
     socket.emit('learning:answer_result', {
       correct,
       attemptsLeft,
@@ -445,26 +549,81 @@ export function registerHandlers(
       sessionComplete,
       perfectScore,
       nextQuestion,
+    });
+
+    // Persist XP / level on every correct answer (XP is added inside
+    // LearningSessionManager) so progress is never lost mid-quiz.
+    if (correct) {
+      playerManager.persistProgress(socket.id);
+    }
+
+    if (!sessionComplete) return;
+
+    // ── Quiz complete — server-authoritative grade-progression rewards ───────
+    const completedSession = learningSessionManager.getSession(payload.sessionId) ?? session;
+    const score = completedSession ? completedSession.correctCount : 0;
+    const passed = score >= QUIZ_PASS_THRESHOLD;
+
+    let topicPasses = completedSession
+      ? playerManager.getTopicPasses(socket.id, completedSession.topicId)
+      : 0;
+    let gradeCompleted = false;
+    let combatShardAwarded = 0;
+    let newGrade = completedSession
+      ? playerManager.getSubjectGrade(socket.id, completedSession.subject)
+      : 1;
+
+    // Every completed quiz earns 1 skill shard (effort reward), regardless of
+    // pass/fail. Grade completion adds the larger bonus below.
+    let skillShardsAwarded = QUIZ_COMPLETE_SKILL_SHARDS;
+    playerManager.addShards(socket.id, 'skill', QUIZ_COMPLETE_SKILL_SHARDS);
+
+    if (passed && completedSession) {
+      const { topicId, subject } = completedSession;
+      topicPasses = playerManager.recordTopicPass(socket.id, topicId);
+
+      // Did this pass complete BOTH topics of the subject's current grade?
+      if (playerManager.isCurrentGradeComplete(socket.id, subject)) {
+        gradeCompleted = true;
+        skillShardsAwarded += GRADE_COMPLETE_SKILL_SHARDS;
+        combatShardAwarded = GRADE_COMPLETE_COMBAT_SHARDS;
+        playerManager.addShards(socket.id, 'skill', GRADE_COMPLETE_SKILL_SHARDS);
+        playerManager.addShards(socket.id, 'combat', combatShardAwarded);
+        newGrade = playerManager.advanceSubjectGrade(socket.id, subject);
+        console.log(
+          `[learning] ${socket.id} completed grade in ${subject} → grade ${newGrade} ` +
+          `(+${GRADE_COMPLETE_SKILL_SHARDS} skill, +${combatShardAwarded} combat shards)`,
+        );
+      }
+      playerManager.persistProgress(socket.id);
+    }
+
+    // Final XP / level persist (handles the case the last answer was wrong).
+    playerManager.persistProgress(socket.id);
+
+    socket.emit('learning:complete', {
+      topicId: completedSession?.topicId ?? '',
+      score,
+      passed,
+      topicPasses,
+      gradeCompleted,
+      newGrade,
       skillShardsAwarded,
       combatShardAwarded,
     });
 
-    // Push the updated inventory whenever shard currency changed
-    if (skillShardsAwarded > 0 || combatShardAwarded) {
-      pushInventoryUpdate();
-    }
+    // Refresh the HUD shard counters (a quiz always awards at least 1 skill shard).
+    pushCurrency();
 
-    // Let the HUD refresh XP / level after the session wraps up
-    if (sessionComplete) {
-      const player = playerManager.getPlayer(socket.id);
-      if (player) {
-        socket.emit('player:xp_updated', {
-          newXp: player.xp,
-          newLevel: player.level,
-          leveledUp: false,
-          xpAwarded: 0,
-        });
-      }
+    // Let the HUD refresh XP / level after the quiz wraps up.
+    const player = playerManager.getPlayer(socket.id);
+    if (player) {
+      socket.emit('player:xp_updated', {
+        newXp: player.xp,
+        newLevel: player.level,
+        leveledUp: false,
+        xpAwarded: 0,
+      });
     }
   });
 
@@ -508,11 +667,15 @@ export function registerHandlers(
       return;
     }
 
-    // Broadcast to the zone the player is in
+    // Broadcast to the zone the player is in. SECURITY: the username comes from
+    // the server-side joined player (never a client-claimed name), and zone
+    // scoping means tavern chat only reaches sockets in the 'tavern' zone —
+    // town players never see it, and vice-versa.
     io.to(player.zone).emit('chat:message', {
       playerId: socket.id,
       username: player.username,
       message: sanitised,
+      ts: now,
     });
   });
 
@@ -566,22 +729,35 @@ export function registerHandlers(
       return;
     }
 
-    // Catalog lookup: itemType is the stable generated-equipment id
+    // Resolve the destination slot + name, supporting BOTH item models:
+    //  • Generated gear (EQUIPMENT_MAP) — server-derived slot + XP gate.
+    //  • Legacy ItemDatabase gear (worn_sword, etc.) — its catalogue slot, no
+    //    XP gate.  Its {attack,defense,hp} stats fold into derived stats during
+    //    stat computation (see PlayerManager.computeStats).
+    let slotKey: EquipmentSlotKey;
+    let label: string;
+
     const catalogItem = EQUIPMENT_MAP[bagItem.itemType];
-    if (!catalogItem) {
-      socket.emit('error', { message: 'That item is not equippable gear.' });
-      return;
+    if (catalogItem) {
+      // XP gate — enforced server-side; player.xp is server-authoritative
+      if (player.xp < catalogItem.xpRequired) {
+        socket.emit('error', {
+          message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
+        });
+        return;
+      }
+      slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
+      label = catalogItem.name;
+    } else {
+      const legacySlot = getItemSlot(bagItem.itemType);
+      if (!legacySlot) {
+        socket.emit('error', { message: 'That item is not equippable gear.' });
+        return;
+      }
+      slotKey = legacySlot;
+      label = bagItem.name;
     }
 
-    // XP gate — enforced server-side; player.xp is server-authoritative
-    if (player.xp < catalogItem.xpRequired) {
-      socket.emit('error', {
-        message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
-      });
-      return;
-    }
-
-    const slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
     const success = inventoryManager.equipGeneratedItem(socket.id, payload.itemId, slotKey);
     if (!success) {
       socket.emit('error', { message: 'Could not equip that item.' });
@@ -589,8 +765,10 @@ export function registerHandlers(
     }
 
     pushInventoryUpdate();
+    // Recompute derived stats (Max HP can change) and push the breakdown.
+    pushStats();
     console.log(
-      `[equip] ${player.username} equipped ${catalogItem.name} (${catalogItem.id}) in ${slotKey}`,
+      `[equip] ${player.username} equipped ${label} in ${slotKey}`,
     );
   });
 
@@ -618,6 +796,8 @@ export function registerHandlers(
     }
 
     pushInventoryUpdate();
+    // Recompute derived stats (Max HP can drop) and push the breakdown.
+    pushStats();
     console.log(`[equip] ${player.username} unequipped slot ${payload.slot}`);
   });
 
@@ -631,9 +811,11 @@ export function registerHandlers(
   const buildUnlocksPayload = (player: Player): ShopUnlocksPayload => ({
     unlockedSkills: [...player.unlockedSkills],
     unlockedStrategies: [...player.unlockedStrategies],
-    skillShards: inventoryManager.getCurrencyCount(socket.id, 'skill_shard'),
-    combatShards: inventoryManager.getCurrencyCount(socket.id, 'combat_shard'),
+    skillShards: playerManager.getSkillShards(socket.id),
+    combatShards: playerManager.getCombatShards(socket.id),
     strategyLoadout: [...player.strategyLoadout],
+    subjectGrades: { ...player.subjectGrades },
+    topicPasses: { ...player.topicPasses },
   });
 
   // ── shop:get_unlocks ─────────────────────────────────────────────────────
@@ -685,7 +867,7 @@ export function registerHandlers(
     }
 
     const price = SKILL_PRICE_BY_TIER[skill.tier];
-    if (!inventoryManager.spendCurrency(socket.id, 'skill_shard', price)) {
+    if (!playerManager.spendShards(socket.id, 'skill', price)) {
       socket.emit('error', {
         message: `Not enough Skill Shards — ${skill.name} costs ${price} 🔷. Answer more questions to earn shards!`,
       });
@@ -699,7 +881,7 @@ export function registerHandlers(
       skillId: skill.id,
       ...buildUnlocksPayload(player),
     });
-    pushInventoryUpdate();
+    pushCurrency();
 
     console.log(`[shop] ${player.username} bought skill ${skill.id} for ${price} skill shard(s)`);
   });
@@ -736,7 +918,7 @@ export function registerHandlers(
     const price = STRATEGY_PRICE;
     const label = strategy.name;
 
-    if (!inventoryManager.spendCurrency(socket.id, 'combat_shard', price)) {
+    if (!playerManager.spendShards(socket.id, 'combat', price)) {
       socket.emit('error', {
         message: `Not enough Combat Shards — ${label} costs ${price} 🔶. Complete learning topics to earn shards!`,
       });
@@ -750,7 +932,7 @@ export function registerHandlers(
       strategyId: payload.strategyId,
       ...buildUnlocksPayload(player),
     });
-    pushInventoryUpdate();
+    pushCurrency();
 
     console.log(`[shop] ${player.username} bought ${label} for ${price} combat shard(s)`);
   });
@@ -871,6 +1053,294 @@ export function registerHandlers(
     const updatedInventory = inventoryManager.getInventory(socket.id)!;
     const updatedChest = chestManager.getChest(payload.chestId)!;
     socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
+  });
+
+  // ── Market ─────────────────────────────────────────────────────────────────
+  //
+  // Player-driven market.  Everything is server-authoritative: prices come from
+  // marketPrice() (server catalog), balances from PlayerManager, ownership from
+  // the server inventory, and listings persist in MongoDB (MarketManager).  The
+  // client only sends item-instance ids / listing ids and renders pushed state.
+
+  const { marketManager } = game;
+
+  /** The 8 market tabs (== generated EquipSlot values). */
+  const MARKET_SLOTS: ReadonlySet<string> = new Set([
+    'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
+  ]);
+
+  // Synthetic seller for items sold to the system. Items sold this way stay on
+  // the market (priced like a player listing, 2× base) so they — and any other
+  // player — can buy them back. The space makes it impossible to collide with a
+  // real username, and the buy handler's offline-credit ($inc, upsert:false) is
+  // a safe no-op for this seller, so the rebuy silver leaves the economy.
+  const MARKET_VENDOR = 'Market Vendor';
+
+  /**
+   * Parse a search string into either a NAME substring match or an ATTRIBUTE
+   * filter.  An attribute filter looks like `<attrName> <op> <value>` where
+   *   op ∈ > < >= <= =,  value may have a leading '+',  attrName is one of the
+   *   generated-gear attribute / bonus types (case-insensitive, spaces→'_').
+   * Anything that does not match that grammar is treated as a name substring.
+   */
+  const buildSearchPredicate = (
+    rawSearch: string,
+  ): ((l: MarketListing) => boolean) | undefined => {
+    const search = rawSearch.trim();
+    if (!search) return undefined;
+
+    const m = search.match(/^([a-zA-Z][a-zA-Z _]*?)\s*(>=|<=|=|>|<)\s*\+?(-?\d+(?:\.\d+)?)$/);
+    if (m) {
+      const attrName = m[1].trim().toLowerCase().replace(/\s+/g, '_');
+      const op = m[2];
+      const value = parseFloat(m[3]);
+      const cmp = (a: number): boolean => {
+        switch (op) {
+          case '>': return a > value;
+          case '<': return a < value;
+          case '>=': return a >= value;
+          case '<=': return a <= value;
+          case '=': return a === value;
+          default: return false;
+        }
+      };
+      return (l) => {
+        const attrs = l.itemData.attributes ?? [];
+        // Match the named attribute; a listing satisfies the filter if it has
+        // that attribute AND its value satisfies the comparison.
+        return attrs.some((a) => a.type.toLowerCase() === attrName && cmp(a.value));
+      };
+    }
+
+    // Plain name substring match (case-insensitive).
+    const needle = search.toLowerCase();
+    return (l) => l.itemData.name.toLowerCase().includes(needle);
+  };
+
+  /**
+   * Rehydrate a fresh bag InventoryItem from a listing snapshot.  A NEW UUID is
+   * stamped (the snapshot id belonged to the seller's instance).  Generated
+   * gear keeps its eq_NNNN itemType so EQUIPMENT_MAP lookups (equip/stats) work;
+   * legacy items are rebuilt from the ItemDatabase template when possible so the
+   * canonical stats are restored, falling back to the snapshot.
+   */
+  const itemFromSnapshot = (data: MarketListing['itemData']): InventoryItem => {
+    const legacy = createItem(data.itemType);
+    if (legacy) {
+      legacy.id = randomUUID();
+      return legacy;
+    }
+    return {
+      id: randomUUID(),
+      itemType: data.itemType,
+      name: data.name,
+      description: data.description ?? '',
+      rarity: data.rarity as ItemRarity,
+      stats: { ...(data.stats ?? {}) },
+      quantity: 1,
+      stackable: false,
+      icon: data.icon,
+    };
+  };
+
+  /** Push the player's own active listings as a `market:listings`. */
+  const pushMyListings = (username: string): void => {
+    socket.emit('market:listings', { listings: marketManager.listingsBySeller(username) });
+  };
+
+  // ── market:get_listings ──────────────────────────────────────────────────
+  socket.on('market:get_listings', (payload: { slot?: unknown; search?: unknown }) => {
+    const player = requireJoinedPlayer('You must join before browsing the market.');
+    if (!player) return;
+
+    const slot =
+      typeof payload?.slot === 'string' && MARKET_SLOTS.has(payload.slot)
+        ? payload.slot
+        : undefined;
+    const search = typeof payload?.search === 'string' ? payload.search : '';
+    const predicate = buildSearchPredicate(search);
+
+    socket.emit('market:listings', {
+      listings: marketManager.getListings({ slot, predicate }),
+    });
+  });
+
+  // ── market:my_listings ─────────────────────────────────────────────────────
+  socket.on('market:my_listings', () => {
+    const player = requireJoinedPlayer('You must join before viewing your listings.');
+    if (!player) return;
+    pushMyListings(player.username);
+  });
+
+  // ── market:list — list a bag item for other players (2× base) ──────────────
+  socket.on('market:list', (payload: { itemInstanceId?: unknown }) => {
+    if (typeof payload?.itemInstanceId !== 'string') {
+      socket.emit('error', { message: 'Invalid market list payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before selling items.');
+    if (!player) return;
+
+    const inv = inventoryManager.getInventory(socket.id);
+    const bagItem = inv?.items.find((i) => i.id === payload.itemInstanceId);
+    if (!inv || !bagItem) {
+      socket.emit('error', { message: 'You do not own that item.' });
+      return;
+    }
+
+    const price = 2 * marketPrice(bagItem);
+    const snapshot = buildItemSnapshot(bagItem);
+
+    // Remove from the bag FIRST so a player can never list the same instance
+    // twice; only then create the listing.
+    if (!inventoryManager.removeItem(socket.id, bagItem.id)) {
+      socket.emit('error', { message: 'Could not list that item.' });
+      return;
+    }
+    const listing = marketManager.createListing(player.username, snapshot, price);
+
+    pushInventoryUpdate();
+    socket.emit('market:listed', { listing });
+    console.log(`[market] ${player.username} listed ${snapshot.name} for ${price} silver`);
+  });
+
+  // ── market:sell_to_system — instant sell for base silver ───────────────────
+  socket.on('market:sell_to_system', (payload: { itemInstanceId?: unknown }) => {
+    if (typeof payload?.itemInstanceId !== 'string') {
+      socket.emit('error', { message: 'Invalid sell payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before selling items.');
+    if (!player) return;
+
+    const inv = inventoryManager.getInventory(socket.id);
+    const bagItem = inv?.items.find((i) => i.id === payload.itemInstanceId);
+    if (!inv || !bagItem) {
+      socket.emit('error', { message: 'You do not own that item.' });
+      return;
+    }
+
+    const base = marketPrice(bagItem);
+    const snapshot = buildItemSnapshot(bagItem);
+    if (!inventoryManager.removeItem(socket.id, bagItem.id)) {
+      socket.emit('error', { message: 'Could not sell that item.' });
+      return;
+    }
+    playerManager.addSilver(socket.id, base);
+    // Keep the item on the market under the vendor so it can be bought back.
+    const vendorListing = marketManager.createListing(MARKET_VENDOR, snapshot, 2 * base);
+
+    pushInventoryUpdate();
+    pushCurrency();
+    socket.emit('market:sold', { silver: base, listing: vendorListing });
+    console.log(`[market] ${player.username} sold ${bagItem.name} to the system for ${base} silver (relisted at ${2 * base})`);
+  });
+
+  // ── market:buy — buy another player's listing ──────────────────────────────
+  //
+  // Server-authoritative validation, in order:
+  //  1. The listing must still exist.
+  //  2. The buyer must NOT be the seller (can't buy your own listing).
+  //  3. The buyer must have enough silver (getSilver >= price).
+  // Then, atomically from the buyer's view:
+  //  • spendSilver(buyer, price)  — fails closed if balance changed.
+  //  • add the rehydrated item to the buyer's bag.
+  //  • credit the seller `price` silver — works even if the seller is OFFLINE
+  //    (PlayerProgress $inc); if online, also update their in-memory balance and
+  //    push their currency.
+  //  • delete the listing (cache + DB).
+  socket.on('market:buy', async (payload: { listingId?: unknown }) => {
+    if (typeof payload?.listingId !== 'string') {
+      socket.emit('error', { message: 'Invalid buy payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before buying items.');
+    if (!player) return;
+
+    const listing = marketManager.getListing(payload.listingId);
+    if (!listing) {
+      socket.emit('error', { message: 'That listing is no longer available.' });
+      return;
+    }
+    if (listing.sellerUsername === player.username) {
+      socket.emit('error', { message: 'You cannot buy your own listing.' });
+      return;
+    }
+    if (playerManager.getSilver(socket.id) < listing.price) {
+      socket.emit('error', {
+        message: `Not enough silver — that costs ${listing.price} 🪙.`,
+      });
+      return;
+    }
+
+    // Take the silver first; spendSilver fails closed if the balance is short.
+    if (!playerManager.spendSilver(socket.id, listing.price)) {
+      socket.emit('error', { message: 'Not enough silver.' });
+      return;
+    }
+
+    // Hand the item to the buyer.
+    const newItem = itemFromSnapshot(listing.itemData);
+    inventoryManager.addItem(socket.id, newItem);
+
+    // Credit the seller — even if offline.
+    const sellerOnlineSocketId = playerManager.getSocketIdByUsername(listing.sellerUsername);
+    if (sellerOnlineSocketId) {
+      playerManager.addSilver(sellerOnlineSocketId, listing.price);
+      io.to(sellerOnlineSocketId).emit('currency:update', {
+        skillShards: playerManager.getSkillShards(sellerOnlineSocketId),
+        combatShards: playerManager.getCombatShards(sellerOnlineSocketId),
+        silver: playerManager.getSilver(sellerOnlineSocketId),
+      });
+    } else {
+      // Offline seller — credit directly in MongoDB. addSilver already persists
+      // for online sellers (it writes the in-memory balance through), so we only
+      // do the raw $inc when the seller is NOT online to avoid double-crediting.
+      PlayerProgress.findOneAndUpdate(
+        { userId: listing.sellerUsername },
+        { $inc: { silver: listing.price } },
+        { upsert: false },
+      ).catch((err) => console.error('[market] offline seller credit failed:', err));
+    }
+
+    // Remove the listing now the trade is done.
+    marketManager.removeListing(listing.listingId);
+
+    pushInventoryUpdate();
+    pushCurrency();
+    socket.emit('market:bought', { listingId: listing.listingId, item: newItem });
+    console.log(
+      `[market] ${player.username} bought ${listing.itemData.name} from ${listing.sellerUsername} for ${listing.price} silver`,
+    );
+  });
+
+  // ── market:cancel — pull your own listing and reclaim the item ─────────────
+  socket.on('market:cancel', (payload: { listingId?: unknown }) => {
+    if (typeof payload?.listingId !== 'string') {
+      socket.emit('error', { message: 'Invalid cancel payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before cancelling listings.');
+    if (!player) return;
+
+    const listing = marketManager.getListing(payload.listingId);
+    if (!listing) {
+      socket.emit('error', { message: 'That listing no longer exists.' });
+      return;
+    }
+    if (listing.sellerUsername !== player.username) {
+      socket.emit('error', { message: 'You can only cancel your own listings.' });
+      return;
+    }
+
+    // Return the item to the bag, then drop the listing.
+    const returned = itemFromSnapshot(listing.itemData);
+    inventoryManager.addItem(socket.id, returned);
+    marketManager.removeListing(listing.listingId);
+
+    pushInventoryUpdate();
+    socket.emit('market:cancelled', { listingId: listing.listingId });
+    console.log(`[market] ${player.username} cancelled listing for ${listing.itemData.name}`);
   });
 
   // ── disconnect ───────────────────────────────────────────────────────────

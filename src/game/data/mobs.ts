@@ -10,8 +10,11 @@
  * and are differentiated per archetype with a Phaser tint — e.g. the cyclops
  * frame is a tan Desert Troll, an icy-blue Frost Troll, and a snowy Yeti.
  *
- * Biome-location difficulty maps to a level band (TIER_LEVEL_BANDS):
- *   easy 1-20, medium 21-55, hard 56-100.
+ * Each archetype belongs to one of three POOL tiers (easy/medium/hard). A
+ * campaign is entered at one of FIVE difficulty MODES (see DIFFICULTIES); each
+ * mode maps to a pool tier plus a level + mob-count band, so Beginner/Easy draw
+ * gentle low-level fights from the easy pool while Hard/Expert push the hard
+ * pool to high levels.
  */
 
 import {
@@ -62,6 +65,47 @@ export const TIER_LEVEL_BANDS: Record<MobTier, [number, number]> = {
   medium: [21, 55],
   hard:   [56, 100],
 }
+
+// ── Difficulty modes (per campaign) ─────────────────────────────────────────
+//
+// A campaign (formerly "biome") can be entered at one of FIVE difficulty modes.
+// Each mode maps to a bestiary POOL (the archetype `tier`), a mob LEVEL band,
+// and a per-encounter mob COUNT band. The two new gentle modes — Beginner and
+// Easy — draw from the easy pool at very low levels so a brand-new player can
+// actually win. Medium/Hard/Expert ramp up from there.
+//
+// This is the single source of truth for difficulty on the CLIENT. The server
+// keeps a matching (small) copy for loot scaling — keep the keys in sync (see
+// server/game/loot.ts).
+export type Difficulty = 'beginner' | 'easy' | 'medium' | 'hard' | 'expert'
+
+export interface DifficultyConfig {
+  key: Difficulty
+  label: string
+  /** Bestiary archetype pool this mode draws from. */
+  pool: MobTier
+  /** Mob level band [min, max]. */
+  band: [number, number]
+  /** Per-encounter mob count band [min, max] (ramps across the campaign). */
+  count: [number, number]
+  /** UI accent as a CSS color string. */
+  color: string
+  /** UI accent as a Phaser color number. */
+  colorNum: number
+  /** Menu icon. */
+  icon: string
+}
+
+export const DIFFICULTIES: Record<Difficulty, DifficultyConfig> = {
+  beginner: { key: 'beginner', label: 'Beginner', pool: 'easy',   band: [1, 4],    count: [1, 2],  color: '#9be88a', colorNum: 0x9be88a, icon: '🌱' },
+  easy:     { key: 'easy',     label: 'Easy',     pool: 'easy',   band: [3, 12],   count: [2, 3],  color: '#88ff88', colorNum: 0x88ff88, icon: '🌿' },
+  medium:   { key: 'medium',   label: 'Medium',   pool: 'medium', band: [14, 35],  count: [3, 5],  color: '#ffcc44', colorNum: 0xffcc44, icon: '🔥' },
+  hard:     { key: 'hard',     label: 'Hard',     pool: 'hard',   band: [38, 65],  count: [5, 8],  color: '#ff6666', colorNum: 0xff6666, icon: '💀' },
+  expert:   { key: 'expert',   label: 'Expert',   pool: 'hard',   band: [68, 100], count: [7, 10], color: '#c98bff', colorNum: 0xc98bff, icon: '👑' },
+}
+
+/** Difficulty keys ordered easiest → hardest (drives the campaign menu order). */
+export const DIFFICULTY_ORDER: Difficulty[] = ['beginner', 'easy', 'medium', 'hard', 'expert']
 
 // ── Bestiary ────────────────────────────────────────────────────────────────
 

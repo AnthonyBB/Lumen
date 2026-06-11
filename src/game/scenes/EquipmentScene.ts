@@ -15,9 +15,9 @@ import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import {
   InventoryStore,
   type ClientInventoryItem,
-  type ClientItemStats,
   type ClientPlayerInventory,
 } from '../systems/InventoryStore'
+import { StatsStore, type ClientStats, type ClientStatRow } from '../systems/StatsStore'
 import { EQUIPMENT_MAP, type EquipSlot } from '../data/equipmentGen'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ const RARITY_COLOR: Record<Rarity, number> = {
 const SLOT_LABELS: Record<SlotKey, string> = {
   mainHand: 'Main Hand', offHand: 'Off Hand', helm: 'Helm',
   earring:  'Earring',   ring1:   'Ring 1',   ring2: 'Ring 2',
-  belt:     'Belt',      shoes:   'Shoes',    gloves: 'Gloves',
+  belt:     'Belt',      shoes:   'Boots',    gloves: 'Gloves',
   necklace: 'Necklace',  chest:   'Chest',    legs:   'Legs',
 }
 
@@ -60,29 +60,65 @@ const EQUIP_SLOT_TO_KEY: Record<EquipSlot, SlotKey> = {
   amulet: 'necklace',
 }
 
-// Slot positions — paper doll center at ~190, 360
+/**
+ * Display-only slot lookup for LEGACY ItemDatabase gear (worn_sword, etc.).
+ * Mirrors the slots defined server-side in ItemDatabase.ts.  The server is
+ * still authoritative — this only drives which bag items show as equippable
+ * and which slot label to render.
+ */
+const LEGACY_ITEM_SLOT: Record<string, SlotKey> = {
+  worn_sword:      'mainHand',
+  worn_shield:     'offHand',
+  leather_helm:    'helm',
+  apprentice_ring: 'ring1',
+  silver_necklace: 'necklace',
+  iron_belt:       'belt',
+  scholars_gloves: 'gloves',
+  winged_boots:    'shoes',
+}
+
+/** True when a bag item is equippable (generated gear OR known legacy gear). */
+function isEquippable(itemType: string): boolean {
+  return !!EQUIPMENT_MAP[itemType] || !!LEGACY_ITEM_SLOT[itemType]
+}
+
+// Paper-doll layout: the wizard sits in the centre, slots flank it in two
+// even columns (armour left, weapons/accessories right) — aligned rows that
+// stay clear of the panel edges.
 const DOLL_CX = 190
 const DOLL_CY = 360
+const COL_L = DOLL_CX - 130
+const COL_R = DOLL_CX + 130
+const ROW0  = 188
+const ROWH  = 84
+const row = (i: number) => ROW0 + i * ROWH
 const SLOT_POSITIONS: Record<SlotKey, { x: number; y: number }> = {
-  helm:     { x: DOLL_CX,       y: DOLL_CY - 198 },
-  earring:  { x: DOLL_CX + 90,  y: DOLL_CY - 165 },
-  legs:     { x: DOLL_CX - 110, y: DOLL_CY - 110 },
-  chest:    { x: DOLL_CX + 110, y: DOLL_CY - 110 },
-  necklace: { x: DOLL_CX,       y: DOLL_CY - 118 },
-  gloves:   { x: DOLL_CX - 110, y: DOLL_CY - 40  },
-  mainHand: { x: DOLL_CX - 110, y: DOLL_CY + 30  },
-  offHand:  { x: DOLL_CX + 110, y: DOLL_CY + 30  },
-  belt:     { x: DOLL_CX,       y: DOLL_CY + 55  },
-  ring1:    { x: DOLL_CX - 110, y: DOLL_CY + 115 },
-  ring2:    { x: DOLL_CX + 110, y: DOLL_CY + 115 },
-  shoes:    { x: DOLL_CX,       y: DOLL_CY + 178 },
+  helm:     { x: COL_L, y: row(0) },
+  chest:    { x: COL_L, y: row(1) },
+  gloves:   { x: COL_L, y: row(2) },
+  belt:     { x: COL_L, y: row(3) },
+  legs:     { x: COL_L, y: row(4) },
+  shoes:    { x: COL_L, y: row(5) },
+  mainHand: { x: COL_R, y: row(0) },
+  offHand:  { x: COL_R, y: row(1) },
+  necklace: { x: COL_R, y: row(2) },
+  earring:  { x: COL_R, y: row(3) },
+  ring1:    { x: COL_R, y: row(4) },
+  ring2:    { x: COL_R, y: row(5) },
 }
 
 /** Dim placeholder glyph shown in an empty slot. */
 const SLOT_PLACEHOLDER: Record<SlotKey, string> = {
   mainHand: '🗡️', offHand: '🛡️', helm: '🪖', earring: '💎',
-  ring1: '💍', ring2: '💍', belt: '🔗', shoes: '👟',
+  ring1: '💍', ring2: '💍', belt: '🔗', shoes: '👢',
   gloves: '🧤', necklace: '📿', chest: '🦺', legs: '👖',
+}
+
+/** Empty-slot placeholders that use a real RPG icon from the 'armor_icons'
+ *  spritesheet (32×32, 18 cols → frame = row*18 + col) instead of an emoji.
+ *  helm=(4,2) chest=(2,1) legs=(3,1) boots=(3,3). */
+const SLOT_ICON_FRAME: Partial<Record<SlotKey, number>> = {
+  helm: 40, chest: 20, legs: 21, shoes: 57,
 }
 
 // Layout
@@ -105,6 +141,8 @@ export class EquipmentScene extends Phaser.Scene {
   // Server-reported state — only ever replaced by InventoryStore pushes
   private equipped: Partial<Record<SlotKey, ClientInventoryItem>> = {}
   private gearItems: ClientInventoryItem[] = []
+  // Server-reported stats — only ever replaced by StatsStore pushes
+  private stats: ClientStats | null = null
 
   private slotContainerMap: Map<SlotKey, Phaser.GameObjects.Container> = new Map()
   private connectorGfx: Phaser.GameObjects.Graphics | null = null
@@ -142,19 +180,23 @@ export class EquipmentScene extends Phaser.Scene {
 
     // ── Server state is the only source of truth ──────────────────────────
     const unsubscribe = InventoryStore.onUpdate((inv) => this.applyInventory(inv))
+    const unsubscribeStats = StatsStore.onUpdate((s) => this.applyStats(s))
     const onError = (err: { message?: string }) => {
       if (err?.message) this.showFeedback(err.message)
     }
     this.socket?.on('error', onError)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       unsubscribe()
+      unsubscribeStats()
       this.socket?.off('error', onError)
     })
 
     // Render whatever snapshot we already have (onUpdate fires immediately
     // when one exists); also ask the server for a fresh copy.
+    this.stats = StatsStore.get()
     if (!InventoryStore.get()) this.rebuildDynamic()
     this.socket?.emit('inventory:get')
+    this.socket?.emit('stats:get')
 
     this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => {
       this.scrollOffset = Math.max(0, this.scrollOffset + Math.sign(dy))
@@ -186,12 +228,17 @@ export class EquipmentScene extends Phaser.Scene {
 
   private applyInventory(inv: ClientPlayerInventory) {
     this.equipped = (inv.equipment ?? {}) as Partial<Record<SlotKey, ClientInventoryItem>>
-    // Only generated gear (catalogued in equipmentGen) is equippable
-    this.gearItems = (inv.items ?? []).filter(i => EQUIPMENT_MAP[i.itemType])
+    // Both generated gear (equipmentGen) AND legacy ItemDatabase gear are equippable.
+    this.gearItems = (inv.items ?? []).filter(i => isEquippable(i.itemType))
     if (this.selectedItem && !this.gearItems.some(i => i.id === this.selectedItem!.id)) {
       this.selectedItem = null
     }
     this.rebuildDynamic()
+  }
+
+  private applyStats(stats: ClientStats) {
+    this.stats = stats
+    this.buildStatsPanel()
   }
 
   private rebuildDynamic() {
@@ -208,7 +255,31 @@ export class EquipmentScene extends Phaser.Scene {
   /** Display-only: which slot a bag item would land in (server decides the real one). */
   private slotForItem(item: ClientInventoryItem): SlotKey | null {
     const catalog = EQUIPMENT_MAP[item.itemType]
-    return catalog ? EQUIP_SLOT_TO_KEY[catalog.slot] : null
+    if (catalog) return EQUIP_SLOT_TO_KEY[catalog.slot]
+    return LEGACY_ITEM_SLOT[item.itemType] ?? null
+  }
+
+  /** Short human-readable bonus summary for a bag item (generated or legacy). */
+  private itemBonusSummary(item: ClientInventoryItem): string {
+    const gen = EQUIPMENT_MAP[item.itemType]
+    if (gen) {
+      return gen.attributes
+        .map(a => `+${a.value} ${this.attrLabel(a.type)}`)
+        .join('  ')
+    }
+    // Legacy items carry raw {attack,defense,hp,xp} stats.
+    return Object.entries(item.stats)
+      .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)
+      .map(([k, v]) => `+${v} ${k.charAt(0).toUpperCase() + k.slice(1)}`)
+      .join('  ')
+  }
+
+  /** Pretty label for a generated-item attribute type. */
+  private attrLabel(type: string): string {
+    return type
+      .split('_')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ')
   }
 
   // ── Background ───────────────────────────────────────────────────────────────
@@ -409,11 +480,20 @@ export class EquipmentScene extends Phaser.Scene {
     this.drawSlotGfx(gfx, item, false)
     container.add(gfx)
 
-    // Item icon (emoji from the server item, dim placeholder when empty)
-    const icon = this.add.text(0, -8, item ? item.icon : SLOT_PLACEHOLDER[slotKey], {
-      fontSize: '26px',
-    }).setOrigin(0.5, 0.5).setAlpha(item ? 1 : 0.25)
-    container.add(icon)
+    // Item icon: the server item's emoji when equipped; otherwise a dim
+    // placeholder — a real RPG icon sprite for the slots in SLOT_ICON_FRAME
+    // (helm/chest/legs/boots), else an emoji.
+    const frame = SLOT_ICON_FRAME[slotKey]
+    if (!item && frame !== undefined) {
+      container.add(
+        this.add.image(0, -6, 'armor_icons', frame).setScale(1.5).setAlpha(0.55).setOrigin(0.5, 0.5)
+      )
+    } else {
+      const icon = this.add.text(0, -8, item ? item.icon : SLOT_PLACEHOLDER[slotKey], {
+        fontSize: '26px',
+      }).setOrigin(0.5, 0.5).setAlpha(item ? 1 : 0.25)
+      container.add(icon)
+    }
 
     // Label
     const labelStr = item ? this.truncate(item.name, 9) : SLOT_LABELS[slotKey]
@@ -483,26 +563,14 @@ export class EquipmentScene extends Phaser.Scene {
     lineGfx.setDepth(-1)
     this.connectorGfx = lineGfx
 
-    // Body attachment points (where the line "leaves" the doll silhouette)
-    const bodyPoints: Record<SlotKey, { x: number; y: number }> = {
-      helm:     { x: DOLL_CX,      y: DOLL_CY - 110 },
-      earring:  { x: DOLL_CX + 22, y: DOLL_CY - 65  },
-      necklace: { x: DOLL_CX,      y: DOLL_CY - 65  },
-      legs:     { x: DOLL_CX - 22, y: DOLL_CY - 30  },
-      chest:    { x: DOLL_CX + 22, y: DOLL_CY - 30  },
-      gloves:   { x: DOLL_CX - 32, y: DOLL_CY + 10  },
-      mainHand: { x: DOLL_CX - 32, y: DOLL_CY + 50  },
-      offHand:  { x: DOLL_CX + 32, y: DOLL_CY + 50  },
-      belt:     { x: DOLL_CX,      y: DOLL_CY + 55  },
-      ring1:    { x: DOLL_CX - 32, y: DOLL_CY + 86  },
-      ring2:    { x: DOLL_CX + 32, y: DOLL_CY + 86  },
-      shoes:    { x: DOLL_CX,      y: DOLL_CY + 155 },
-    }
-
+    // A tidy horizontal tick from each slot's inner edge to the doll silhouette.
+    const half = SLOT_SIZE / 2
     for (const slotKey of Object.keys(SLOT_POSITIONS) as SlotKey[]) {
       const slot = SLOT_POSITIONS[slotKey]
-      const body = bodyPoints[slotKey]
-      lineGfx.lineBetween(body.x, body.y, slot.x, slot.y)
+      const onLeft = slot.x < DOLL_CX
+      const innerX = slot.x + (onLeft ? half : -half)
+      const dollX  = DOLL_CX + (onLeft ? -46 : 46)
+      lineGfx.lineBetween(innerX, slot.y, dollX, slot.y)
     }
   }
 
@@ -592,7 +660,7 @@ export class EquipmentScene extends Phaser.Scene {
     const typeText   = this.add.text(rowX + 70, rowY + 27, `${rarName}  ·  ${slotLabel}${xpNote}`, {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: `#${rarHex}`,
     })
-    const statsText  = this.add.text(rowX + 70, rowY + 43, this.formatStats(item.stats), {
+    const statsText  = this.add.text(rowX + 70, rowY + 43, this.itemBonusSummary(item), {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#7799bb',
     })
     this.inventoryContainer.add([nameText, typeText, statsText])
@@ -658,199 +726,139 @@ export class EquipmentScene extends Phaser.Scene {
   }
 
   // ── Stats panel ───────────────────────────────────────────────────────────────
-  // Display-only math over the server-reported snapshot — never sent back.
+  // Renders the SERVER-pushed stat breakdown (StatsStore).  Each row shows the
+  // base value plus a colored +gear bonus and a two-segment bar (base + bonus).
+  // Nothing here is computed for gameplay — it only visualizes server state.
 
   private buildStatsPanel() {
     if (this.statsContainer) this.statsContainer.destroy()
     this.statsContainer = this.add.container(0, 0)
 
-    const panX  = RIGHT_PANEL_X + 10
-    const panW  = RIGHT_PANEL_W - 20
-    const totalStats = this.computeTotalStats()
-    const selected   = this.selectedItem
-    let yOff         = PANEL_Y + 44
+    const panX = RIGHT_PANEL_X + 10
+    const panW = RIGHT_PANEL_W - 20
+    let yOff   = PANEL_Y + 42
 
-    if (selected) {
-      // ── Comparison mode ────────────────────────────────────────────────────
-      const rarHex = RARITY_COLOR[selected.rarity].toString(16).padStart(6, '0')
+    const stats = this.stats
+    if (!stats) {
       this.statsContainer.add(
-        this.add.text(panX + panW / 2, yOff, selected.name, {
-          fontSize: '14px', fontFamily: 'Georgia, serif',
-          color: `#${rarHex}`, fontStyle: 'bold',
+        this.add.text(panX + panW / 2, yOff + 20, 'Loading stats…', {
+          fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#444466',
         }).setOrigin(0.5, 0)
       )
-      yOff += 24
+      return
+    }
 
-      const slotKey = this.slotForItem(selected)
-      const rarName = selected.rarity.charAt(0).toUpperCase() + selected.rarity.slice(1)
-      this.statsContainer.add(
-        this.add.text(panX + panW / 2, yOff, `${rarName}  ·  ${slotKey ? SLOT_LABELS[slotKey] : selected.itemType}`, {
-          fontSize: '11px', fontFamily: 'Arial, sans-serif', color: `#${rarHex}`,
-        }).setOrigin(0.5, 0)
-      )
-      yOff += 20
-
-      const dv1 = this.add.graphics()
-      dv1.lineStyle(1, 0x2a2a5a, 1)
-      dv1.lineBetween(panX, yOff, panX + panW, yOff)
-      this.statsContainer.add(dv1)
-      yOff += 12
-
-      this.statsContainer.add(
-        this.add.text(panX + panW / 2, yOff, 'Stat Comparison', {
-          fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#555577',
-        }).setOrigin(0.5, 0)
-      )
-      yOff += 20
-
-      const slotCurrent = slotKey ? this.equipped[slotKey] ?? null : null
-      let shownAny = false
-
-      for (const sk of this.statKeys(selected.stats, slotCurrent?.stats ?? {})) {
-        const newVal  = selected.stats[sk]     ?? 0
-        const curVal  = slotCurrent?.stats[sk] ?? 0
-        const total   = totalStats[sk]         ?? 0
-        if (newVal === 0 && curVal === 0) continue
-        shownAny = true
-
-        const after     = total - curVal + newVal
-        const delta     = after - total
-        const deltaStr  = delta > 0 ? `+${delta}` : `${delta}`
-        const deltaCol  = delta > 0 ? '#44ff88' : delta < 0 ? '#ff6655' : '#888888'
-        const statLabel = sk.charAt(0).toUpperCase() + sk.slice(1)
-
-        this.statsContainer.add(
-          this.add.text(panX + 4, yOff, `${statLabel}`, {
-            fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#9999bb',
-          })
-        )
-        this.statsContainer.add(
-          this.add.text(panX + panW - 4, yOff, `${total} → ${after}  (${deltaStr})`, {
-            fontSize: '12px', fontFamily: 'Arial, sans-serif',
-            color: deltaCol, fontStyle: 'bold',
-          }).setOrigin(1, 0)
-        )
-        yOff += 24
-      }
-
-      if (!shownAny) {
-        this.statsContainer.add(
-          this.add.text(panX + panW / 2, yOff, 'No comparable stats', {
-            fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#444455',
-          }).setOrigin(0.5, 0)
-        )
-      }
-
-    } else {
-      // ── Summary mode ───────────────────────────────────────────────────────
-      this.statsContainer.add(
-        this.add.text(panX + panW / 2, yOff, 'Equipped Stats', {
-          fontSize: '14px', fontFamily: 'Georgia, serif', color: '#aaaacc', fontStyle: 'bold',
-        }).setOrigin(0.5, 0)
-      )
-      yOff += 28
-
-      const dv1 = this.add.graphics()
-      dv1.lineStyle(1, 0x2a2a5a, 1)
-      dv1.lineBetween(panX, yOff, panX + panW, yOff)
-      this.statsContainer.add(dv1)
-      yOff += 14
-
-      let anyStats = false
-
-      for (const sk of this.statKeys(totalStats, {})) {
-        const val = totalStats[sk] ?? 0
-        if (val === 0) continue
-        anyStats = true
-        const statLabel = sk.charAt(0).toUpperCase() + sk.slice(1)
-
-        // Bar
-        const barMaxW = panW - 60
-        const barW    = Math.min((val / 20) * barMaxW, barMaxW)
-        const barGfx  = this.add.graphics()
-        barGfx.fillStyle(0x1e1e40, 1)
-        barGfx.fillRoundedRect(panX + 4, yOff + 16, barMaxW, 7, 3)
-        barGfx.fillStyle(0x3366cc, 1)
-        barGfx.fillRoundedRect(panX + 4, yOff + 16, Math.max(barW, 2), 7, 3)
-        this.statsContainer.add(barGfx)
-
-        this.statsContainer.add(
-          this.add.text(panX + 4, yOff, statLabel, {
-            fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#9999bb',
-          })
-        )
-        this.statsContainer.add(
-          this.add.text(panX + panW - 4, yOff, `${val}`, {
-            fontSize: '13px', fontFamily: 'Arial, sans-serif',
-            color: '#e0e0ff', fontStyle: 'bold',
-          }).setOrigin(1, 0)
-        )
-        yOff += 32
-      }
-
-      if (!anyStats) {
-        this.statsContainer.add(
-          this.add.text(panX + panW / 2, yOff + 10, 'No items equipped', {
-            fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#333355',
-          }).setOrigin(0.5, 0)
-        )
-        yOff += 40
-      }
-
-      yOff += 8
-      const dv2 = this.add.graphics()
-      dv2.lineStyle(1, 0x2a2a5a, 1)
-      dv2.lineBetween(panX, yOff, panX + panW, yOff)
-      this.statsContainer.add(dv2)
-      yOff += 14
-
-      // Slot fill count
-      const slots  = Object.keys(SLOT_POSITIONS) as SlotKey[]
-      const filled = slots.filter(s => this.equipped[s]).length
-      this.statsContainer.add(
-        this.add.text(panX + panW / 2, yOff, `Slots:  ${filled} / ${slots.length}  equipped`, {
-          fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#556677',
-        }).setOrigin(0.5, 0)
-      )
-      yOff += 30
-
+    // Unspent allocation reminder (allocate at the Character screen).
+    if (stats.unspentPoints > 0) {
       this.statsContainer.add(
         this.add.text(panX + panW / 2, yOff,
-          'Hover an item\nto compare stats', {
-            fontSize: '11px', fontFamily: 'Arial, sans-serif',
-            color: '#33334a', align: 'center',
-          }
-        ).setOrigin(0.5, 0)
+          `${stats.unspentPoints} unspent point${stats.unspentPoints === 1 ? '' : 's'} — press C`, {
+            fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#ffcc44',
+          }).setOrigin(0.5, 0)
       )
+      yOff += 18
     }
+
+    yOff = this.renderStatSection('Attributes', stats.attributes, panX, panW, yOff)
+    yOff += 6
+    yOff = this.renderStatSection('Combat Stats', stats.derived, panX, panW, yOff)
+  }
+
+  /** Render a titled group of stat rows; returns the new y offset. */
+  private renderStatSection(
+    title: string,
+    rows: ClientStatRow[],
+    panX: number,
+    panW: number,
+    startY: number,
+  ): number {
+    let yOff = startY
+
+    this.statsContainer.add(
+      this.add.text(panX + 2, yOff, title, {
+        fontSize: '12px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+      }).setOrigin(0, 0)
+    )
+    yOff += 16
+    const dv = this.add.graphics()
+    dv.lineStyle(1, 0x2a2a5a, 1)
+    dv.lineBetween(panX, yOff, panX + panW, yOff)
+    this.statsContainer.add(dv)
+    yOff += 8
+
+    // Bar scale: largest total in this section maps to full bar width.
+    const maxTotal = Math.max(1, ...rows.map(r => r.total))
+    const barMaxW  = panW - 8
+
+    for (const row of rows) {
+      this.renderStatRow(row, panX, panW, barMaxW, maxTotal, yOff)
+      yOff += 34
+    }
+    return yOff
+  }
+
+  /** One stat row: label, base value (+gear in green), two-segment bar. */
+  private renderStatRow(
+    row: ClientStatRow,
+    panX: number,
+    panW: number,
+    barMaxW: number,
+    maxTotal: number,
+    yOff: number,
+  ) {
+    const pct = (v: number) => (v < 0 ? '' : '') + (row.isPercent ? `${v}%` : `${v}`)
+
+    // Label (left)
+    this.statsContainer.add(
+      this.add.text(panX + 2, yOff, row.label, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#bbbbdd',
+      }).setOrigin(0, 0)
+    )
+
+    // Value (right): base, then +gear in green when there is a gear bonus.
+    const valX = panX + panW - 2
+    const totalText = this.add.text(valX, yOff, pct(row.total), {
+      fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#ffffff', fontStyle: 'bold',
+    }).setOrigin(1, 0)
+    this.statsContainer.add(totalText)
+
+    if (row.gear !== 0) {
+      const gearStr = `${row.gear > 0 ? '+' : ''}${pct(row.gear)}`
+      const gearText = this.add.text(valX - totalText.width - 6, yOff, `(${gearStr})`, {
+        fontSize: '11px', fontFamily: 'Arial, sans-serif',
+        color: row.gear > 0 ? '#44ff88' : '#ff6655',
+      }).setOrigin(1, 0)
+      this.statsContainer.add(gearText)
+    }
+
+    // Two-segment bar: base segment (blue) + bonus segment (green/red).
+    const barY    = yOff + 18
+    const barH    = 6
+    const baseFrac = Math.max(0, Math.min(1, row.base / maxTotal))
+    const totFrac  = Math.max(0, Math.min(1, row.total / maxTotal))
+    const baseW    = baseFrac * barMaxW
+    const totW     = totFrac * barMaxW
+
+    const bar = this.add.graphics()
+    // Track
+    bar.fillStyle(0x1e1e40, 1)
+    bar.fillRoundedRect(panX + 2, barY, barMaxW, barH, 3)
+    // Bonus segment first (full extent), so the base draws on top of its start.
+    if (row.gear > 0 && totW > baseW) {
+      bar.fillStyle(0x33cc66, 1)
+      bar.fillRoundedRect(panX + 2, barY, Math.max(totW, 2), barH, 3)
+    } else if (row.gear < 0 && baseW > totW) {
+      // Negative gear: show the lost portion in red behind the (shorter) base.
+      bar.fillStyle(0xcc4444, 1)
+      bar.fillRoundedRect(panX + 2, barY, Math.max(baseW, 2), barH, 3)
+    }
+    // Base segment (blue) on top.
+    bar.fillStyle(0x3366cc, 1)
+    bar.fillRoundedRect(panX + 2, barY, Math.max(Math.min(baseW, totW), 2), barH, 3)
+    this.statsContainer.add(bar)
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
-
-  private statKeys(
-    a: ClientItemStats,
-    b: ClientItemStats,
-  ): (keyof ClientItemStats)[] {
-    return [...new Set([...Object.keys(a), ...Object.keys(b)])] as (keyof ClientItemStats)[]
-  }
-
-  private computeTotalStats(): Record<string, number> {
-    const totals: Record<string, number> = {}
-    for (const item of Object.values(this.equipped)) {
-      if (!item) continue
-      for (const [k, v] of Object.entries(item.stats)) {
-        if (typeof v === 'number') totals[k] = (totals[k] ?? 0) + v
-      }
-    }
-    return totals
-  }
-
-  private formatStats(stats: ClientItemStats | Record<string, number>): string {
-    return Object.entries(stats)
-      .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)
-      .map(([k, v]) => `+${v} ${k.charAt(0).toUpperCase() + k.slice(1)}`)
-      .join('  ')
-  }
 
   private truncate(str: string, maxChars: number): string {
     return str.length > maxChars ? str.slice(0, maxChars - 1) + '…' : str

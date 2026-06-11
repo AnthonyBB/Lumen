@@ -5,6 +5,7 @@ import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
+import { StatsStore } from '../game/systems/StatsStore'
 import { API_BASE } from '../config'
 
 interface GamePageProps {
@@ -40,6 +41,9 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       // Bind the inventory store to this (possibly new) socket so the HUD
       // shard counters receive inventory:data / inventory:updated pushes.
       InventoryStore.init(s)
+      // Bind the stats store too so Character / Equipment screens receive
+      // server-pushed `stats:update` snapshots (attributes + derived stats).
+      StatsStore.init(s)
     })
 
     // The server rejects sockets with invalid/expired tokens. Without this,

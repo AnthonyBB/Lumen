@@ -172,6 +172,53 @@ const CLASS_SUFFIXES: Record<SkillClass, string[]> = {
 
 const GENERIC_SUFFIXES = ['of the Wanderer', 'of Good Fortune', 'of the Open Road']
 
+/** Prefix adjectives tied to a bonus type — the item's STRONGEST bonus picks one
+ *  so the name reflects what the gear actually does. */
+const ATTR_PREFIX: Record<AttributeType, string[]> = {
+  strength:         ['Mighty', 'Powerful', 'Brawny', 'Forceful'],
+  constitution:     ['Sturdy', 'Hardy', 'Stalwart', 'Rugged'],
+  dexterity:        ['Nimble', 'Swift', 'Agile', 'Deft'],
+  intelligence:     ['Clever', 'Scholarly', 'Wise', 'Bright'],
+  spirit:           ['Soulful', 'Spirited', 'Serene', 'Blessed'],
+  damage_bonus:     ['Vicious', 'Brutal', 'Fierce', 'Savage'],
+  healing_bonus:    ['Soothing', 'Mending', 'Gentle', 'Caring'],
+  mp_regen:         ['Channeling', 'Flowing', 'Mystic', 'Focused'],
+  fire_damage:      ['Blazing', 'Molten', 'Fiery', 'Smoldering'],
+  ice_damage:       ['Frosted', 'Glacial', 'Frozen', 'Icy'],
+  lightning_damage: ['Sparking', 'Thundering', 'Charged', 'Stormy'],
+  holy_damage:      ['Holy', 'Radiant', 'Hallowed', 'Shining'],
+  nature_damage:    ['Verdant', 'Thorned', 'Wild', 'Leafy'],
+  crit_chance:      ['Keen', 'Precise', 'Sharp', 'Deadly'],
+  dot_bonus:        ['Withering', 'Venomous', 'Searing', 'Lingering'],
+  aoe_bonus:        ['Sweeping', 'Booming', 'Wide', 'Thunderous'],
+  xp_bonus:         ['Enlightened', "Learner's", 'Studious', 'Insightful'],
+  gold_find:        ['Gilded', 'Lucky', 'Prosperous', 'Golden'],
+  debuff_resist:    ['Warding', 'Guarded', 'Resolute', 'Steady'],
+}
+
+/** Suffixes tied to a bonus type — the item's SECOND bonus picks one. */
+const ATTR_SUFFIX: Record<AttributeType, string[]> = {
+  strength:         ['of the Bear', 'of Raw Might', 'of the Ox'],
+  constitution:     ['of the Tortoise', 'of Endurance', 'of Stout Heart'],
+  dexterity:        ['of the Fox', 'of Quick Hands', 'of Nimble Steps'],
+  intelligence:     ['of the Owl', 'of Keen Wit', 'of Bright Minds'],
+  spirit:           ['of the Spirit', 'of Inner Light', 'of Calm Souls'],
+  damage_bonus:     ['of Hard Hits', 'of the Warrior', 'of Striking'],
+  healing_bonus:    ['of Mending', 'of Healing Light', 'of Kind Care'],
+  mp_regen:         ['of Flowing Mana', 'of the Wellspring', 'of Steady Focus'],
+  fire_damage:      ['of the Phoenix', 'of Burning Skies', 'of Bright Embers'],
+  ice_damage:       ['of the Glacier', 'of Soft Snowfall', "of Winter's Bite"],
+  lightning_damage: ['of Rolling Thunder', 'of Dancing Sparks', 'of the Tempest'],
+  holy_damage:      ['of the Dawn', 'of Holy Light', 'of the Sun'],
+  nature_damage:    ['of the Grove', 'of Deep Roots', 'of Wild Vines'],
+  crit_chance:      ['of Sharp Eyes', 'of the Bullseye', 'of Lucky Strikes'],
+  dot_bonus:        ['of Slow Burns', 'of Creeping Harm', 'of Lasting Sting'],
+  aoe_bonus:        ['of Wide Blasts', 'of the Whirlwind', 'of Sweeping Force'],
+  xp_bonus:         ['of Learning', 'of Bright Ideas', 'of the Scholar'],
+  gold_find:        ['of Riches', 'of Good Fortune', 'of the Merchant'],
+  debuff_resist:    ['of Warding', 'of Steady Nerves', 'of the Bulwark'],
+}
+
 /** Icon per class weapon. */
 const WEAPON_ICON: Record<SkillClass, string> = {
   fire_mage: '🪄', ice_mage: '🪄', lightning_mage: '🪄',
@@ -397,18 +444,39 @@ function computeXpRequired(attrs: ItemAttribute[], rarity: Rarity): number {
   return Math.min(hi, Math.max(lo, raw))
 }
 
+/** Order an item's attributes by power (value × weight), strongest first.
+ *  Pure & deterministic (ties broken by roll order) so the client and server
+ *  agree — used to align the name's prefix/suffix with the item's top bonuses. */
+function rankAttrs(attrs: ItemAttribute[]): ItemAttribute[] {
+  return attrs
+    .map((a, i) => ({ a, i, p: a.value * ATTR_POWER_WEIGHT[a.type] }))
+    .sort((x, y) => y.p - x.p || x.i - y.i)
+    .map((e) => e.a)
+}
+
 function buildName(
   rng: () => number,
   slot: EquipSlot,
   rarity: Rarity,
   cls: SkillClass | null,
+  attributes: ItemAttribute[],
 ): string {
   const noun =
     slot === 'weapon'
       ? pick(rng, cls ? WEAPON_NOUNS[cls] : GENERIC_WEAPON_NOUNS)
       : pick(rng, ARMOR_NOUNS[slot])
 
-  const prefix = pick(rng, cls ? CLASS_PREFIXES[cls] : GENERIC_PREFIXES)
+  // The prefix names the item's STRONGEST bonus and the suffix names its second,
+  // so the wording matches the actual stats. Items with no bonuses (some commons
+  // roll zero attributes) fall back to class/generic flavour. RNG usage is
+  // unchanged from the old logic — one pick for the prefix, one for the suffix —
+  // so the deterministic catalog (ids, stats, XP) is untouched; only names change.
+  const ranked = rankAttrs(attributes)
+  const primary = ranked[0]?.type ?? null
+  const secondary = ranked[1]?.type ?? null
+
+  const prefixPool = primary ? ATTR_PREFIX[primary] : (cls ? CLASS_PREFIXES[cls] : GENERIC_PREFIXES)
+  const prefix = pick(rng, prefixPool)
 
   const parts: string[] = []
   const rarityAdjs = RARITY_ADJ[rarity]
@@ -420,7 +488,9 @@ function buildName(
   // rare+ items often get a suffix
   const suffixChance = rarity === 'rare' ? 0.5 : rarity === 'epic' ? 0.75 : rarity === 'legendary' ? 0.95 : 0.15
   if (rng() < suffixChance) {
-    name += ' ' + pick(rng, cls ? CLASS_SUFFIXES[cls] : GENERIC_SUFFIXES)
+    const suffixType = secondary ?? primary
+    const suffixPool = suffixType ? ATTR_SUFFIX[suffixType] : (cls ? CLASS_SUFFIXES[cls] : GENERIC_SUFFIXES)
+    name += ' ' + pick(rng, suffixPool)
   }
   return name
 }
@@ -491,7 +561,7 @@ export function generateEquipment(): EquipmentItem[] {
     const attributes = rollAttributes(rng, pool, rarity)
     const xpRequired = computeXpRequired(attributes, rarity)
 
-    let name = buildName(rng, slot, rarity, cls)
+    let name = buildName(rng, slot, rarity, cls, attributes)
     const seen = nameCounts.get(name) ?? 0
     nameCounts.set(name, seen + 1)
     if (seen > 0) name = `${name} ${toRoman(seen + 1)}`

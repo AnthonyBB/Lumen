@@ -3,23 +3,25 @@ import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT, PLAYER_SPEED } from '../constants'
 import type { Subject, Difficulty } from '../../engine/types'
 import {
-  CURRICULUM_BY_SUBJECT,
-  gradeRangeLabel,
-  type Subcategory,
+  TOPICS_BY_SUBJECT_GRADE,
+  MASTERED_GRADE,
+  type GradeTopic,
 } from '../data/curriculum'
 
-type ClassroomState = 'exploring' | 'teacher_dialog' | 'subcategory_select' | 'seated' | 'questioning' | 'results'
+type ClassroomState = 'exploring' | 'teacher_dialog' | 'topic_select' | 'seated' | 'questioning' | 'results'
 
 // ---------------------------------------------------------------------------
 // Server-session types — mirror the server's client-safe payloads.
 // SECURITY: questions arrive WITHOUT correctIndex; answers are validated by
-// the server and only the boolean outcome + explanation come back.
+// the server, and every reward fact (pass, passes, grade-up, shards) is
+// computed server-side and delivered in `learning:complete`.
 // ---------------------------------------------------------------------------
 
 interface ServerQuestion {
   id: string
   subject: Subject
-  subcategory: string
+  grade: number
+  topic: string
   question: string
   answers: [string, string, string, string]
   difficulty: Difficulty
@@ -34,26 +36,35 @@ interface AnswerResult {
   sessionComplete: boolean
   perfectScore: boolean
   nextQuestion?: ServerQuestion
+}
+
+interface CompleteResult {
+  topicId: string
+  score: number
+  passed: boolean
+  topicPasses: number
+  gradeCompleted: boolean
+  newGrade: number
   skillShardsAwarded: number
-  combatShardAwarded: boolean
+  combatShardAwarded: number
+}
+
+interface UnlocksPayload {
+  subjectGrades: Record<Subject, number>
+  topicPasses: Record<string, number>
 }
 
 /** XP per correct answer by difficulty — display only; the server computes the real award. */
 const XP_BY_DIFFICULTY: Record<Difficulty, number> = { easy: 10, medium: 20, hard: 35 }
 
 const QUESTIONS_PER_SESSION = 5
+const PASSES_TO_COMPLETE = 3
 
 const SUBJECT_CONFIG = [
-  { key: 'math'     as Subject, label: 'Mathematics',  icon: '➕', color: 0x1a3a8a, hover: 0x2a4aaa },
+  { key: 'math'     as Subject, label: 'Mathematics',   icon: '➕', color: 0x1a3a8a, hover: 0x2a4aaa },
   { key: 'science'  as Subject, label: 'Science',       icon: '🔬', color: 0x0a5a2a, hover: 0x1a7a3a },
   { key: 'history'  as Subject, label: 'History',       icon: '📜', color: 0x7a3a00, hover: 0x9a5a10 },
   { key: 'language' as Subject, label: 'Language Arts', icon: '📖', color: 0x6a1060, hover: 0x8a2080 },
-]
-
-const DIFFICULTY_CONFIG = [
-  { key: 'easy'   as Difficulty, label: 'Easy',   desc: 'Accessible questions · +10 XP each', color: 0x0a5a1a, hover: 0x1a8a2a },
-  { key: 'medium' as Difficulty, label: 'Medium', desc: 'A real challenge · +20 XP each',      color: 0x7a5000, hover: 0x9a7000 },
-  { key: 'hard'   as Difficulty, label: 'Hard',   desc: 'Expert level · +35 XP each',          color: 0x7a1010, hover: 0x9a2020 },
 ]
 
 // 12 desks: 3 rows × 4 columns — 8 occupied, 4 empty
@@ -74,7 +85,16 @@ const DESK_DEFS = [
 
 const EMPTY_DESKS = DESK_DEFS.filter(d => !d.occupied)
 
+/** Render a passes indicator like ●●○ for 2 of 3. */
+function passesDots(passes: number): string {
+  const filled = Math.max(0, Math.min(PASSES_TO_COMPLETE, passes))
+  return '●'.repeat(filled) + '○'.repeat(PASSES_TO_COMPLETE - filled)
+}
+
 export class ClassroomScene extends Phaser.Scene {
+  // Where to drop the player back in town (the building door); set via init().
+  private returnX?: number
+  private returnY?: number
   private player!: Phaser.Physics.Arcade.Sprite
   private seatedGfx!: Phaser.GameObjects.Graphics
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
@@ -87,18 +107,20 @@ export class ClassroomScene extends Phaser.Scene {
   private teacherPrompt!: Phaser.GameObjects.Text
   private overlay!: Phaser.GameObjects.Rectangle
 
-  private subjectModal!: Phaser.GameObjects.Container
-  private subcategoryModal!: Phaser.GameObjects.Container
-  private difficultyModal!: Phaser.GameObjects.Container
+  private topicModal!: Phaser.GameObjects.Container
   private questionPanel!: Phaser.GameObjects.Container
   private resultsPanel!: Phaser.GameObjects.Container
 
-  private sessionSubject!: Subject
-  private sessionSubcategory: Subcategory | null = null
-  private sessionDifficulty!: Difficulty
+  // Server-authoritative progression snapshot (fetched via shop:unlocks on open).
+  private subjectGrades: Record<Subject, number> = { math: 1, science: 1, history: 1, language: 1 }
+  private topicPasses: Record<string, number> = {}
 
-  // Server-driven session state — everything below is populated exclusively
-  // from server responses (learning:session_started / learning:answer_result).
+  // Topic modal navigation: null = subject-select view; a subject = its topic list.
+  private modalSubject: Subject | null = null
+
+  private sessionTopic: GradeTopic | null = null
+
+  // Server-driven session state — populated exclusively from server responses.
   private sessionId: string | null = null
   private currentQuestion: ServerQuestion | null = null
   private questionNumber = 1          // 1-based, for display
@@ -106,21 +128,28 @@ export class ClassroomScene extends Phaser.Scene {
   private correctCount = 0
   private xpEarned = 0
   private questionResults: { text: string; correct: boolean }[] = []
-  private skillShardsEarned = 0
-  private combatShardEarned = false
+  private completeResult: CompleteResult | null = null
   private sessionWasPerfect = false
   private questionLocked = false
   private socket: Socket | null = null
   private onAnswerResult: ((res: AnswerResult) => void) | null = null
+  private onComplete: ((res: CompleteResult) => void) | null = null
+  private onUnlocks: ((res: UnlocksPayload) => void) | null = null
 
   constructor() { super({ key: 'ClassroomScene' }) }
+
+  init(data?: { returnX?: number; returnY?: number }) {
+    this.returnX = data?.returnX
+    this.returnY = data?.returnY
+  }
 
   create() {
     this.state = 'exploring'
     this.questionLocked = false
-    this.sessionSubcategory = null
+    this.sessionTopic = null
     this.sessionId = null
     this.currentQuestion = null
+    this.completeResult = null
 
     // Socket is attached to window by GamePage.tsx
     this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
@@ -129,8 +158,22 @@ export class ClassroomScene extends Phaser.Scene {
     this.onAnswerResult = (res: AnswerResult) => this.handleAnswerResult(res)
     this.socket?.on('learning:answer_result', this.onAnswerResult)
 
+    // Quiz completion — carries all reward facts (pass, passes, grade-up, shards)
+    this.onComplete = (res: CompleteResult) => this.handleComplete(res)
+    this.socket?.on('learning:complete', this.onComplete)
+
+    // Progression snapshot — refreshes the classroom grade badges / passes
+    this.onUnlocks = (res: UnlocksPayload) => {
+      if (res?.subjectGrades) this.subjectGrades = res.subjectGrades
+      if (res?.topicPasses) this.topicPasses = res.topicPasses
+      // Rebuild the topic modal if it is currently open
+      if (this.state === 'teacher_dialog' || this.state === 'topic_select') {
+        this.buildTopicModal()
+      }
+    }
+    this.socket?.on('shop:unlocks', this.onUnlocks)
+
     // Keep the registry in sync with the server's confirmed XP / level
-    // (the server pushes player:xp_updated when a learning session completes).
     const onXpUpdated = (data: { newXp: number; newLevel: number }) => {
       this.registry.set('xp', data.newXp)
       this.registry.set('level', data.newLevel)
@@ -139,6 +182,8 @@ export class ClassroomScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       if (this.onAnswerResult) this.socket?.off('learning:answer_result', this.onAnswerResult)
+      if (this.onComplete) this.socket?.off('learning:complete', this.onComplete)
+      if (this.onUnlocks) this.socket?.off('shop:unlocks', this.onUnlocks)
       this.socket?.off('player:xp_updated', onXpUpdated)
       // End any in-flight session so the server can free it
       if (this.sessionId && this.state === 'questioning') {
@@ -164,11 +209,12 @@ export class ClassroomScene extends Phaser.Scene {
       backgroundColor: '#00000099', padding: { x: 12, y: 6 },
     }).setOrigin(0.5, 0).setDepth(50).setVisible(false)
 
-    this.createSubjectModal()
-    this.createSubcategoryModal()
-    this.createDifficultyModal()
-    this.createQuestionPanel()
-    this.createResultsPanel()
+    this.topicModal = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(100).setVisible(false)
+    this.questionPanel = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(100).setVisible(false)
+    this.resultsPanel = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(100).setVisible(false)
+
+    // Fetch the player's current grades / passes so the classroom renders progress.
+    this.socket?.emit('shop:get_unlocks')
   }
 
   // ─── ROOM ──────────────────────────────────────────────────────────────────
@@ -265,6 +311,7 @@ export class ClassroomScene extends Phaser.Scene {
   // ─── DESKS & STUDENTS ──────────────────────────────────────────────────────
 
   private createDesks() {
+    let studentIdx = 0
     for (const d of DESK_DEFS) {
       const g = this.add.graphics().setDepth(4)
       // Shadow
@@ -290,20 +337,21 @@ export class ClassroomScene extends Phaser.Scene {
       paper.lineStyle(1, 0xaaaaaa, 0.4)
       for (let l = 0; l < 3; l++) paper.lineBetween(d.x - 16, d.y + 3 + l * 4, d.x + 2, d.y + 3 + l * 4)
 
-      // Seated student
+      // Seated student — a real CraftPix citizen sprite, drawn BEHIND the desk
+      // (lower depth) so the desk front overlaps their lap and only the upper
+      // body shows above the desktop, reading as "seated".
       if (d.occupied) {
-        const s = this.add.graphics().setDepth(6)
-        s.fillStyle(d.color, 1)
-        s.fillRect(d.x - 12, d.y - 22, 24, 20)
-        s.fillStyle(0xffe0b2, 1)
-        s.fillCircle(d.x, d.y - 28, 10)
-        s.fillStyle(0x222222, 1)
-        s.fillCircle(d.x - 4, d.y - 29, 2)
-        s.fillCircle(d.x + 4, d.y - 29, 2)
-        // Hair
-        const dark = (d.color & 0xff) + ((d.color >> 8) & 0xff) + ((d.color >> 16) & 0xff) < 384
-        s.fillStyle(dark ? 0xddbb88 : 0x221100, 1)
-        s.fillEllipse(d.x, d.y - 37, 22, 12)
+        const sheet = `npc_citizen${(studentIdx % 5) + 1}`
+        studentIdx++
+        const student = this.add.sprite(d.x, d.y + 16, sheet, 0)
+          .setOrigin(0.5, 1).setScale(1.6).setDepth(3.6)
+        const idleKey = `${sheet}_idle`
+        if (this.anims.exists(idleKey)) {
+          student.play(idleKey)
+          // Desync so the class doesn't fidget in unison.
+          student.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
+          student.anims.timeScale = Phaser.Math.FloatBetween(0.8, 1.2)
+        }
       }
     }
   }
@@ -312,52 +360,6 @@ export class ClassroomScene extends Phaser.Scene {
 
   private createTeacher() {
     const tx = 640, ty = 248
-    const g = this.add.graphics().setDepth(7)
-
-    // Shadow
-    g.fillStyle(0x000000, 0.18)
-    g.fillEllipse(tx + 3, ty + 38, 46, 10)
-    // Robe
-    g.fillStyle(0x6a1818, 1)
-    g.fillRect(tx - 14, ty - 10, 28, 40)
-    g.fillTriangle(tx - 14, ty + 30, tx - 22, ty + 48, tx, ty + 30)
-    g.fillTriangle(tx + 14, ty + 30, tx + 22, ty + 48, tx, ty + 30)
-    g.fillStyle(0x8a3030, 0.5)
-    g.fillRect(tx - 4, ty - 10, 6, 38)
-    // Collar
-    g.fillStyle(0x221808, 1)
-    g.fillRect(tx - 16, ty - 12, 32, 12)
-    // Head
-    g.fillStyle(0xffe0b2, 1)
-    g.fillCircle(tx, ty - 22, 13)
-    // Glasses
-    g.lineStyle(1, 0x555555, 1)
-    g.strokeCircle(tx - 5, ty - 24, 4)
-    g.strokeCircle(tx + 5, ty - 24, 4)
-    g.lineBetween(tx - 1, ty - 24, tx + 1, ty - 24)
-    g.fillStyle(0x222222, 1)
-    g.fillCircle(tx - 5, ty - 24, 2)
-    g.fillCircle(tx + 5, ty - 24, 2)
-    // White hair
-    g.fillStyle(0xe8e8e8, 1)
-    g.fillEllipse(tx, ty - 34, 28, 14)
-    g.fillStyle(0xdddddd, 0.7)
-    g.fillEllipse(tx - 6, ty - 33, 14, 8)
-    // Graduation cap
-    g.fillStyle(0x111111, 1)
-    g.fillRect(tx - 16, ty - 42, 32, 6)
-    g.fillRect(tx - 10, ty - 48, 20, 6)
-    g.lineStyle(2, 0xffd700, 1)
-    g.lineBetween(tx + 10, ty - 45, tx + 18, ty - 34)
-    g.fillStyle(0xffd700, 1)
-    g.fillRect(tx + 16, ty - 35, 6, 6)
-    // Book in hand
-    g.fillStyle(0x2244aa, 1)
-    g.fillRect(tx + 14, ty - 8, 16, 22)
-    g.fillStyle(0xf5f0e0, 0.9)
-    g.fillRect(tx + 16, ty - 6, 12, 18)
-    g.lineStyle(1, 0xaaaaaa, 0.5)
-    for (let l = 0; l < 3; l++) g.lineBetween(tx + 18, ty - 2 + l * 5, tx + 26, ty - 2 + l * 5)
 
     // Teacher desk
     const td = this.add.graphics().setDepth(5)
@@ -377,6 +379,28 @@ export class ClassroomScene extends Phaser.Scene {
     td.fillStyle(0xffd700, 0.9)
     td.fillRect(tx - 8, ty + 44, 8, 14)
 
+    // Professor — a white-haired CraftPix citizen standing behind the lectern
+    // (lower depth, so the desk overlaps the legs). A small drawn mortarboard +
+    // tassel sits on the head to keep Prof. Lumina's scholarly look.
+    const prof = this.add.sprite(tx, ty + 70, 'npc_citizen1', 0)
+      .setOrigin(0.5, 1).setScale(2.0).setDepth(4)
+    if (this.anims.exists('npc_citizen1_idle')) {
+      prof.play('npc_citizen1_idle')
+      prof.anims.setProgress(Phaser.Math.FloatBetween(0, 1))
+    }
+    // Mortarboard cap, centred over the sprite's head (head top ≈ ty + 6).
+    const cap = this.add.graphics().setDepth(6)
+    const capY = ty + 4
+    cap.fillStyle(0x141414, 1)
+    cap.fillRect(tx - 18, capY, 36, 6)            // board
+    cap.fillRect(tx - 9, capY - 6, 18, 7)         // crown
+    cap.fillStyle(0xffd700, 1)
+    cap.fillCircle(tx, capY + 1, 2.5)             // button
+    cap.lineStyle(2, 0xffd700, 1)
+    cap.lineBetween(tx + 14, capY + 2, tx + 22, capY + 14)  // tassel cord
+    cap.fillStyle(0xffd700, 1)
+    cap.fillRect(tx + 19, capY + 13, 6, 7)        // tassel
+
     // Name label
     const nb = this.add.graphics().setDepth(8)
     nb.fillStyle(0x1a0a2e, 0.88)
@@ -391,9 +415,6 @@ export class ClassroomScene extends Phaser.Scene {
   // ─── PLAYER ────────────────────────────────────────────────────────────────
 
   private createPlayer() {
-    // Use the idle spritesheet as the base texture (same key loaded in BootScene).
-    // The walk / idle animations are registered globally by Player.ts when the
-    // player enters WorldScene, so they are available here too.
     this.player = this.physics.add.sprite(640, 650, 'character_idle')
     this.player.setScale(1.5).setDepth(10).setCollideWorldBounds(true)
     const body = this.player.body as Phaser.Physics.Arcade.Body
@@ -401,8 +422,6 @@ export class ClassroomScene extends Phaser.Scene {
     body.setOffset(8, 28)
     this.physics.world.setBounds(44, 286, GAME_WIDTH - 88, GAME_HEIGHT - 290)
 
-    // Start with a forward-facing idle (animations may not be registered yet if
-    // the scene is entered directly; guard before playing)
     if (this.anims.exists('idle_down')) this.player.play('idle_down')
   }
 
@@ -452,121 +471,142 @@ export class ClassroomScene extends Phaser.Scene {
     return btn
   }
 
-  // ─── SUBJECT MODAL ─────────────────────────────────────────────────────────
+  // ─── TOPIC MODAL ───────────────────────────────────────────────────────────
+  //
+  // Two-level navigation, all from server data only:
+  //   1. modalSubject === null → pick one of the 4 subjects (with grade badge)
+  //   2. modalSubject set       → that subject's CURRENT grade topics (●●○)
 
-  private createSubjectModal() {
-    const W = 760, H = 430
-    this.subjectModal = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
-      .setDepth(100).setVisible(false)
+  /** Open the modal at the top level (subject select). */
+  private openTopicModal() {
+    this.modalSubject = null
+    this.buildTopicModal()
+    this.topicModal.setVisible(true)
+  }
 
+  private buildTopicModal() {
+    if (this.modalSubject === null) this.buildSubjectSelect()
+    else this.buildTopicList(this.modalSubject)
+  }
+
+  /** Level 1: choose a subject. */
+  private buildSubjectSelect() {
+    this.topicModal.removeAll(true)
+
+    const W = 820, H = 500
     const bg = this.add.graphics()
     bg.fillStyle(0x0c0c24, 0.98)
     bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
     bg.lineStyle(2, 0xffd700, 1)
     bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
-    this.subjectModal.add(bg)
+    this.topicModal.add(bg)
 
-    this.subjectModal.add(this.add.text(0, -H / 2 + 32, 'What would you like to study today?', {
+    this.topicModal.add(this.add.text(0, -H / 2 + 32, 'What would you like to study today?', {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
-    this.subjectModal.add(this.add.text(0, -H / 2 + 62, 'Choose a subject — 5 questions · 3 attempts each', {
-      fontSize: '14px', fontFamily: 'Arial', color: '#aaaaaa',
+    this.topicModal.add(this.add.text(0, -H / 2 + 60, 'Choose a subject to see this grade\'s topics', {
+      fontSize: '13px', fontFamily: 'Arial', color: '#aaaaaa',
     }).setOrigin(0.5, 0.5))
 
     const div = this.add.graphics()
     div.lineStyle(1, 0xffd700, 0.35)
     div.lineBetween(-W / 2 + 40, -H / 2 + 80, W / 2 - 40, -H / 2 + 80)
-    this.subjectModal.add(div)
+    this.topicModal.add(div)
 
-    const grid = [{ x: -180, y: -44 }, { x: 180, y: -44 }, { x: -180, y: 72 }, { x: 180, y: 72 }]
+    // 2 × 2 grid of big subject buttons
+    const bw = 360, bh = 96
+    const grid = [
+      { x: -190, y: -64 }, { x: 190, y: -64 },
+      { x: -190, y: 56 },  { x: 190, y: 56 },
+    ]
     SUBJECT_CONFIG.forEach((s, i) => {
-      const btn = this.makeButton(`${s.icon}  ${s.label}`, '', 320, 96, s.color, s.hover, () => {
-        if (this.state === 'teacher_dialog') this.onSubjectChosen(s.key)
-      })
+      const grade = this.subjectGrades[s.key] ?? 1
+      const mastered = grade >= MASTERED_GRADE
+      const btn = this.makeButton(
+        `${s.icon}  ${s.label}`,
+        mastered ? 'Mastered ✓' : `Grade ${grade}`,
+        bw, bh, s.color, s.hover,
+        () => { this.modalSubject = s.key; this.buildTopicModal() },
+      )
       btn.setPosition(grid[i].x, grid[i].y)
-      this.subjectModal.add(btn)
+      this.topicModal.add(btn)
     })
 
     const exit = this.makeButton('← Return to World', '', 210, 40, 0x2a2a44, 0x3a3a60, () => this.returnToWorld())
-    exit.setPosition(0, H / 2 - 34)
-    this.subjectModal.add(exit)
+    exit.setPosition(0, H / 2 - 32)
+    this.topicModal.add(exit)
   }
 
-  private onSubjectChosen(subject: Subject) {
-    this.sessionSubject = subject
-    this.subjectModal.setVisible(false)
-    this.state = 'subcategory_select'
-    this.buildSubcategoryModal(subject)
-    this.subcategoryModal.setVisible(true)
-  }
+  /** Level 2: the chosen subject's current-grade topics. */
+  private buildTopicList(subject: Subject) {
+    this.topicModal.removeAll(true)
 
-  // ─── SUBCATEGORY MODAL ─────────────────────────────────────────────────────
+    const s = SUBJECT_CONFIG.find(c => c.key === subject)!
+    const grade = this.subjectGrades[subject] ?? 1
+    const mastered = grade >= MASTERED_GRADE
 
-  private createSubcategoryModal() {
-    this.subcategoryModal = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
-      .setDepth(100).setVisible(false)
-  }
-
-  /** Rebuilt on each subject pick — lists that subject's K-12 subcategories. */
-  private buildSubcategoryModal(subject: Subject) {
-    this.subcategoryModal.removeAll(true)
-
-    const subs = CURRICULUM_BY_SUBJECT[subject]
-    const subjCfg = SUBJECT_CONFIG.find(s => s.key === subject)!
-    const cols = 2
-    const rows = Math.ceil(subs.length / cols)
-    const bW = 360, bH = 60, stepY = 70
-    const W = 800, H = 150 + rows * stepY + 70
-
+    const W = 720, H = 460
     const bg = this.add.graphics()
     bg.fillStyle(0x0c0c24, 0.98)
     bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
     bg.lineStyle(2, 0xffd700, 1)
     bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
-    this.subcategoryModal.add(bg)
+    this.topicModal.add(bg)
 
-    this.subcategoryModal.add(this.add.text(0, -H / 2 + 32, `${subjCfg.icon}  ${subjCfg.label} — Pick a Topic`, {
+    this.topicModal.add(this.add.text(0, -H / 2 + 32, `${s.icon}  ${s.label}`, {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
-    this.subcategoryModal.add(this.add.text(0, -H / 2 + 62, 'Topics span Kindergarten through 12th grade — pick what fits you!', {
-      fontSize: '14px', fontFamily: 'Arial', color: '#aaaaaa',
+    this.topicModal.add(this.add.text(0, -H / 2 + 60,
+      mastered ? 'Mastered ✓' : `Grade ${grade}  ·  each topic is a 5-question quiz, pass at 4/5`, {
+      fontSize: '13px', fontFamily: 'Arial', color: mastered ? '#ffd700' : '#aaaaaa',
     }).setOrigin(0.5, 0.5))
+
+    // Back button (top-left) → subject select
+    const back = this.makeButton('← Subjects', '', 130, 34, 0x2a2a44, 0x3a3a60,
+      () => { this.modalSubject = null; this.buildTopicModal() })
+    back.setPosition(-W / 2 + 80, -H / 2 + 30)
+    this.topicModal.add(back)
 
     const div = this.add.graphics()
     div.lineStyle(1, 0xffd700, 0.35)
-    div.lineBetween(-W / 2 + 40, -H / 2 + 82, W / 2 - 40, -H / 2 + 82)
-    this.subcategoryModal.add(div)
+    div.lineBetween(-W / 2 + 40, -H / 2 + 84, W / 2 - 40, -H / 2 + 84)
+    this.topicModal.add(div)
 
-    subs.forEach((sub, i) => {
-      const col = i % cols, row = Math.floor(i / cols)
-      const x = (col === 0 ? -1 : 1) * (bW / 2 + 14)
-      const y = -H / 2 + 122 + row * stepY
-      const btn = this.makeButton(`${sub.icon}  ${sub.name}`, gradeRangeLabel(sub), bW, bH, subjCfg.color, subjCfg.hover, () => {
-        if (this.state === 'subcategory_select') this.onSubcategoryChosen(sub)
+    if (mastered) {
+      this.topicModal.add(this.add.text(0, -10, '🏆  All 12 grades complete!\nYou have mastered this subject.', {
+        fontSize: '17px', fontFamily: 'Georgia, serif', color: '#ffd700', align: 'center', lineSpacing: 8,
+      }).setOrigin(0.5, 0.5))
+    } else {
+      const topics = TOPICS_BY_SUBJECT_GRADE[subject]?.[grade] ?? []
+      topics.forEach((t, ti) => {
+        const passes = this.topicPasses[t.id] ?? 0
+        const done = passes >= PASSES_TO_COMPLETE
+        const btn = this.makeButton(
+          `${t.icon}  ${t.name}`,
+          `${passesDots(passes)}  ${done ? 'Complete!' : `${passes}/${PASSES_TO_COMPLETE} passes`}`,
+          W - 120, 80,
+          done ? 0x1a5a2a : s.color,
+          done ? 0x2a7a3a : s.hover,
+          () => this.onTopicChosen(t),
+        )
+        btn.setPosition(0, -30 + ti * 104)
+        this.topicModal.add(btn)
       })
-      btn.setPosition(x, y)
-      this.subcategoryModal.add(btn)
-    })
+    }
 
-    const back = this.makeButton('← Back to Subjects', '', 220, 40, 0x2a2a44, 0x3a3a60, () => {
-      if (this.state !== 'subcategory_select') return
-      this.subcategoryModal.setVisible(false)
-      this.state = 'teacher_dialog'
-      this.subjectModal.setVisible(true)
-    })
-    back.setPosition(0, H / 2 - 36)
-    this.subcategoryModal.add(back)
+    const exit = this.makeButton('← Return to World', '', 210, 40, 0x2a2a44, 0x3a3a60, () => this.returnToWorld())
+    exit.setPosition(0, H / 2 - 32)
+    this.topicModal.add(exit)
   }
 
-  private onSubcategoryChosen(sub: Subcategory) {
-    this.sessionSubcategory = sub
-    this.subcategoryModal.setVisible(false)
+  private onTopicChosen(topic: GradeTopic) {
+    this.sessionTopic = topic
+    this.topicModal.setVisible(false)
 
     // Seat player at a random empty desk
     const desk = EMPTY_DESKS[Phaser.Math.Between(0, EMPTY_DESKS.length - 1)]
     this.player.setVisible(false)
     this.seatedGfx.clear()
-    // Seated wizard
     this.seatedGfx.fillStyle(0x4b0082, 1)
     this.seatedGfx.fillRect(desk.x - 11, desk.y - 32, 22, 18)
     this.seatedGfx.fillStyle(0xffe0b2, 1)
@@ -581,52 +621,13 @@ export class ClassroomScene extends Phaser.Scene {
     this.seatedGfx.fillRect(desk.x - 11, desk.y - 28, 22, 3)
 
     this.state = 'seated'
-    this.time.delayedCall(320, () => this.difficultyModal.setVisible(true))
+    this.time.delayedCall(280, () => this.startQuiz(topic))
   }
 
-  // ─── DIFFICULTY MODAL ──────────────────────────────────────────────────────
+  // ─── QUIZ START ──────────────────────────────────────────────────────────
 
-  private createDifficultyModal() {
-    const W = 640, H = 390
-    this.difficultyModal = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
-      .setDepth(100).setVisible(false)
-
-    const bg = this.add.graphics()
-    bg.fillStyle(0x0c0c24, 0.98)
-    bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
-    bg.lineStyle(2, 0xffd700, 1)
-    bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
-    this.difficultyModal.add(bg)
-
-    this.difficultyModal.add(this.add.text(0, -H / 2 + 34, 'Choose Your Difficulty', {
-      fontSize: '24px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5))
-    this.difficultyModal.add(this.add.text(0, -H / 2 + 64, '5 questions · 3 attempts each · Earn XP!', {
-      fontSize: '14px', fontFamily: 'Arial', color: '#aaaaaa',
-    }).setOrigin(0.5, 0.5))
-
-    const div = this.add.graphics()
-    div.lineStyle(1, 0xffd700, 0.35)
-    div.lineBetween(-W / 2 + 40, -H / 2 + 80, W / 2 - 40, -H / 2 + 80)
-    this.difficultyModal.add(div)
-
-    const yPos = [-70, 24, 118]
-    DIFFICULTY_CONFIG.forEach((d, i) => {
-      const btn = this.makeButton(d.label, d.desc, 520, 76, d.color, d.hover, () => {
-        if (this.state === 'seated') this.onDifficultyChosen(d.key)
-      })
-      btn.setPosition(0, yPos[i])
-      this.difficultyModal.add(btn)
-    })
-  }
-
-  private onDifficultyChosen(difficulty: Difficulty) {
-    this.sessionDifficulty = difficulty
-    this.difficultyModal.setVisible(false)
-
-    // SECURITY: questions, answers and rewards all come from the server.
-    // The local question bank is no longer used — without a connection the
-    // lesson cannot start (no client-trusted XP or shard paths remain).
+  private startQuiz(topic: GradeTopic) {
+    // SECURITY: questions, answers, and rewards all come from the server.
     if (!this.socket?.connected) {
       this.showOfflineNotice()
       return
@@ -640,8 +641,7 @@ export class ClassroomScene extends Phaser.Scene {
     this.correctCount = 0
     this.xpEarned = 0
     this.questionResults = []
-    this.skillShardsEarned = 0
-    this.combatShardEarned = false
+    this.completeResult = null
     this.sessionWasPerfect = false
     this.questionLocked = false
 
@@ -656,20 +656,15 @@ export class ClassroomScene extends Phaser.Scene {
     const onError = (err: { message?: string }) => {
       this.socket?.off('learning:session_started', onStarted)
       if (!this.scene.isActive()) return
-      this.showOfflineNotice(err?.message ?? 'Could not start the lesson. Please try again.')
+      this.showOfflineNotice(err?.message ?? 'Could not start the quiz. Please try again.')
     }
     this.socket.once('learning:session_started', onStarted)
     this.socket.once('error', onError)
 
-    this.socket.emit('learning:start', {
-      subject: this.sessionSubject,
-      difficulty,
-      ...(this.sessionSubcategory ? { subcategory: this.sessionSubcategory.id } : {}),
-    })
+    this.socket.emit('learning:start', { topicId: topic.id })
   }
 
-  /** Shown when there is no server connection — lessons require the server. */
-  private showOfflineNotice(message = 'You are not connected to the server. Lessons (and shard rewards) need a live connection — please try again in a moment.') {
+  private showOfflineNotice(message = 'You are not connected to the server. Quizzes (and rewards) need a live connection — please try again in a moment.') {
     const W = 560, H = 260
     const panel = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(120)
     const bg = this.add.graphics()
@@ -678,7 +673,7 @@ export class ClassroomScene extends Phaser.Scene {
     bg.lineStyle(2, 0xaa4433, 1)
     bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
     panel.add(bg)
-    panel.add(this.add.text(0, -H / 2 + 40, '⚠  Cannot Start Lesson', {
+    panel.add(this.add.text(0, -H / 2 + 40, '⚠  Cannot Start Quiz', {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ff9977', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
     panel.add(this.add.text(0, -16, message, {
@@ -692,11 +687,6 @@ export class ClassroomScene extends Phaser.Scene {
   }
 
   // ─── QUESTION PANEL ────────────────────────────────────────────────────────
-
-  private createQuestionPanel() {
-    this.questionPanel = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
-      .setDepth(100).setVisible(false)
-  }
 
   private buildQuestion() {
     this.questionPanel.removeAll(true)
@@ -719,10 +709,9 @@ export class ClassroomScene extends Phaser.Scene {
     this.questionPanel.add(bg)
 
     // Header labels
-    const subj = SUBJECT_CONFIG.find(s => s.key === this.sessionSubject)!
-    const diff = DIFFICULTY_CONFIG.find(d => d.key === this.sessionDifficulty)!
-    const topic = this.sessionSubcategory
-    this.questionPanel.add(this.add.text(-W / 2 + 20, -H / 2 + 14, `${subj.icon}  ${subj.label}${topic ? `  ·  ${topic.icon} ${topic.name}` : ''}  ·  ${diff.label}`, {
+    const subj = SUBJECT_CONFIG.find(s => s.key === this.sessionTopic?.subject)
+    const topic = this.sessionTopic
+    this.questionPanel.add(this.add.text(-W / 2 + 20, -H / 2 + 14, `${subj?.icon ?? ''}  ${subj?.label ?? ''}  ·  ${topic?.icon ?? ''} ${topic?.name ?? ''}  ·  Grade ${topic?.grade ?? ''}`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#bbaaff',
     }).setOrigin(0, 0.5))
     this.questionPanel.add(this.add.text(W / 2 - 20, -H / 2 + 14, `Question  ${this.questionNumber}  of  ${QUESTIONS_PER_SESSION}`, {
@@ -786,8 +775,7 @@ export class ClassroomScene extends Phaser.Scene {
     if (!q || !this.sessionId || !this.socket?.connected) return
     this.questionLocked = true
 
-    // The server validates the answer (it alone knows correctIndex) and
-    // replies via 'learning:answer_result' → handleAnswerResult().
+    // The server validates the answer (it alone knows correctIndex).
     this.socket.emit('learning:answer', {
       sessionId: this.sessionId,
       questionId: q.id,
@@ -804,19 +792,19 @@ export class ClassroomScene extends Phaser.Scene {
     const fb = this.questionPanel.getByName('feedback') as Phaser.GameObjects.Text | null
     fb?.setVisible(true)
 
-    // Accumulate server-reported rewards (display only — server holds truth)
     this.xpEarned += res.xpEarned
-    this.skillShardsEarned += res.skillShardsAwarded
-    if (res.combatShardAwarded) this.combatShardEarned = true
     if (res.sessionComplete) this.sessionWasPerfect = res.perfectScore
 
     const shortText = q.question.length > 60 ? q.question.slice(0, 60) + '…' : q.question
 
     const advance = () => {
       if (res.sessionComplete) {
+        // Wait for `learning:complete` to deliver the reward facts; show a
+        // brief tallying state in the meantime.
         this.state = 'results'
         this.questionPanel.setVisible(false)
-        this.showResults()
+        if (this.completeResult) this.showResults()
+        else this.showTallying()
       } else if (res.nextQuestion) {
         this.currentQuestion = res.nextQuestion
         this.questionNumber++
@@ -828,120 +816,201 @@ export class ClassroomScene extends Phaser.Scene {
     if (res.correct) {
       this.correctCount++
       this.questionResults.push({ text: shortText, correct: true })
-      const shardNote = res.skillShardsAwarded > 0 ? '   🔷 Skill Shard earned!' : ''
-      fb?.setText(`✓  Correct!  +${res.xpEarned} XP${shardNote}`).setColor('#44ff88')
-      this.time.delayedCall(res.skillShardsAwarded > 0 ? 1800 : 1400, advance)
+      fb?.setText(`✓  Correct!  +${res.xpEarned} XP`).setColor('#44ff88')
+      this.time.delayedCall(1300, advance)
     } else if (res.attemptsLeft <= 0 || res.sessionComplete || res.nextQuestion) {
-      // Out of attempts — the server has moved on to the next question
       this.questionResults.push({ text: shortText, correct: false })
       fb?.setText(`✗  Out of attempts!  ${res.explanation}`).setColor('#ff6644')
       this.time.delayedCall(2600, advance)
     } else {
-      // Wrong, but attempts remain — retry the same question
       this.attemptsLeft = res.attemptsLeft
       fb?.setText(`✗  Incorrect — ${res.attemptsLeft} attempt${res.attemptsLeft > 1 ? 's' : ''} remaining`).setColor('#ffaa44')
       this.time.delayedCall(1300, () => { fb?.setVisible(false); this.buildQuestion() })
     }
   }
 
-  // ─── RESULTS ───────────────────────────────────────────────────────────────
-
-  private createResultsPanel() {
-    this.resultsPanel = this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
-      .setDepth(100).setVisible(false)
+  /** Store the completion result; render now if the quiz UI already finished. */
+  private handleComplete(res: CompleteResult) {
+    this.completeResult = res
+    // Keep our local snapshot fresh for the next visit to the topic modal.
+    if (this.sessionTopic) {
+      this.topicPasses[this.sessionTopic.id] = res.topicPasses
+      if (res.gradeCompleted) this.subjectGrades[this.sessionTopic.subject] = res.newGrade
+    }
+    if (this.state === 'results') this.showResults()
   }
 
-  private showResults() {
+  // ─── RESULTS ───────────────────────────────────────────────────────────────
+
+  /** Transient panel shown while we await `learning:complete`. */
+  private showTallying() {
     this.resultsPanel.removeAll(true)
     this.resultsPanel.setVisible(true)
-
-    // All reward facts below were reported by the server — never computed here.
-    const perfect = this.sessionWasPerfect
-    const shardLines = (this.skillShardsEarned > 0 ? 1 : 0) + (this.combatShardEarned ? 1 : 0)
-    const W = 720, H = 470 + shardLines * 60
+    const W = 520, H = 200
     const bg = this.add.graphics()
     bg.fillStyle(0x0c0c24, 0.98)
     bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
-    bg.lineStyle(2, perfect ? 0xffd700 : 0x5533aa, 1)
+    bg.lineStyle(2, 0x5533aa, 1)
     bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
-    if (perfect) {
+    this.resultsPanel.add(bg)
+    this.resultsPanel.add(this.add.text(0, 0, 'Tallying your results…', {
+      fontSize: '20px', fontFamily: 'Georgia, serif', color: '#ffffff',
+    }).setOrigin(0.5, 0.5))
+  }
+
+  private showResults() {
+    const res = this.completeResult
+    if (!res) { this.showTallying(); return }
+
+    this.resultsPanel.removeAll(true)
+    this.resultsPanel.setVisible(true)
+
+    const passed = res.passed
+    const gradeUp = res.gradeCompleted
+    const W = 720
+    const H = 430 + this.questionResults.length * 36 + (gradeUp ? 110 : 30)
+
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0c0c24, 0.98)
+    bg.fillRoundedRect(-W / 2, -H / 2, W, H, 16)
+    bg.lineStyle(2, gradeUp ? 0xffd700 : (passed ? 0x33aa55 : 0xaa4433), 1)
+    bg.strokeRoundedRect(-W / 2, -H / 2, W, H, 16)
+    if (gradeUp) {
       bg.lineStyle(3, 0xffee44, 0.5)
       bg.strokeRoundedRect(-W / 2 + 4, -H / 2 + 4, W - 8, H - 8, 13)
     }
     this.resultsPanel.add(bg)
 
-    this.resultsPanel.add(this.add.text(0, -H / 2 + 38, perfect ? '🎉  Perfect Score!' : 'Lesson Complete!', {
+    const title = this.sessionWasPerfect ? '🎉  Perfect Score!' : (passed ? '✓  Quiz Passed!' : 'Quiz Complete')
+    this.resultsPanel.add(this.add.text(0, -H / 2 + 36, title, {
       fontSize: '28px', fontFamily: 'Georgia, serif',
-      color: perfect ? '#ffd700' : '#ffffff', fontStyle: 'bold',
+      color: passed ? '#ffd700' : '#ffaa88', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
 
-    const subj = SUBJECT_CONFIG.find(s => s.key === this.sessionSubject)!
-    const diff = DIFFICULTY_CONFIG.find(d => d.key === this.sessionDifficulty)!
-    const topic = this.sessionSubcategory
-    this.resultsPanel.add(this.add.text(0, -H / 2 + 72, `${subj.icon}  ${subj.label}${topic ? `  ·  ${topic.icon} ${topic.name}` : ''}  ·  ${diff.label}`, {
+    const subj = SUBJECT_CONFIG.find(s => s.key === this.sessionTopic?.subject)
+    const topic = this.sessionTopic
+    this.resultsPanel.add(this.add.text(0, -H / 2 + 70, `${subj?.icon ?? ''}  ${subj?.label ?? ''}  ·  ${topic?.icon ?? ''} ${topic?.name ?? ''}  ·  Grade ${topic?.grade ?? ''}`, {
       fontSize: '15px', fontFamily: 'Arial', color: '#888888',
     }).setOrigin(0.5, 0.5))
 
     const dv = this.add.graphics()
     dv.lineStyle(1, 0xffd700, 0.35)
-    dv.lineBetween(-W / 2 + 40, -H / 2 + 90, W / 2 - 40, -H / 2 + 90)
+    dv.lineBetween(-W / 2 + 40, -H / 2 + 88, W / 2 - 40, -H / 2 + 88)
     this.resultsPanel.add(dv)
 
-    // Per-question rows (question text captured as the server presented it)
+    // Per-question rows
     this.questionResults.forEach((row, i) => {
       this.resultsPanel.add(this.add.text(
-        0, -H / 2 + 124 + i * 38,
+        0, -H / 2 + 118 + i * 36,
         `${row.correct ? '✓' : '✗'}  Q${i + 1}:  ${row.text}`,
         { fontSize: '14px', fontFamily: 'Arial', color: row.correct ? '#44ff88' : '#ff6655', wordWrap: { width: W - 60 } }
       ).setOrigin(0.5, 0.5))
     })
 
-    // Score tally (correctness counted from per-answer server verdicts)
-    this.resultsPanel.add(this.add.text(
-      0, -H / 2 + 130 + this.questionResults.length * 38,
-      `Score:  ${this.correctCount} / ${this.questionResults.length}    ·    +${this.xpEarned} XP earned`,
-      { fontSize: '19px', fontFamily: 'Georgia, serif', color: '#44ffaa', fontStyle: 'bold' }
-    ).setOrigin(0.5, 0.5))
+    let y = -H / 2 + 126 + this.questionResults.length * 36
 
-    // ── Shard awards — rendered ONLY from what the server reported ──────────
-    let sy = -H / 2 + 170 + this.questionResults.length * 38
-    if (this.skillShardsEarned > 0) {
-      this.resultsPanel.add(this.add.text(0, sy,
-        `🔷  Skill Shard earned!${this.skillShardsEarned > 1 ? `  x${this.skillShardsEarned}` : ''}`, {
-        fontSize: '19px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
+    // Score line + pass threshold reminder (server-reported score)
+    this.resultsPanel.add(this.add.text(0, y,
+      `Score:  ${res.score} / ${QUESTIONS_PER_SESSION}    ·    +${this.xpEarned} XP earned`, {
+      fontSize: '19px', fontFamily: 'Georgia, serif', color: '#44ffaa', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+    y += 30
+    this.resultsPanel.add(this.add.text(0, y,
+      passed ? 'You passed! (4 or more correct)' : 'You need 4 of 5 correct to pass — try again!', {
+      fontSize: '13px', fontFamily: 'Arial', color: passed ? '#88ddaa' : '#ffaa88',
+    }).setOrigin(0.5, 0.5))
+    y += 34
+
+    // Topic progress (passes), reported by the server
+    const done = res.topicPasses >= PASSES_TO_COMPLETE
+    this.resultsPanel.add(this.add.text(0, y,
+      `${topic?.name ?? 'Topic'} progress:  ${passesDots(res.topicPasses)}  ${done ? 'Complete!' : `${res.topicPasses}/${PASSES_TO_COMPLETE} passes`}`, {
+      fontSize: '16px', fontFamily: 'Georgia, serif', color: done ? '#66ffaa' : '#bbbbff', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5))
+    y += 40
+
+    // Per-quiz skill shard (every completed test earns 1). On a grade-up the
+    // total — including the grade bonus — is shown in the celebration instead.
+    if (!gradeUp && res.skillShardsAwarded > 0) {
+      this.resultsPanel.add(this.add.text(0, y,
+        `+${res.skillShardsAwarded} 🔷  Skill Shard earned!`, {
+        fontSize: '17px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
       }).setOrigin(0.5, 0.5))
-      this.resultsPanel.add(this.add.text(0, sy + 24, 'Every 5 correct answers — spend it at Combat Training', {
-        fontSize: '12px', fontFamily: 'Arial', color: '#aaaaaa',
-      }).setOrigin(0.5, 0.5))
-      sy += 60
-    }
-    if (this.combatShardEarned) {
-      this.resultsPanel.add(this.add.text(0, sy, '🔶  Combat Shard earned — topic mastered!', {
-        fontSize: '19px', fontFamily: 'Georgia, serif', color: '#ffaa55', fontStyle: 'bold',
-      }).setOrigin(0.5, 0.5))
-      this.resultsPanel.add(this.add.text(0, sy + 24,
-        'Every question in this topic answered correctly 3 times — spend it at the Combat Strategy Hall', {
-        fontSize: '12px', fontFamily: 'Arial', color: '#aaaaaa',
-      }).setOrigin(0.5, 0.5))
+      y += 32
     }
 
-    // Return button
+    // Grade-up celebration (only when the server says both topics completed)
+    if (gradeUp) {
+      const mastered = res.newGrade >= MASTERED_GRADE
+      this.resultsPanel.add(this.add.text(0, y,
+        mastered
+          ? `🏆  ${subj?.label ?? 'Subject'} Mastered!`
+          : `🎓  Grade ${(topic?.grade ?? 1)} complete!`, {
+        fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5))
+      y += 32
+      this.resultsPanel.add(this.add.text(0, y,
+        `+${res.skillShardsAwarded} 🔷   +${res.combatShardAwarded} 🔶`, {
+        fontSize: '20px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5))
+      y += 28
+      this.resultsPanel.add(this.add.text(0, y,
+        mastered
+          ? 'You have completed all 12 grades in this subject!'
+          : `Advanced to Grade ${res.newGrade} in ${subj?.label ?? 'this subject'}!`, {
+        fontSize: '13px', fontFamily: 'Arial', color: '#cccccc',
+      }).setOrigin(0.5, 0.5))
+      y += 24
+    }
+
+    // Primary: stay in the school and return to this subject's topic list so
+    // the player can keep studying (the next topic, or the same one again).
+    const cont = this.makeButton('Continue Studying', '', 290, 52, 0x1a5a2a, 0x2a7a3a, () => this.continueStudying())
+    cont.setPosition(-156, H / 2 - 36)
+    this.resultsPanel.add(cont)
+
     const ret = this.makeButton('Return to World', '', 290, 52, 0x2a1060, 0x4a2090, () => this.returnToWorld())
-    ret.setPosition(0, H / 2 - 36)
+    ret.setPosition(156, H / 2 - 36)
     this.resultsPanel.add(ret)
   }
 
   // ─── RETURN ────────────────────────────────────────────────────────────────
 
+  /** After a quiz, stay in the classroom and reopen the topic list for the
+   *  subject just studied (its grade/passes already refreshed in handleComplete,
+   *  so completing a grade lands the player on the next grade's topics). */
+  private continueStudying() {
+    this.resultsPanel.setVisible(false)
+    this.questionPanel.setVisible(false)
+
+    // Un-seat: clear the seated avatar and restore the walking sprite for when
+    // the player eventually leaves the modal.
+    this.seatedGfx.clear()
+    this.player.setVisible(true).setVelocity(0, 0)
+
+    // Reset session state
+    this.sessionId = null
+    this.currentQuestion = null
+    this.completeResult = null
+
+    // Reopen the topic list for the same subject
+    this.modalSubject = this.sessionTopic?.subject ?? null
+    this.state = 'teacher_dialog'
+    this.overlay.setVisible(true)
+    this.socket?.emit('shop:get_unlocks')   // confirm fresh passes/grade from server
+    this.buildTopicModal()
+    this.topicModal.setVisible(true)
+  }
+
   private returnToWorld() {
-    this.scene.start('WorldScene')
+    this.scene.start('WorldScene',
+      this.returnX !== undefined ? { spawnX: this.returnX, spawnY: this.returnY } : undefined)
   }
 
   // ─── UPDATE ────────────────────────────────────────────────────────────────
 
   update() {
     if (this.state === 'exploring') {
-      // Movement
       let vx = 0, vy = 0
       if (this.cursors.left.isDown  || this.wasd.A.isDown) vx--
       if (this.cursors.right.isDown || this.wasd.D.isDown) vx++
@@ -950,7 +1019,6 @@ export class ClassroomScene extends Phaser.Scene {
       if (vx !== 0 && vy !== 0) { vx *= 0.707; vy *= 0.707 }
       this.player.setVelocity(vx * PLAYER_SPEED, vy * PLAYER_SPEED)
 
-      // Play directional walk / idle animations (registered globally by Player.ts)
       if (this.anims.exists('walk_down')) {
         if (vx !== 0 || vy !== 0) {
           let dir: string
@@ -965,10 +1033,8 @@ export class ClassroomScene extends Phaser.Scene {
         }
       }
 
-      // ESC → world
       if (Phaser.Input.Keyboard.JustDown(this.escKey)) { this.returnToWorld(); return }
 
-      // Teacher proximity
       const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, 640, 248)
       if (dist < 130) {
         this.teacherPrompt.setVisible(true)
@@ -976,7 +1042,9 @@ export class ClassroomScene extends Phaser.Scene {
           this.player.setVelocity(0, 0)
           this.state = 'teacher_dialog'
           this.overlay.setVisible(true)
-          this.subjectModal.setVisible(true)
+          // Refresh progression then show the subject picker
+          this.socket?.emit('shop:get_unlocks')
+          this.openTopicModal()
         }
       } else {
         this.teacherPrompt.setVisible(false)

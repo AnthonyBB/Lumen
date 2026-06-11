@@ -1,87 +1,165 @@
 /**
- * K-12 curriculum taxonomy — CLIENT COPY.
+ * Grade-level curriculum — CLIENT COPY.
+ *
+ * Each subject (math, science, history, language) has exactly TWO topics at
+ * every grade 1–12, giving 4 × 12 × 2 = 96 topics.  A topic is one subject at
+ * one grade and is played as a 5-question quiz.
+ *
+ * Topic id format: `<subject>_g<grade>_t<n>`  e.g. 'math_g1_t1', 'science_g10_t2'.
  *
  * KEEP IN SYNC with the server master copy: server/game/data/curriculum.ts
- * (same pattern as the equipment system's duplicated catalog).  The server
- * validates every subcategory id it receives, so a drifted client copy can
- * never grant access to anything — it would just show stale labels.
+ * (same pattern as the equipment system's duplicated catalog).  This client
+ * copy carries only labels/icons/descriptions — never answers — so a drifted
+ * copy can show stale text but can never grant access to anything (the server
+ * validates every topic id and computes every reward).
  */
 
 import type { Subject } from '../../engine/types'
 
-export interface Subcategory {
-  id: string            // e.g. 'math_fractions'
+export interface GradeTopic {
+  id: string            // `<subject>_g<grade>_t<n>`
   subject: Subject
-  name: string          // 'Fractions & Decimals'
+  grade: number         // 1 .. 12
+  name: string
   icon: string          // emoji
   description: string   // one kid-friendly sentence
-  gradeMin: number      // 0 (K) .. 12
-  gradeMax: number
 }
 
-export const CURRICULUM: Subcategory[] = [
-  // ── Math ──────────────────────────────────────────────────────────────────
-  { id: 'math_counting',  subject: 'math', name: 'Counting & Place Value',    icon: '🔢', description: 'Count, compare, and discover what each digit is worth.',       gradeMin: 0,  gradeMax: 2 },
-  { id: 'math_addsub',    subject: 'math', name: 'Addition & Subtraction',    icon: '➕', description: 'Add things together and take them away like a number wizard.', gradeMin: 1,  gradeMax: 3 },
-  { id: 'math_muldiv',    subject: 'math', name: 'Multiplication & Division', icon: '✖️', description: 'Master times tables and share numbers into equal groups.',     gradeMin: 2,  gradeMax: 5 },
-  { id: 'math_fractions', subject: 'math', name: 'Fractions & Decimals',      icon: '🍕', description: 'Slice numbers into parts and work with pieces of a whole.',    gradeMin: 3,  gradeMax: 6 },
-  { id: 'math_geometry',  subject: 'math', name: 'Geometry & Measurement',    icon: '📐', description: 'Explore shapes, angles, area, and how we measure the world.',  gradeMin: 2,  gradeMax: 8 },
-  { id: 'math_ratios',    subject: 'math', name: 'Ratios & Percents',         icon: '⚖️', description: 'Compare amounts and figure out percentages like a pro.',       gradeMin: 5,  gradeMax: 8 },
-  { id: 'math_algebra',   subject: 'math', name: 'Algebra',                   icon: '🧮', description: 'Solve for mystery numbers using equations and variables.',     gradeMin: 7,  gradeMax: 10 },
-  { id: 'math_functions', subject: 'math', name: 'Functions & Graphs',        icon: '📈', description: 'See how numbers relate by drawing lines and curves.',          gradeMin: 8,  gradeMax: 11 },
-  { id: 'math_trig',      subject: 'math', name: 'Trigonometry',              icon: '📏', description: 'Unlock the secrets of triangles, sines, and cosines.',         gradeMin: 9,  gradeMax: 12 },
-  { id: 'math_stats',     subject: 'math', name: 'Statistics & Probability',  icon: '🎲', description: 'Predict chances and make sense of data like a scientist.',     gradeMin: 6,  gradeMax: 12 },
-  { id: 'math_precalc',   subject: 'math', name: 'Pre-Calculus Basics',       icon: '♾️', description: 'Step into advanced math with sequences, limits, and logs.',    gradeMin: 11, gradeMax: 12 },
+function topic(
+  subject: Subject,
+  grade: number,
+  n: 1 | 2,
+  name: string,
+  icon: string,
+  description: string,
+): GradeTopic {
+  return { id: `${subject}_g${grade}_t${n}`, subject, grade, name, icon, description }
+}
 
-  // ── Science ───────────────────────────────────────────────────────────────
-  { id: 'sci_animals',    subject: 'science', name: 'Animals & Habitats',     icon: '🐾', description: 'Meet amazing creatures and the places they call home.',            gradeMin: 0, gradeMax: 3 },
-  { id: 'sci_plants',     subject: 'science', name: 'Plants & Ecosystems',    icon: '🌱', description: 'Learn how plants grow and how living things depend on each other.', gradeMin: 1, gradeMax: 5 },
-  { id: 'sci_weather',    subject: 'science', name: 'Weather & Climate',      icon: '⛅', description: 'Discover what makes rain, wind, storms, and seasons.',             gradeMin: 0, gradeMax: 6 },
-  { id: 'sci_space',      subject: 'science', name: 'Earth & Space',          icon: '🪐', description: 'Journey through planets, stars, and the layers of our Earth.',     gradeMin: 2, gradeMax: 8 },
-  { id: 'sci_matter',     subject: 'science', name: 'Matter & Materials',     icon: '🧊', description: 'Find out what everything is made of — solids, liquids, and gases.', gradeMin: 3, gradeMax: 7 },
-  { id: 'sci_forces',     subject: 'science', name: 'Forces & Motion',        icon: '🍎', description: 'Push, pull, and explore why things move the way they do.',         gradeMin: 4, gradeMax: 9 },
-  { id: 'sci_energy',     subject: 'science', name: 'Energy & Electricity',   icon: '⚡', description: 'Power up your knowledge of light, heat, and circuits.',            gradeMin: 5, gradeMax: 10 },
-  { id: 'sci_cells',      subject: 'science', name: 'Cells & Life Science',   icon: '🔬', description: 'Zoom in on cells, genes, and the building blocks of life.',        gradeMin: 6, gradeMax: 10 },
-  { id: 'sci_chemistry',  subject: 'science', name: 'Chemistry',              icon: '⚗️', description: 'Mix it up with atoms, elements, and chemical reactions.',          gradeMin: 8, gradeMax: 12 },
-  { id: 'sci_physics',    subject: 'science', name: 'Physics',                icon: '🧲', description: 'Explore the deep laws of motion, waves, and energy.',              gradeMin: 9, gradeMax: 12 },
-  { id: 'sci_body',       subject: 'science', name: 'Human Body & Health',    icon: '🫀', description: 'Tour the incredible machine that is your own body.',               gradeMin: 2, gradeMax: 10 },
+export const GRADE_TOPICS: GradeTopic[] = [
+  // ─── MATH ──────────────────────────────────────────────────────────────────
+  topic('math', 1, 1, 'Counting to 100', '🔢', 'Count, order, and compare numbers all the way to one hundred.'),
+  topic('math', 1, 2, 'Addition & Subtraction to 20', '➕', 'Add and take away small numbers up to twenty.'),
+  topic('math', 2, 1, 'Place Value to 1,000', '💯', 'See what each digit is worth in hundreds, tens, and ones.'),
+  topic('math', 2, 2, 'Two-Digit Add & Subtract', '➖', 'Add and subtract bigger numbers with regrouping.'),
+  topic('math', 3, 1, 'Multiplication Facts', '✖️', 'Master your times tables up to ten times ten.'),
+  topic('math', 3, 2, 'Division & Fractions', '🍕', 'Share into equal groups and meet your first fractions.'),
+  topic('math', 4, 1, 'Multi-Digit Operations', '🧮', 'Multiply and divide larger numbers with confidence.'),
+  topic('math', 4, 2, 'Fractions & Decimals', '🔟', 'Compare fractions and the decimals that match them.'),
+  topic('math', 5, 1, 'Decimal Operations', '📊', 'Add, subtract, multiply, and divide with decimals.'),
+  topic('math', 5, 2, 'Fraction Operations', '🥧', 'Add, subtract, and multiply fractions like a pro.'),
+  topic('math', 6, 1, 'Ratios & Rates', '⚖️', 'Compare amounts using ratios, rates, and unit pricing.'),
+  topic('math', 6, 2, 'Percents & Negatives', '➗', 'Work with percentages and numbers below zero.'),
+  topic('math', 7, 1, 'Ratios & Proportions', '📐', 'Solve proportions and scale quantities up or down.'),
+  topic('math', 7, 2, 'Integers & Expressions', '🧾', 'Combine signed numbers and simplify expressions.'),
+  topic('math', 8, 1, 'Linear Equations', '📈', 'Solve equations and graph straight lines.'),
+  topic('math', 8, 2, 'Exponents & Roots', '√', 'Use powers, scientific notation, and square roots.'),
+  topic('math', 9, 1, 'Algebra I Foundations', '𝑥', 'Master functions, slope, and systems of equations.'),
+  topic('math', 9, 2, 'Quadratics', '⤴️', 'Factor and solve quadratic equations and parabolas.'),
+  topic('math', 10, 1, 'Geometry & Proofs', '📏', 'Reason about shapes, congruence, and similarity.'),
+  topic('math', 10, 2, 'Right-Triangle Trig', '🔺', 'Use sine, cosine, and the Pythagorean theorem.'),
+  topic('math', 11, 1, 'Algebra II', '🧠', 'Explore polynomials, logarithms, and complex numbers.'),
+  topic('math', 11, 2, 'Trigonometry', '🌀', 'Work with the unit circle, radians, and identities.'),
+  topic('math', 12, 1, 'Pre-Calculus', '♾️', 'Tackle sequences, limits, and advanced functions.'),
+  topic('math', 12, 2, 'Intro to Calculus', '∫', 'Meet derivatives, rates of change, and the integral.'),
 
-  // ── History ───────────────────────────────────────────────────────────────
-  { id: 'hist_community', subject: 'history', name: 'Community & Citizenship', icon: '🏘️', description: 'Learn how neighborhoods, helpers, and good citizens work together.', gradeMin: 0, gradeMax: 3 },
-  { id: 'hist_ancient',   subject: 'history', name: 'Ancient Civilizations',   icon: '🏛️', description: 'Travel back to Egypt, Greece, Rome, and other ancient worlds.',  gradeMin: 3, gradeMax: 7 },
-  { id: 'hist_explorers', subject: 'history', name: 'World Explorers',         icon: '🧭', description: 'Sail with the brave explorers who mapped the globe.',            gradeMin: 4, gradeMax: 7 },
-  { id: 'hist_american',  subject: 'history', name: 'American History',        icon: '🦅', description: 'Follow the story of the United States from colonies to today.',  gradeMin: 4, gradeMax: 11 },
-  { id: 'hist_world',     subject: 'history', name: 'World History',           icon: '🌍', description: 'Discover the big events that shaped nations around the world.',  gradeMin: 6, gradeMax: 12 },
-  { id: 'hist_geography', subject: 'history', name: 'Geography & Maps',        icon: '🗺️', description: 'Read maps and explore continents, oceans, and countries.',       gradeMin: 0, gradeMax: 8 },
-  { id: 'hist_civics',    subject: 'history', name: 'Government & Civics',     icon: '🗳️', description: 'See how laws are made and how governments serve people.',        gradeMin: 5, gradeMax: 12 },
-  { id: 'hist_economics', subject: 'history', name: 'Economics Basics',        icon: '💰', description: 'Understand money, trade, and how people buy and sell.',          gradeMin: 6, gradeMax: 12 },
+  // ─── SCIENCE ───────────────────────────────────────────────────────────────
+  topic('science', 1, 1, 'Living & Nonliving', '🌱', 'Tell apart things that are alive from things that are not.'),
+  topic('science', 1, 2, 'Weather & Seasons', '⛅', 'Discover sun, rain, wind, and the changing seasons.'),
+  topic('science', 2, 1, 'Animals & Habitats', '🐾', 'Meet creatures and the homes where they live.'),
+  topic('science', 2, 2, 'Plants & Life Cycles', '🌻', 'Watch how plants and animals grow and change.'),
+  topic('science', 3, 1, 'Forces & Motion', '🏃', 'Push, pull, and explore why things move.'),
+  topic('science', 3, 2, 'Earth & Its Resources', '🪨', 'Learn about rocks, soil, water, and natural resources.'),
+  topic('science', 4, 1, 'Energy & Sound', '🔊', 'Explore light, heat, and how sound travels.'),
+  topic('science', 4, 2, 'Ecosystems & Food Chains', '🦌', 'See how living things depend on one another.'),
+  topic('science', 5, 1, 'Matter & Its States', '🧊', 'Investigate solids, liquids, gases, and changes.'),
+  topic('science', 5, 2, 'Earth & Space', '🪐', 'Journey through planets, the moon, and the stars.'),
+  topic('science', 6, 1, 'Cells & Living Systems', '🔬', 'Zoom in on the cells that build every living thing.'),
+  topic('science', 6, 2, 'Weather & Climate', '🌦️', 'Understand what drives weather and Earth’s climate.'),
+  topic('science', 7, 1, 'Human Body Systems', '🫀', 'Tour the systems that keep your body running.'),
+  topic('science', 7, 2, 'Atoms & Elements', '⚛️', 'Discover atoms, elements, and the periodic table.'),
+  topic('science', 8, 1, 'Forces & Newton’s Laws', '🍎', 'Apply the laws that govern motion and gravity.'),
+  topic('science', 8, 2, 'Energy & Waves', '🌊', 'Explore energy transfer, light, and wave behavior.'),
+  topic('science', 9, 1, 'Biology Foundations', '🧫', 'Study cells, ecology, and the web of life.'),
+  topic('science', 9, 2, 'Chemistry Basics', '⚗️', 'Mix it up with bonds, mixtures, and reactions.'),
+  topic('science', 10, 1, 'Chemical Reactions', '🧪', 'Balance equations and track what reactions produce.'),
+  topic('science', 10, 2, 'Genetics & Heredity', '🧬', 'Crack the code of DNA, genes, and inheritance.'),
+  topic('science', 11, 1, 'Physics: Mechanics', '🧲', 'Analyze motion, forces, energy, and momentum.'),
+  topic('science', 11, 2, 'Organic & Acids/Bases', '🧴', 'Explore carbon chemistry and the pH scale.'),
+  topic('science', 12, 1, 'Physics: Electromagnetism', '⚡', 'Master circuits, fields, and electromagnetic waves.'),
+  topic('science', 12, 2, 'Molecular Biology', '🧯', 'Dive into proteins, enzymes, and cellular machinery.'),
 
-  // ── Language ──────────────────────────────────────────────────────────────
-  { id: 'lang_phonics',    subject: 'language', name: 'Phonics & Spelling',         icon: '🔤', description: 'Sound out letters and spell words like a champion.',        gradeMin: 0, gradeMax: 3 },
-  { id: 'lang_vocabulary', subject: 'language', name: 'Vocabulary',                 icon: '📚', description: 'Grow your word power with synonyms, antonyms, and more.',    gradeMin: 0, gradeMax: 12 },
-  { id: 'lang_grammar',    subject: 'language', name: 'Grammar & Punctuation',      icon: '✏️', description: 'Build strong sentences with the rules of great writing.',    gradeMin: 2, gradeMax: 10 },
-  { id: 'lang_reading',    subject: 'language', name: 'Reading Comprehension',      icon: '📖', description: 'Read closely and find the meaning hidden in every passage.', gradeMin: 1, gradeMax: 12 },
-  { id: 'lang_writing',    subject: 'language', name: 'Writing & Composition',      icon: '📝', description: 'Craft essays, stories, and paragraphs that shine.',          gradeMin: 3, gradeMax: 12 },
-  { id: 'lang_literature', subject: 'language', name: 'Literature & Poetry',        icon: '🎭', description: 'Explore stories, poems, and the devices authors use.',       gradeMin: 5, gradeMax: 12 },
-  { id: 'lang_roots',      subject: 'language', name: 'Roots, Prefixes & Suffixes', icon: '🌳', description: 'Crack the code of words by studying their building blocks.', gradeMin: 4, gradeMax: 9 },
+  // ─── HISTORY ───────────────────────────────────────────────────────────────
+  topic('history', 1, 1, 'My Community', '🏘️', 'Meet the helpers and places in your neighborhood.'),
+  topic('history', 1, 2, 'Then & Now', '🕰️', 'See how everyday life has changed over time.'),
+  topic('history', 2, 1, 'Maps & Globes', '🗺️', 'Read maps and find places on a globe.'),
+  topic('history', 2, 2, 'Good Citizens', '🤝', 'Learn the rules and rights that help people live together.'),
+  topic('history', 3, 1, 'Communities Around the World', '🌐', 'Compare how people live in different places.'),
+  topic('history', 3, 2, 'Local & National Heroes', '🦸', 'Honor leaders and heroes who shaped our story.'),
+  topic('history', 4, 1, 'U.S. Regions & Geography', '🏞️', 'Explore the landscapes and regions of the country.'),
+  topic('history', 4, 2, 'Native Peoples & Settlers', '🪶', 'Discover early peoples and the first settlers.'),
+  topic('history', 5, 1, 'Colonial America', '⛵', 'Walk through the founding of the American colonies.'),
+  topic('history', 5, 2, 'American Revolution', '🦅', 'Follow the fight for independence and a new nation.'),
+  topic('history', 6, 1, 'Ancient Civilizations', '🏛️', 'Travel to Egypt, Mesopotamia, and the early world.'),
+  topic('history', 6, 2, 'Greece & Rome', '🏺', 'Discover the ideas and empires of Greece and Rome.'),
+  topic('history', 7, 1, 'The Middle Ages', '🏰', 'Explore feudal life, kingdoms, and the medieval world.'),
+  topic('history', 7, 2, 'Renaissance & Exploration', '🧭', 'Sail with explorers and the rebirth of learning.'),
+  topic('history', 8, 1, 'U.S. Constitution & Civics', '🗳️', 'Understand how American government was built and works.'),
+  topic('history', 8, 2, 'Civil War & Reconstruction', '⚔️', 'Study the war that tested and reshaped the nation.'),
+  topic('history', 9, 1, 'World History: Revolutions', '🔥', 'Trace the revolutions that remade the modern world.'),
+  topic('history', 9, 2, 'Industrial Age', '🏭', 'See how industry transformed work and society.'),
+  topic('history', 10, 1, 'World Wars', '🌍', 'Examine the causes and impact of two global wars.'),
+  topic('history', 10, 2, 'Cold War & Modern Era', '🛰️', 'Follow the tensions and changes after 1945.'),
+  topic('history', 11, 1, 'U.S. History in Depth', '📜', 'Connect the major eras of the American experience.'),
+  topic('history', 11, 2, 'Government & Economics', '💰', 'Analyze how government and economies steer nations.'),
+  topic('history', 12, 1, 'Modern World History', '🗞️', 'Study globalization and the contemporary world.'),
+  topic('history', 12, 2, 'Civics & Global Issues', '🕊️', 'Wrestle with rights, policy, and global challenges.'),
+
+  // ─── LANGUAGE ──────────────────────────────────────────────────────────────
+  topic('language', 1, 1, 'Phonics & Sounds', '🔤', 'Sound out letters and blend them into words.'),
+  topic('language', 1, 2, 'Sight Words & Reading', '📖', 'Recognize common words and read simple sentences.'),
+  topic('language', 2, 1, 'Spelling Patterns', '✏️', 'Spell words using common patterns and rules.'),
+  topic('language', 2, 2, 'Sentences & Reading', '📚', 'Build complete sentences and understand short stories.'),
+  topic('language', 3, 1, 'Parts of Speech', '🧩', 'Name nouns, verbs, adjectives, and more.'),
+  topic('language', 3, 2, 'Reading Comprehension', '🔍', 'Find the main idea and details in a passage.'),
+  topic('language', 4, 1, 'Grammar & Punctuation', '✒️', 'Punctuate and structure sentences correctly.'),
+  topic('language', 4, 2, 'Vocabulary & Context', '💬', 'Grow your words and learn meaning from context.'),
+  topic('language', 5, 1, 'Writing Paragraphs', '📝', 'Organize ideas into clear, focused paragraphs.'),
+  topic('language', 5, 2, 'Roots, Prefixes & Suffixes', '🌳', 'Crack words apart to discover their meaning.'),
+  topic('language', 6, 1, 'Figurative Language', '🎭', 'Spot similes, metaphors, and vivid imagery.'),
+  topic('language', 6, 2, 'Essay Writing', '🖊️', 'Plan and write organized multi-paragraph essays.'),
+  topic('language', 7, 1, 'Literary Elements', '📕', 'Analyze plot, character, theme, and setting.'),
+  topic('language', 7, 2, 'Grammar Mastery', '🪶', 'Refine clauses, phrases, and tricky grammar.'),
+  topic('language', 8, 1, 'Theme & Author’s Craft', '✍️', 'Interpret theme and how authors create effect.'),
+  topic('language', 8, 2, 'Persuasive Writing', '📣', 'Build convincing arguments with evidence.'),
+  topic('language', 9, 1, 'Literary Analysis', '🎓', 'Read closely and support claims with text.'),
+  topic('language', 9, 2, 'Argumentative Essays', '⚖️', 'Construct and defend strong written arguments.'),
+  topic('language', 10, 1, 'World & Classic Literature', '🏛️', 'Explore enduring works from around the world.'),
+  topic('language', 10, 2, 'Rhetoric & Style', '🎙️', 'Study rhetorical devices and effective style.'),
+  topic('language', 11, 1, 'American Literature', '🗽', 'Read defining voices of American writing.'),
+  topic('language', 11, 2, 'Research & Synthesis', '📑', 'Gather sources and synthesize them in writing.'),
+  topic('language', 12, 1, 'British & World Literature', '👑', 'Engage with major works of the literary canon.'),
+  topic('language', 12, 2, 'Composition & Analysis', '📔', 'Write and analyze at a college-ready level.'),
 ]
 
-/** Fast lookup: subcategory id → Subcategory. */
-export const SUBCATEGORY_MAP: Record<string, Subcategory> = Object.fromEntries(
-  CURRICULUM.map((s) => [s.id, s]),
+/** Fast lookup: topic id → GradeTopic. */
+export const TOPIC_MAP: Record<string, GradeTopic> = Object.fromEntries(
+  GRADE_TOPICS.map((t) => [t.id, t]),
 )
 
-/** Subcategories grouped by subject (for the picker UI). */
-export const CURRICULUM_BY_SUBJECT: Record<Subject, Subcategory[]> = {
-  math: CURRICULUM.filter((s) => s.subject === 'math'),
-  science: CURRICULUM.filter((s) => s.subject === 'science'),
-  history: CURRICULUM.filter((s) => s.subject === 'history'),
-  language: CURRICULUM.filter((s) => s.subject === 'language'),
-}
+/** Lookup of the two topics at a given (subject, grade). */
+export const TOPICS_BY_SUBJECT_GRADE: Record<Subject, Record<number, GradeTopic[]>> = (() => {
+  const out = { math: {}, science: {}, history: {}, language: {} } as Record<
+    Subject,
+    Record<number, GradeTopic[]>
+  >
+  for (const t of GRADE_TOPICS) {
+    ;(out[t.subject][t.grade] ??= []).push(t)
+  }
+  return out
+})()
 
-/** Format a grade range like "Grades K-2" or "Grades 9-12". */
-export function gradeRangeLabel(s: Subcategory): string {
-  const lo = s.gradeMin === 0 ? 'K' : String(s.gradeMin)
-  return `Grades ${lo}-${s.gradeMax}`
-}
-
+export const MIN_GRADE = 1
+export const MAX_GRADE = 12
+/** Sentinel grade meaning "all 12 grades complete". */
+export const MASTERED_GRADE = 13

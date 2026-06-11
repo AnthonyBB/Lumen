@@ -48,11 +48,20 @@ const RARITY_COLOR: Record<Rarity, number> = {
   legendary: 0xffaa00,
 }
 
-const MAX_SLOTS = 20
-const COLS      = 4
-const SLOT_W    = 100
-const SLOT_H    = 80
+const MAX_SLOTS = 30   // 5 cols × 6 rows — slots PER TAB
+const COLS      = 5
+const SLOT_W    = 96
+const SLOT_H    = 70
 const SLOT_PAD  = 8
+
+// Tabbed chest — 4 pages of MAX_SLOTS each. The chest is a single FLAT items
+// array of capacity CHEST_CAPACITY on the server; tabs are a client-side paging
+// of that array. The absolute (server) index of a chest slot is
+//   activeTab * MAX_SLOTS + localIndex.
+const CHEST_TABS     = 4
+const CHEST_CAPACITY = CHEST_TABS * MAX_SLOTS   // 120
+
+const TAB_LABELS = ['I', 'II', 'III', 'IV'] as const
 
 // Panel layout — equal 600 px panels, 40 px gap centred at x = 640
 const PANEL_Y   = 80
@@ -63,16 +72,31 @@ const GAP_START = LEFT_X + LEFT_W          // 620
 const RIGHT_X   = GAP_START + 40           // 660
 const RIGHT_W   = GAME_WIDTH - RIGHT_X - 20 // 600
 
+// Exit button rect (top-right of the header) — same action as pressing ESC.
+const EXIT_BTN  = { x: GAME_WIDTH - 100, y: 18, w: 82, h: 34 }
+
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
 export class ChestScene extends Phaser.Scene {
   private socket: Socket | null = null
 
+  // Where to drop the player back in town (next to the chest); set via init().
+  private returnX?: number
+  private returnY?: number
+
   // Server-reported state — only ever replaced by chest:data / chest:updated
   private chestId:        string | null = null
   private chestItems:     ClientInventoryItem[] = []
   private inventoryItems: ClientInventoryItem[] = []
-  private maxSlots = MAX_SLOTS
+  private maxSlots = CHEST_CAPACITY
+
+  // Which chest tab/page is being viewed (0..CHEST_TABS-1). Tabs are purely a
+  // client-side view of the flat chestItems array; absolute index of a chest
+  // slot = activeTab * MAX_SLOTS + localIndex.
+  private activeTab = 0
+
+  // Pixel rects for the 4 tab buttons, computed once in create().
+  private tabRects: { x: number; y: number; w: number; h: number }[] = []
 
   // Pre-computed slot grid positions (set once in create, never change)
   private chestSlots:     Slot[] = []
@@ -98,12 +122,18 @@ export class ChestScene extends Phaser.Scene {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
+  init(data?: { returnX?: number; returnY?: number }) {
+    this.returnX = data?.returnX
+    this.returnY = data?.returnY
+  }
+
   create() {
     this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
 
     this.chestId        = null
     this.chestItems     = []
     this.inventoryItems = []
+    this.activeTab      = 0
     this.dragging       = false
     this.dragItem       = null
     this.dragFrom       = null
@@ -112,6 +142,9 @@ export class ChestScene extends Phaser.Scene {
     // Build fixed slot grids
     this.chestSlots     = this.buildSlotGrid('chest')
     this.inventorySlots = this.buildSlotGrid('inventory')
+
+    // Tab button rects across the top of the chest (left) panel.
+    this.tabRects = this.buildTabRects()
 
     // Draw the background, panels, header, footer — never rebuilt
     this.drawStaticLayer()
@@ -155,10 +188,14 @@ export class ChestScene extends Phaser.Scene {
   }
 
   update() {
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-      this.cleanupDrag()
-      this.scene.start('WorldScene')
-    }
+    if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.closeScene()
+  }
+
+  /** Leave the chest and return to town (next to the chest). */
+  private closeScene() {
+    this.cleanupDrag()
+    this.scene.start('WorldScene',
+      this.returnX !== undefined ? { spawnX: this.returnX, spawnY: this.returnY } : undefined)
   }
 
   // ── Server snapshot → render state ─────────────────────────────────────────
@@ -167,7 +204,7 @@ export class ChestScene extends Phaser.Scene {
     this.chestId        = data.chest.chestId
     this.chestItems     = data.chest.items ?? []
     this.inventoryItems = data.inventory.items ?? []
-    this.maxSlots       = data.chest.maxSlots ?? MAX_SLOTS
+    this.maxSlots       = data.chest.maxSlots ?? CHEST_CAPACITY
     this.rebuildItemLayer()
   }
 
@@ -177,6 +214,11 @@ export class ChestScene extends Phaser.Scene {
   }
 
   // ── Slot grid ──────────────────────────────────────────────────────────────
+
+  /** Absolute (flat-array / server) index of a chest slot on the active tab. */
+  private chestAbsIndex(localIndex: number): number {
+    return this.activeTab * MAX_SLOTS + localIndex
+  }
 
   private buildSlotGrid(panel: 'chest' | 'inventory'): Slot[] {
     const panelX  = panel === 'chest' ? LEFT_X  : RIGHT_X
@@ -191,6 +233,58 @@ export class ChestScene extends Phaser.Scene {
       panel,
       index: i,
     }))
+  }
+
+  /**
+   * Pixel rects for the 4 chest tab buttons, laid out in a centred row across
+   * the top of the chest (left) panel, just under the panel title.
+   */
+  private buildTabRects(): { x: number; y: number; w: number; h: number }[] {
+    const h       = 22
+    const gap     = 8
+    const totalW  = 0.7 * LEFT_W            // tab row spans ~70% of the panel
+    const w       = (totalW - (CHEST_TABS - 1) * gap) / CHEST_TABS
+    const originX = LEFT_X + (LEFT_W - totalW) / 2
+    const y       = PANEL_Y + 34
+    return Array.from({ length: CHEST_TABS }, (_, i) => ({
+      x: originX + i * (w + gap),
+      y,
+      w,
+      h,
+    }))
+  }
+
+  /** Number of items currently stored on chest tab `t` (0..CHEST_TABS-1). */
+  private tabItemCount(t: number): number {
+    let n = 0
+    for (let i = 0; i < MAX_SLOTS; i++) {
+      if (this.chestItems[t * MAX_SLOTS + i]) n++
+    }
+    return n
+  }
+
+  /**
+   * Draw the 4 chest tab buttons (part of the dynamic item layer so the active
+   * highlight + per-tab counts re-render whenever the chest state or the active
+   * tab changes). Click handling lives in onDown().
+   */
+  private drawTabs() {
+    this.tabRects.forEach((r, i) => {
+      const active = i === this.activeTab
+      const g = this.push(this.add.graphics().setDepth(2))
+      g.fillStyle(active ? 0x1f1f4a : 0x12122e, 1)
+      g.fillRoundedRect(r.x, r.y, r.w, r.h, 5)
+      g.lineStyle(active ? 2 : 1, active ? 0xffd700 : 0x2a2a5a, 1)
+      g.strokeRoundedRect(r.x, r.y, r.w, r.h, 5)
+
+      const count = this.tabItemCount(i)
+      const label = `${TAB_LABELS[i]}${count ? ` · ${count}` : ''}`
+      this.push(this.add.text(r.x + r.w / 2, r.y + r.h / 2, label, {
+        fontSize: '12px', fontFamily: 'Georgia, serif',
+        color: active ? '#ffd700' : '#8888aa',
+        fontStyle: active ? 'bold' : 'normal',
+      }).setOrigin(0.5, 0.5).setDepth(3))
+    })
   }
 
   // ── Static layer (drawn once) ──────────────────────────────────────────────
@@ -227,13 +321,24 @@ export class ChestScene extends Phaser.Scene {
       fontSize: '26px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5)
 
+    // Exit button (top-right) — click to leave the chest (same as ESC).
+    const eb = EXIT_BTN
+    const ebg = this.add.graphics()
+    ebg.fillStyle(0x2a1830, 1)
+    ebg.fillRoundedRect(eb.x, eb.y, eb.w, eb.h, 6)
+    ebg.lineStyle(1, 0xffd700, 0.85)
+    ebg.strokeRoundedRect(eb.x, eb.y, eb.w, eb.h, 6)
+    this.add.text(eb.x + eb.w / 2, eb.y + eb.h / 2, '✕ Exit', {
+      fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5)
+
     // Footer
     const fg = this.add.graphics()
     fg.fillStyle(0x12122e, 1)
     fg.fillRect(0, GAME_HEIGHT - 28, GAME_WIDTH, 28)
     fg.lineStyle(1, 0x3333aa, 0.8)
     fg.lineBetween(0, GAME_HEIGHT - 28, GAME_WIDTH, GAME_HEIGHT - 28)
-    this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 14, 'Drag items between panels  ·  Press  ESC  to close', {
+    this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 14, 'Drag items between panels  ·  Click tabs I–IV to page the chest  ·  Press  ESC  to close', {
       fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#555577',
     }).setOrigin(0.5, 0.5)
 
@@ -279,8 +384,13 @@ export class ChestScene extends Phaser.Scene {
       fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0).setDepth(2))
 
-    this.push(this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 34,
-      loaded ? `${this.chestItems.length} / ${this.maxSlots}` : 'Loading…', {
+    // Tab buttons across the top of the chest panel. The active tab is
+    // highlighted (gold border + filled). A small per-tab item count sits
+    // under each label. Whole-chest usage (used / capacity) is shown below.
+    if (loaded) this.drawTabs()
+
+    this.push(this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 58 + 6 * (SLOT_H + SLOT_PAD) + 2,
+      loaded ? `${this.chestItems.length} / ${this.maxSlots} stored` : 'Loading…', {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
     }).setOrigin(0.5, 0).setDepth(2))
 
@@ -296,7 +406,7 @@ export class ChestScene extends Phaser.Scene {
     // Item visuals (depth 2) — skip the slot currently being dragged so the
     // source slot appears empty while the ghost follows the cursor.
     for (const slot of this.chestSlots) {
-      const item = this.chestItems[slot.index] ?? null
+      const item = this.chestItems[this.chestAbsIndex(slot.index)] ?? null
       const isBeingDragged = this.dragging && this.dragFrom === slot
       if (item && !isBeingDragged) this.drawItemInSlot(slot, item)
     }
@@ -351,10 +461,19 @@ export class ChestScene extends Phaser.Scene {
     for (const slot of [...this.chestSlots, ...this.inventorySlots]) {
       if (px >= slot.x && px < slot.x + SLOT_W && py >= slot.y && py < slot.y + SLOT_H) {
         const item = slot.panel === 'chest'
-          ? (this.chestItems[slot.index] ?? null)
+          ? (this.chestItems[this.chestAbsIndex(slot.index)] ?? null)
           : (this.inventoryItems[slot.index] ?? null)
         return { slot, item }
       }
+    }
+    return null
+  }
+
+  /** Returns the index of the chest tab under the pointer, or null. */
+  private hitTestTab(px: number, py: number): number | null {
+    for (let i = 0; i < this.tabRects.length; i++) {
+      const r = this.tabRects[i]
+      if (px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h) return i
     }
     return null
   }
@@ -369,6 +488,25 @@ export class ChestScene extends Phaser.Scene {
   // ── Drag event handlers ────────────────────────────────────────────────────
 
   private onDown(ptr: Phaser.Input.Pointer) {
+    // Exit button takes priority over everything.
+    const eb = EXIT_BTN
+    if (ptr.x >= eb.x && ptr.x < eb.x + eb.w && ptr.y >= eb.y && ptr.y < eb.y + eb.h) {
+      this.closeScene()
+      return
+    }
+
+    // Tab clicks take priority over slot drags. Switching tabs just re-pages the
+    // client-side view of the flat chest array — no server round-trip needed.
+    const tabIdx = this.hitTestTab(ptr.x, ptr.y)
+    if (tabIdx !== null) {
+      if (tabIdx !== this.activeTab) {
+        this.activeTab = tabIdx
+        this.highlightSlot(null)
+        this.rebuildItemLayer()
+      }
+      return
+    }
+
     const hit = this.hitTest(ptr.x, ptr.y)
     if (!hit?.item) return    // clicked an empty slot — nothing to drag
 

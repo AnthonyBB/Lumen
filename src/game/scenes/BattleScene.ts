@@ -21,6 +21,7 @@ import type { Skill } from '../data/skills'
 import { SKILL_MAP } from '../data/skillTrees'
 import type { CombatSkill, SkillClass } from '../data/skillTrees'
 import { TD_MONSTERS } from '../data/tileFrames'
+import { DIFFICULTIES, type Difficulty } from '../data/mobs'
 import type { BiomeScene } from './BiomeScene'
 
 // ── Public types (used by BiomeScene) ─────────────────────────────────────
@@ -41,7 +42,7 @@ export interface MobDef {
 
 export interface BattleSceneData {
   biome: string
-  difficulty: 'easy' | 'medium' | 'hard'
+  difficulty: Difficulty
   mobs: MobDef[]
   encounterIndex: number
   totalEncounters: number
@@ -59,6 +60,13 @@ export interface BattleResult {
 
 /** XP for defeating a mob scales with its level — higher biomes pay more. */
 const xpForMob = (level: number) => 10 + level * 2
+
+/** Silver dropped per defeated enemy: scales with level × difficulty tier. */
+const SILVER_TIER_MULT: Record<Difficulty, number> = {
+  beginner: 1, easy: 1, medium: 1.5, hard: 2, expert: 2.5,
+}
+const silverForMob = (level: number, difficulty: Difficulty) =>
+  Math.max(1, Math.round(level * SILVER_TIER_MULT[difficulty]))
 
 /** Fallback player initiative speed when no equipment-derived speed is set. */
 const DEFAULT_PLAYER_SPEED = 25
@@ -98,8 +106,10 @@ function toBattleSkill(cs: CombatSkill): Skill {
   }
 }
 
-// Sprite scale per difficulty (16px source tile → 64/72/80 px on screen)
-const MOB_SCALE: Record<string, number> = { easy: 4, medium: 4.5, hard: 5 }
+// Sprite scale per difficulty (16px source tile → on-screen px)
+const MOB_SCALE: Record<string, number> = {
+  beginner: 4, easy: 4, medium: 4.5, hard: 5, expert: 5.5,
+}
 
 // Layout zones
 const HEADER_H      = 48
@@ -145,6 +155,7 @@ export class BattleScene extends Phaser.Scene {
   private playerSpeed = DEFAULT_PLAYER_SPEED
   private playerDefense = 0   // equipment-derived defense will feed this later
   private xpGained = 0
+  private silverGained = 0
 
   /** Skills shown in the bar: basic Attack + server-confirmed purchases only. */
   private battleSkills: Skill[] = [BASIC_ATTACK]
@@ -164,6 +175,7 @@ export class BattleScene extends Phaser.Scene {
     this.playerHp    = data.playerHp
     this.playerMaxHp = data.playerMaxHp
     this.xpGained    = 0
+    this.silverGained = 0
     this.phase       = 'player_turn'
     this.selectedSkill = null
     this.mobs        = []
@@ -257,7 +269,7 @@ export class BattleScene extends Phaser.Scene {
 
     // Deterministic frame per mob: BiomeScene-chosen frame if provided,
     // otherwise picked from the difficulty tier pool, seeded by mob index.
-    const pool = TD_MONSTERS[this.battleData.difficulty]
+    const pool = TD_MONSTERS[DIFFICULTIES[this.battleData.difficulty].pool]
     this.mobs = this.battleData.mobs.map((def, i) => ({
       ...def,
       hp: def.maxHp,
@@ -303,9 +315,9 @@ export class BattleScene extends Phaser.Scene {
 
     // Header
     const { biome, encounterIndex, totalEncounters, difficulty } = this.battleData
-    const diffColor: Record<string, string> = {
-      easy: '#44cc44', medium: '#ffcc00', hard: '#ff5544',
-    }
+    const diffColor: Record<string, string> = Object.fromEntries(
+      Object.values(DIFFICULTIES).map(d => [d.key, d.color]),
+    )
 
     this.add.text(GAME_WIDTH / 2, HEADER_H / 2, '⚔  BATTLE  ⚔', {
       fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ff5544', fontStyle: 'bold',
@@ -658,6 +670,7 @@ export class BattleScene extends Phaser.Scene {
       mob.alive = false
       const xp = xpForMob(mob.level)
       this.xpGained += xp
+      this.silverGained += silverForMob(mob.level, this.battleData.difficulty)
       this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg}!  Enemy defeated! (+${xp} XP)`, '#44ff88')
     } else {
       this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg} damage!`, '#44ffcc')
@@ -803,14 +816,26 @@ export class BattleScene extends Phaser.Scene {
   private doVictory() {
     this.phase = 'victory'
 
-    // Award XP
-    if (this.xpGained > 0) {
-      const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-      socket?.emit('player:award_xp', { xp: Math.min(this.xpGained, 500) })
-    }
+    // Report the victory — the server awards XP/silver AND rolls item drops
+    // (server-authoritative) from this encounter's level + difficulty, adding
+    // any loot straight to the bag.
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    const repLevel = Math.max(1, ...this.battleData.mobs.map(m => m.level))
+    socket?.emit('player:award_xp', {
+      xp: Math.min(this.xpGained, 500),
+      silver: Math.min(this.silverGained, 5000),
+      difficulty: this.battleData.difficulty,
+      level: repLevel,
+    })
+    socket?.once('combat:loot', (data: { items?: { name: string; icon: string; rarity: string }[] }) => {
+      const items = data?.items ?? []
+      if (!items.length || !this.scene.isActive()) return
+      const txt = items.map(it => `${it.icon} ${it.name}`).join(', ')
+      this.setLog(`💎  Loot: ${txt}!  (+${this.xpGained} XP)`, '#9be7ff')
+    })
 
     this.cameras.main.flash(600, 1, 0.84, 0)
-    this.setLog(`⚔  All enemies defeated!  +${this.xpGained} XP earned!`, '#ffd700')
+    this.setLog(`⚔  All enemies defeated!  +${this.xpGained} XP  ·  +${this.silverGained} silver!`, '#ffd700')
 
     this.time.delayedCall(1400, () => {
       this.endBattle({ victory: true, playerHp: this.playerHp, xpGained: this.xpGained })

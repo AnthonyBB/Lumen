@@ -67,6 +67,30 @@ export const ATTRIBUTE_BASE = 5;
 /** Allocation points granted per level. Total earned = level * this. */
 export const POINTS_PER_LEVEL = 3;
 
+/** Hard level cap. */
+export const LEVEL_CAP = 50;
+
+/**
+ * Total XP required to REACH a given level (level 1 = 0 XP). The per-level cost
+ * rises linearly — cost(L→L+1) = 250 + 150*(L-1) — so the curve gets steadily
+ * steeper as you climb (a quadratic total). Compared with the old flat
+ * 100-XP-per-level this is far slower and progressively harder:
+ *   L2=250, L5=2050, L10=7000, L20=27500, L50=190000.
+ */
+export function xpForLevel(level: number): number {
+  const L = Math.max(1, Math.floor(level));
+  let total = 0;
+  for (let l = 1; l < L; l++) total += 250 + 150 * (l - 1);
+  return total;
+}
+
+/** Highest level whose XP threshold `xp` meets, capped at LEVEL_CAP. */
+export function levelForXp(xp: number): number {
+  let level = 1;
+  while (level < LEVEL_CAP && xp >= xpForLevel(level + 1)) level++;
+  return level;
+}
+
 /** A fresh attributePoints map with all five attributes at 0. */
 function defaultAttributePoints(): Record<AttributeKey, number> {
   return { strength: 0, constitution: 0, dexterity: 0, intelligence: 0, spirit: 0 };
@@ -216,8 +240,8 @@ export class PlayerManager {
     player.xp += amount;
 
     const oldLevel = player.level;
-    // Simple level formula: level = floor(xp / 100) + 1, capped at 50
-    player.level = Math.min(50, Math.floor(player.xp / 100) + 1);
+    // Progressive curve — each level costs more XP than the last (see xpForLevel).
+    player.level = levelForXp(player.xp);
 
     if (player.level > oldLevel) {
       // Restore full HP on level-up and increase max HP
@@ -305,7 +329,8 @@ export class PlayerManager {
     const player = this.players.get(socketId);
     if (!player) return;
     player.xp = Math.max(0, progress.xp);
-    player.level = Math.min(50, Math.max(1, progress.level));
+    // Derive level from XP so the (new, steeper) curve is always authoritative.
+    player.level = levelForXp(player.xp);
     player.maxHp = 100 + (player.level - 1) * 20;
     player.hp = player.maxHp;
     player.attributePoints = this.clampAllocatedToCap(
@@ -586,7 +611,7 @@ export class PlayerManager {
   computeStats(
     socketId: string,
     equipment: EquipmentSlots,
-  ): { payload: StatsUpdatePayload; maxHp: number } | null {
+  ): { payload: StatsUpdatePayload; maxHp: number; maxMana: number; manaRegen: number } | null {
     const player = this.players.get(socketId);
     if (!player) return null;
 
@@ -596,6 +621,7 @@ export class PlayerManager {
     const gear = {
       hp: 0, attack: 0, defense: 0,
       damage_bonus: 0, magic_damage: 0, healing_bonus: 0, crit_chance: 0,
+      mp_regen: 0,
     };
 
     for (const item of Object.values(equipment)) {
@@ -612,14 +638,16 @@ export class PlayerManager {
             gear.healing_bonus += a.value;
           } else if (t === 'crit_chance') {
             gear.crit_chance += a.value;
+          } else if (t === 'mp_regen') {
+            gear.mp_regen += a.value;
           } else if (
             t === 'fire_damage' || t === 'ice_damage' || t === 'lightning_damage' ||
             t === 'holy_damage' || t === 'nature_damage'
           ) {
             gear.magic_damage += a.value;
           }
-          // Other attribute types (mp_regen, gold_find, dot/aoe, debuff_resist)
-          // are flavour bonuses not surfaced as core stats here.
+          // Remaining types (gold_find, dot/aoe, debuff_resist) are flavour
+          // bonuses not surfaced as core stats here.
         }
       } else {
         // Legacy ItemDatabase item — apply its raw stats directly.
@@ -680,10 +708,10 @@ export class PlayerManager {
       derivedRow('magic', 'Magic Power',
         5 + bINT * 2,
         5 + INT * 2 + gear.magic_damage + gear.damage_bonus),
-      // Defense = STR + CON + gear defense
+      // Defense = STR*2 + gear defense (scales off Strength)
       derivedRow('defense', 'Defense',
-        bSTR + bCON,
-        STR + CON + gear.defense),
+        bSTR * 2,
+        STR * 2 + gear.defense),
       // Speed = 10 + DEX*2
       derivedRow('speed', 'Speed',
         10 + bDEX * 2,
@@ -697,9 +725,19 @@ export class PlayerManager {
         bDEX * 0.5,
         DEX * 0.5 + gear.crit_chance,
         true),
+      // Mana (max) = 20 + SPI*8 — scales off Spirit
+      derivedRow('mana', 'Mana',
+        20 + bSPI * 8,
+        20 + SPI * 8),
+      // Mana Regen / turn = 2 + SPI*0.5 + gear mp_regen — scales off Spirit
+      derivedRow('manaRegen', 'Mana Regen',
+        2 + bSPI * 0.5,
+        2 + SPI * 0.5 + gear.mp_regen),
     ];
 
     const maxHp = 50 + CON * 10 + gear.hp;
+    const maxMana = Math.round(20 + SPI * 8);
+    const manaRegen = round1(2 + SPI * 0.5 + gear.mp_regen);
 
     return {
       payload: {
@@ -709,6 +747,8 @@ export class PlayerManager {
         level: player.level,
       },
       maxHp,
+      maxMana,
+      manaRegen,
     };
   }
 

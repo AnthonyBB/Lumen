@@ -86,7 +86,9 @@ export class ChestScene extends Phaser.Scene {
 
   // Server-reported state — only ever replaced by chest:data / chest:updated
   private chestId:        string | null = null
-  private chestItems:     ClientInventoryItem[] = []
+  // Sparse by absolute slot (0..CHEST_CAPACITY-1): chestItems[s] is the item at
+  // that tab/slot position, or null when empty.
+  private chestItems:     (ClientInventoryItem | null)[] = []
   private inventoryItems: ClientInventoryItem[] = []
   private maxSlots = CHEST_CAPACITY
 
@@ -202,9 +204,17 @@ export class ChestScene extends Phaser.Scene {
 
   private applyChestData(data: ChestPayload) {
     this.chestId        = data.chest.chestId
-    this.chestItems     = data.chest.items ?? []
-    this.inventoryItems = data.inventory.items ?? []
     this.maxSlots       = data.chest.maxSlots ?? CHEST_CAPACITY
+    // Place each stored item at its absolute chestSlot (sparse). Items without a
+    // slot fall into the first free position (defensive — the server migrates).
+    const sparse: (ClientInventoryItem | null)[] = new Array(CHEST_CAPACITY).fill(null)
+    for (const it of (data.chest.items ?? [])) {
+      let s = typeof it.chestSlot === 'number' ? it.chestSlot : -1
+      if (s < 0 || s >= CHEST_CAPACITY || sparse[s]) s = sparse.indexOf(null)
+      if (s >= 0) sparse[s] = it
+    }
+    this.chestItems     = sparse
+    this.inventoryItems = data.inventory.items ?? []
     this.rebuildItemLayer()
   }
 
@@ -390,7 +400,7 @@ export class ChestScene extends Phaser.Scene {
     if (loaded) this.drawTabs()
 
     this.push(this.add.text(LEFT_X + LEFT_W / 2, PANEL_Y + 58 + 6 * (SLOT_H + SLOT_PAD) + 2,
-      loaded ? `${this.chestItems.length} / ${this.maxSlots} stored` : 'Loading…', {
+      loaded ? `${this.chestItems.filter(Boolean).length} / ${this.maxSlots} stored` : 'Loading…', {
       fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#666688',
     }).setOrigin(0.5, 0).setDepth(2))
 
@@ -583,12 +593,41 @@ export class ChestScene extends Phaser.Scene {
         this.showFeedback('Not connected to the server.')
         return
       }
-      this.socket.emit('chest:transfer', {
-        chestId:   this.chestId,
-        itemId:    dragItem.id,
-        direction: dragFrom.panel === 'chest' ? 'from_chest' : 'to_chest',
-      })
+      if (dragFrom.panel === 'inventory') {
+        // Into the chest: place at the dropped slot (or the first free slot on
+        // that same tab if it's occupied / that tab is full).
+        const toSlot = this.pickChestSlot(this.chestAbsIndex(hit.slot.index))
+        if (toSlot === null) { this.showFeedback('The chest is full.'); return }
+        this.socket.emit('chest:transfer', {
+          chestId:   this.chestId,
+          itemId:    dragItem.id,
+          direction: 'to_chest',
+          toSlot,
+        })
+      } else {
+        // Out of the chest into the bag (packed — no target slot needed).
+        this.socket.emit('chest:transfer', {
+          chestId:   this.chestId,
+          itemId:    dragItem.id,
+          direction: 'from_chest',
+        })
+      }
     }
+  }
+
+  /** Choose the chest slot for a drop: the requested slot if empty, else the
+   *  first free slot on the same tab, else the first free slot anywhere, else
+   *  null when the chest is full. */
+  private pickChestSlot(desired: number): number | null {
+    if (!this.chestItems[desired]) return desired
+    const tab = Math.floor(desired / MAX_SLOTS)
+    for (let i = tab * MAX_SLOTS; i < (tab + 1) * MAX_SLOTS; i++) {
+      if (!this.chestItems[i]) return i
+    }
+    for (let i = 0; i < CHEST_CAPACITY; i++) {
+      if (!this.chestItems[i]) return i
+    }
+    return null
   }
 
   // ── Drag cleanup ───────────────────────────────────────────────────────────

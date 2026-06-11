@@ -22,6 +22,7 @@ export const inventoryItemSchema = new Schema(
     stackable: { type: Boolean, required: true, default: false },
     icon:      { type: String, default: '' },
     slot:      { type: String },
+    chestSlot: { type: Number },
   },
   { _id: false },
 );

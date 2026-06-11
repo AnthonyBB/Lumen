@@ -441,7 +441,8 @@ export function registerHandlers(
       }
       socket.emit('combat:loot', {
         campaignComplete,
-        items: drops.map((d) => ({ name: d.name, icon: d.icon, rarity: d.rarity })),
+        // itemType (eq_NNNN) lets the client resolve attributes for inspection.
+        items: drops.map((d) => ({ name: d.name, icon: d.icon, rarity: d.rarity, itemType: d.id })),
       });
     }
   });
@@ -1040,7 +1041,8 @@ export function registerHandlers(
         socket.emit('error', { message: 'Item not found in your inventory.' });
         return;
       }
-      success = chestManager.transferToChest(payload.chestId, socket.id, item);
+      const toSlot = typeof payload.toSlot === 'number' ? payload.toSlot : undefined;
+      success = chestManager.transferToChest(payload.chestId, socket.id, item, toSlot);
     } else {
       success = chestManager.transferFromChest(payload.chestId, socket.id, payload.itemId);
     }

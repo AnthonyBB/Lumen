@@ -119,6 +119,7 @@ export class MarketScene extends Phaser.Scene {
   private feedbackText!: Phaser.GameObjects.Text
   private searchText!: Phaser.GameObjects.Text
   private silverText!: Phaser.GameObjects.Text
+  private silverCoin!: Phaser.GameObjects.Image
 
   private searchDebounce = 0
   private modalOpen = false
@@ -139,6 +140,7 @@ export class MarketScene extends Phaser.Scene {
     this.modalOpen = false
 
     this.drawBackground()
+    this.ensureCoinTexture()
     this.drawHeader()
     this.chromeContainer = this.add.container(0, 0)
     this.listContainer = this.add.container(0, 0)
@@ -172,7 +174,7 @@ export class MarketScene extends Phaser.Scene {
       this.rebuildList()
     }
     const onListed = () => { this.flash('Listed for sale.'); this.refresh() }
-    const onSold = (d: { silver?: number }) => { this.flash(`Sold for ${d?.silver ?? 0} 🪙.`); this.refresh() }
+    const onSold = (d: { silver?: number }) => { this.flash(`Sold for ${d?.silver ?? 0} silver.`); this.refresh() }
     const onBought = () => { this.flash('Purchased!'); this.refresh() }
     const onCancelled = () => { this.flash('Listing cancelled.'); this.refresh() }
     const onCurrency = (d: { silver?: number }) => {
@@ -253,6 +255,44 @@ export class MarketScene extends Phaser.Scene {
     this.time.delayedCall(2600, () => this.feedbackText.setVisible(false))
   }
 
+  // ── Coin icon (drawn, so it always renders — the 🪙 emoji is missing on some
+  //    system fonts and shows an empty box). ─────────────────────────────────
+  private ensureCoinTexture() {
+    if (this.textures.exists('mkt_coin')) return
+    const g = this.add.graphics()
+    g.fillStyle(0x8a6508, 1); g.fillCircle(8, 8, 7.5)   // dark gold rim
+    g.fillStyle(0xffd64d, 1); g.fillCircle(8, 8, 6)     // gold body
+    g.lineStyle(1, 0xc9971a, 1); g.strokeCircle(8, 8, 4)// inner ring
+    g.fillStyle(0xfff0a8, 1); g.fillCircle(6, 6, 1.8)   // shine
+    g.generateTexture('mkt_coin', 16, 16)
+    g.destroy()
+  }
+
+  /** Add a gold coin + amount to `parent`, left-anchored at (x, y centre). */
+  private coinAmount(
+    parent: Phaser.GameObjects.Container, x: number, y: number,
+    amount: number, color: string, fontSize: string, coin = 16,
+  ) {
+    parent.add(this.add.image(x + coin / 2, y, 'mkt_coin').setDisplaySize(coin, coin))
+    parent.add(this.add.text(x + coin + 4, y, `${amount}`, {
+      fontSize, fontFamily: 'Georgia, serif', color, fontStyle: 'bold',
+    }).setOrigin(0, 0.5))
+  }
+
+  /** Add a gold coin + amount to `parent`, centred horizontally on `cx` at y. */
+  private coinAmountCentered(
+    parent: Phaser.GameObjects.Container, cx: number, y: number,
+    amount: number, color: string, fontSize: string, coin = 16,
+  ) {
+    const txt = this.add.text(0, 0, `${amount}`, {
+      fontSize, fontFamily: 'Georgia, serif', color, fontStyle: 'bold',
+    }).setOrigin(0, 0.5)
+    const sx = cx - (coin + 4 + txt.width) / 2
+    txt.setPosition(sx + coin + 4, y)
+    parent.add(this.add.image(sx + coin / 2, y, 'mkt_coin').setDisplaySize(coin, coin))
+    parent.add(txt)
+  }
+
   // ── Background + header ───────────────────────────────────────────────────
 
   private drawBackground() {
@@ -279,6 +319,7 @@ export class MarketScene extends Phaser.Scene {
     this.silverText = this.add.text(GAME_WIDTH - 24, 28, '', {
       fontSize: '16px', fontFamily: 'Georgia, serif', color: '#e8e8e8', fontStyle: 'bold',
     }).setOrigin(1, 0.5)
+    this.silverCoin = this.add.image(0, 28, 'mkt_coin').setDisplaySize(16, 16).setOrigin(1, 0.5)
     this.updateSilverText()
 
     // ESC close button
@@ -288,7 +329,10 @@ export class MarketScene extends Phaser.Scene {
   }
 
   private updateSilverText() {
-    if (this.silverText) this.silverText.setText(`🪙 ${this.silver}`)
+    if (!this.silverText) return
+    this.silverText.setText(`${this.silver}`)
+    // Park the coin just left of the right-aligned amount.
+    if (this.silverCoin) this.silverCoin.setX(GAME_WIDTH - 24 - this.silverText.width - 6)
   }
 
   // ── Chrome: mode toggle + tabs + search ─────────────────────────────────
@@ -723,6 +767,7 @@ export class MarketScene extends Phaser.Scene {
 
   private drawButton(
     label: string, x: number, y: number, w: number, color: string, onClick: () => void,
+    coinAmount?: number,
   ) {
     const h = 34
     const g = this.add.graphics()
@@ -735,10 +780,17 @@ export class MarketScene extends Phaser.Scene {
     }
     draw(false)
     this.listContainer.add(g)
-    const t = this.add.text(x + w / 2, y + h / 2, label, {
-      fontSize: '12px', fontFamily: 'Arial, sans-serif', color, fontStyle: 'bold', align: 'center',
-    }).setOrigin(0.5, 0.5)
-    this.listContainer.add(t)
+    if (coinAmount !== undefined) {
+      // Action word on top, gold coin + amount centred below.
+      this.listContainer.add(this.add.text(x + w / 2, y + 9, label, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif', color, fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5))
+      this.coinAmountCentered(this.listContainer, x + w / 2, y + 24, coinAmount, color, '12px', 12)
+    } else {
+      this.listContainer.add(this.add.text(x + w / 2, y + h / 2, label, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif', color, fontStyle: 'bold', align: 'center',
+      }).setOrigin(0.5, 0.5))
+    }
     const hit = this.add.rectangle(x + w / 2, y + h / 2, w, h, 0, 0)
       .setInteractive({ useHandCursor: true })
     hit.on('pointerover', () => draw(true))
@@ -756,12 +808,10 @@ export class MarketScene extends Phaser.Scene {
     )
     const w = PANEL_W
     // Price
-    this.listContainer.add(this.add.text(PANEL_X + w - 250, y + ROW_H / 2, `🪙 ${l.price}`, {
-      fontSize: '16px', fontFamily: 'Georgia, serif', color: TEXT_GOLD, fontStyle: 'bold',
-    }).setOrigin(0, 0.5))
+    this.coinAmount(this.listContainer, PANEL_X + w - 250, y + ROW_H / 2, l.price, TEXT_GOLD, '16px')
     const affordable = this.silver >= l.price
     this.drawButton(
-      affordable ? 'Buy' : 'Need 🪙', PANEL_X + w - 120, y + (ROW_H - 34) / 2, 108,
+      affordable ? 'Buy' : 'Too costly', PANEL_X + w - 120, y + (ROW_H - 34) / 2, 108,
       affordable ? TEXT_GOLD : '#ff8866',
       () => {
         if (!affordable) { this.flash('Not enough silver.'); return }
@@ -787,17 +837,19 @@ export class MarketScene extends Phaser.Scene {
     const w = PANEL_W
     // Sell to system (base)
     this.drawButton(
-      `Sell\n🪙 ${base}`, PANEL_X + w - 250, y + (ROW_H - 34) / 2, 110, TEXT_WHITE,
+      'Sell', PANEL_X + w - 250, y + (ROW_H - 34) / 2, 110, TEXT_WHITE,
       () => this.openConfirm(dataForModal, 'sell', base, () => {
         this.socket?.emit('market:sell_to_system', { itemInstanceId: item.id })
       }),
+      base,
     )
     // List for players (2× base)
     this.drawButton(
-      `List\n🪙 ${base * 2}`, PANEL_X + w - 130, y + (ROW_H - 34) / 2, 118, TEXT_GOLD,
+      'List', PANEL_X + w - 130, y + (ROW_H - 34) / 2, 118, TEXT_GOLD,
       () => this.openConfirm(dataForModal, 'list', base * 2, () => {
         this.socket?.emit('market:list', { itemInstanceId: item.id })
       }),
+      base * 2,
     )
   }
 
@@ -808,9 +860,7 @@ export class MarketScene extends Phaser.Scene {
       `${rarName}  ·  listed`, this.bonusSummary(l.itemData), y,
     )
     const w = PANEL_W
-    this.listContainer.add(this.add.text(PANEL_X + w - 240, y + ROW_H / 2, `🪙 ${l.price}`, {
-      fontSize: '16px', fontFamily: 'Georgia, serif', color: TEXT_GOLD, fontStyle: 'bold',
-    }).setOrigin(0, 0.5))
+    this.coinAmount(this.listContainer, PANEL_X + w - 240, y + ROW_H / 2, l.price, TEXT_GOLD, '16px')
     this.drawButton('Cancel', PANEL_X + w - 120, y + (ROW_H - 34) / 2, 108, '#ff8866',
       () => this.openConfirm(l.itemData, 'cancel', l.price, () => {
         this.socket?.emit('market:cancel', { listingId: l.listingId })
@@ -877,9 +927,7 @@ export class MarketScene extends Phaser.Scene {
       fontSize: '13px', fontFamily: 'Arial, sans-serif', color: TEXT_GRAY, align: 'center',
       wordWrap: { width: mw - 60 },
     }).setOrigin(0.5, 0.5))
-    overlay.add(this.add.text(GAME_WIDTH / 2, my + 182, `🪙 ${silver}`, {
-      fontSize: '24px', fontFamily: 'Georgia, serif', color: TEXT_GOLD, fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5))
+    this.coinAmountCentered(overlay, GAME_WIDTH / 2, my + 182, silver, TEXT_GOLD, '24px', 22)
 
     const close = () => { overlay.destroy(); this.modalOpen = false }
 

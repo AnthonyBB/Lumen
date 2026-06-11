@@ -338,6 +338,10 @@ export interface InventoryItem {
   stackable: boolean;
   /** Client-facing icon key / emoji. */
   icon: string;
+  /** Absolute position (0-based) when stored in a chest, so the chest can hold
+   *  items at specific tab/slot positions rather than packed from the start.
+   *  Unset for bag items. */
+  chestSlot?: number;
 }
 
 export interface EquipmentSlots {
@@ -399,4 +403,6 @@ export interface ChestTransferPayload {
   chestId: string;
   itemId: string;
   direction: 'to_chest' | 'from_chest';
+  /** For 'to_chest': the absolute chest slot (0-based) to place the item in. */
+  toSlot?: number;
 }

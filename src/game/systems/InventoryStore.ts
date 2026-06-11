@@ -43,6 +43,8 @@ export interface ClientInventoryItem {
   quantity: number;
   stackable: boolean;
   icon: string;
+  /** Absolute 0-based position when stored in a chest (unset for bag items). */
+  chestSlot?: number;
 }
 
 export interface ClientEquipmentSlots {

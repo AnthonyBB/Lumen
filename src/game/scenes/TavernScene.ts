@@ -76,6 +76,9 @@ export class TavernScene extends Phaser.Scene {
   private roomW = 0
   private roomH = 0
   private wallBand = 96   // height of the decorative top wall band (set in buildInterior)
+  // Collision footprints for the furniture, recorded while building the room
+  // (centre x/y + size) and turned into static colliders in create().
+  private solids: { x: number; y: number; w: number; h: number }[] = []
 
   // ── Multiplayer presence (tavern zone) ─────────────────────────────────────
   private socket: Socket | null = null
@@ -122,34 +125,27 @@ export class TavernScene extends Phaser.Scene {
     this.player = new Player(this, spawnX, spawnY)
     this.player.setDepth(20)
 
-    // Keep the player inside the room: below the windowed top wall band (so it
-    // can't walk into the bar/windows), inside the thin L/R/bottom stone borders,
-    // and entirely clear of the right-hand chat panel (the room already ends
-    // CHAT_W px short of the screen edge, so the room's own right border suffices).
+    // World bounds = the room's floor: inside the L/R/bottom stone borders and
+    // below the windowed top wall band. No artificial interior walls — the only
+    // things that block the player are the room walls and the furniture
+    // colliders below, which are shaped to the actual objects on screen.
     const border = 40
-    // The bar zone (shelves + counter + stools) occupies the top ~210px below
-    // the wall band.  The bottom of the room is open floor EXCEPT the cushioned
-    // booth nook in the bottom-left corner — that's fenced off with its own
-    // collider below, so the bottom bound only needs to clear the stone border.
-    const topClear = this.wallBand + 220   // below the bar stools
-    const bottomClear = border             // just the bottom stone border
+    const floorTop = this.roomY + this.wallBand
     this.physics.world.setBounds(
       this.roomX + border,
-      this.roomY + topClear,
+      floorTop,
       this.roomW - border * 2,
-      this.roomH - topClear - bottomClear,
+      this.roomY + this.roomH - border - floorTop,
     )
     this.player.setCollideWorldBounds(true)
 
-    // Fence off the cushioned booth nooks in BOTH bottom corners (built in
-    // buildInterior around boothY = roomY + roomH - 96) so the player can roam
-    // the open centre/exit lane but never stand on the cushions. Invisible
-    // static bodies match each nook's footprint.
-    const boothY = this.roomY + this.roomH - 96
-    for (const bx of [this.roomX + 196, this.roomX + this.roomW - 196]) {
-      const block = this.add.zone(bx, boothY - 4, 320, 150)
-      this.physics.add.existing(block, true)
-      this.physics.add.collider(this.player, block)
+    // One static collider per solid furniture footprint (recorded in
+    // buildInterior), so collision lines up with the drawn objects. Stools and
+    // chairs are intentionally walkable.
+    for (const s of this.solids) {
+      const z = this.add.zone(s.x, s.y, s.w, s.h)
+      this.physics.add.existing(z, true)
+      this.physics.add.collider(this.player, z)
     }
 
     this.cameras.main.setBounds(0, 0, GAME_WIDTH, GAME_HEIGHT)
@@ -196,6 +192,11 @@ export class TavernScene extends Phaser.Scene {
 
   private addPiece(name: keyof typeof PIECES, x: number, y: number, scale = 3, depth = 5) {
     return this.add.image(x, y, this.makePieceTexture(name)).setScale(scale).setDepth(depth)
+  }
+
+  /** Record a furniture collision footprint (centre x/y + size). */
+  private addSolid(x: number, y: number, w: number, h: number) {
+    this.solids.push({ x, y, w, h })
   }
 
   private buildInterior() {
@@ -250,9 +251,10 @@ export class TavernScene extends Phaser.Scene {
     this.addPiece('bottleShelf', roomX + 132, barShelfY,     3, 4)
     this.addPiece('woodShelf',   roomX + 264, barShelfY + 4, 3, 4)
     this.addPiece('kegStack',    roomX + 392, barShelfY + 4, 3, 4)
-    // Barrels stacked at the right end of the back bar.
-    this.addPiece('barrel', roomX + roomW - 152, barShelfY + 6,  3, 4)
-    this.addPiece('barrel', roomX + roomW - 96,  barShelfY + 20, 3, 5)
+    // Barrels along the right end of the back bar — spaced apart (and clear of
+    // the corner plant) so they read as two barrels, not one overlapping blob.
+    this.addPiece('barrel', roomX + roomW - 316, barShelfY + 6,  3, 4)
+    this.addPiece('barrel', roomX + roomW - 206, barShelfY + 34, 3, 5)
 
     const barCounterY = barShelfY + 104
     this.addPiece('barCounter', roomX + 160, barCounterY, 3, 7)
@@ -267,11 +269,10 @@ export class TavernScene extends Phaser.Scene {
     this.addPiece('chair', roomX + 256, barCounterY + 58, 3, 8)
     this.addPiece('chair', roomX + 362, barCounterY + 58, 3, 8)
 
-    // ── Two long communal tables down the centre on a rug. ────────────────────
+    // ── A long communal table centred on a rug. ───────────────────────────────
     const midY = roomY + roomH * 0.56
     this.addPiece('rug', cx, midY + 12, 3.6, 4)
-    this.addPiece('communalTable', cx, midY - 52, 2.7, dy(midY - 52))
-    this.addPiece('communalTable', cx, midY + 70, 2.7, dy(midY + 70))
+    this.addPiece('communalTable', cx, midY + 12, 2.7, dy(midY + 12))
 
     // ── Round tables with stools flanking BOTH side walls. ────────────────────
     const sideTop = roomY + this.wallBand + 252
@@ -295,14 +296,34 @@ export class TavernScene extends Phaser.Scene {
     this.addPiece('roundTable', roomX + roomW - 198, boothY + 6, 1.8, dy(boothY) + 0.3)
     this.addPiece('boothR',     roomX + roomW - 108, boothY, 3, dy(boothY))
 
-    // ── Potted plants softening the upper corners. ────────────────────────────
-    this.addPiece('plant',     roomX + 58,         roomY + this.wallBand + 60, 3, 10)
+    // ── Potted plants: one sitting on the left end of the bar, one in the
+    //    top-right corner. ──────────────────────────────────────────────────────
+    this.addPiece('plant',     roomX + 96,         barCounterY - 46, 2.2, 9)
     this.addPiece('plantTall', roomX + roomW - 58, roomY + this.wallBand + 60, 3, 10)
+
+    // ── Collision footprints — one per solid object, matched to what's drawn so
+    //    the player bumps into the actual furniture (stools/chairs stay walkable).
+    //    The bar (shelves + counter + the keeper's lane) is one solid block.
+    this.solids = []
+    this.addSolid(roomX + 256, roomY + this.wallBand + 101, 420, 202)   // the whole bar
+    this.addSolid(cx, midY + 12, 150, 84)                               // communal table
+    for (const sx of [roomX + 116, roomX + roomW - 116]) {              // side round tables
+      this.addSolid(sx, sideTop, 96, 70)
+      this.addSolid(sx, sideBot, 96, 70)
+    }
+    for (const bx of [roomX + 108, roomX + 288, roomX + roomW - 288, roomX + roomW - 108]) {
+      this.addSolid(bx, boothY - 4, 72, 112)                            // booth benches
+    }
+    this.addSolid(roomX + 198,         boothY + 6, 56, 44)              // booth tables
+    this.addSolid(roomX + roomW - 198, boothY + 6, 56, 44)
+    this.addSolid(roomX + roomW - 316, barShelfY + 16, 64, 84)         // barrels
+    this.addSolid(roomX + roomW - 206, barShelfY + 44, 64, 84)
+    this.addSolid(roomX + roomW - 58,  roomY + this.wallBand + 75, 44, 60) // corner plant
 
     // ── Hanging lanterns over the bar + tables, and a warm amber wash. ────────
     this.addLantern(roomX + 200,        roomY + this.wallBand + 14)
     this.addLantern(roomX + 380,        roomY + this.wallBand + 14)
-    this.addLantern(cx,                 midY - 110)
+    this.addLantern(cx,                 midY - 80)
     this.addLantern(roomX + 116,        midY - 30)
     this.addLantern(roomX + roomW - 116, midY - 30)
 

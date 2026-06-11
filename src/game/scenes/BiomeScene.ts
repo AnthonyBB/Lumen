@@ -30,6 +30,7 @@ import {
   ROAD, ROAD_GRASS_TINT,
 } from '../data/tileFrames'
 import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
+import { EQUIPMENT_MAP } from '../data/equipmentGen'
 
 // ── World dimensions ────────────────────────────────────────────────────────
 
@@ -37,6 +38,14 @@ const WORLD_W = 3840   // 3 × GAME_WIDTH
 const WORLD_H = 2160   // 3 × GAME_HEIGHT
 
 // ── Scene data ──────────────────────────────────────────────────────────────
+
+/** A campaign reward item as pushed by the server's `combat:loot`. */
+interface RewardItem {
+  name: string
+  icon: string
+  rarity: string
+  itemType?: string   // eq_NNNN — resolves attributes via EQUIPMENT_MAP
+}
 
 interface BiomeSceneData {
   biome: string
@@ -97,6 +106,7 @@ export class BiomeScene extends Phaser.Scene {
   private encountersCleared = 0
   private totalXpGained = 0
   private maxEnemyLevel = 1   // highest enemy level faced — scales the campaign reward
+  private rewardTooltip: Phaser.GameObjects.Container | null = null
   private rng!: Phaser.Math.RandomDataGenerator
 
   private playerSprite!: Phaser.GameObjects.Sprite
@@ -581,36 +591,38 @@ export class BiomeScene extends Phaser.Scene {
       level: this.maxEnemyLevel,
       campaignComplete: true,
     })
-    socket?.once('combat:loot', (data: { items?: { name: string; icon: string; rarity: string }[] }) => {
-      const items = data?.items ?? []
-      if (!items.length || !this.scene.isActive()) return
-      const txt = items.map(it => `${it.icon} ${it.name}`).join('   ')
-      this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 60, `💎  Reward: ${txt}`, {
-        fontSize: '14px', fontFamily: 'Georgia, serif', color: '#9be7ff', fontStyle: 'bold',
-        align: 'center', wordWrap: { width: 520 },
-      }).setOrigin(0.5, 0).setDepth(201).setScrollFactor(0)
-    })
-    this.cameras.main.flash(700, 255, 215, 0)
-
-    const W = 560, H = 280, cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+    const W = 560, H = 364, cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
     const bg = this.add.graphics().setDepth(190).setScrollFactor(0)
     bg.fillStyle(0x000000, 0.9).fillRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)
     bg.lineStyle(2, 0xffd700, 1).strokeRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)
 
-    this.add.text(cx, cy - H / 2 + 42, '🏆  Biome Cleared!', {
+    this.add.text(cx, cy - H / 2 + 40, '🏆  Biome Cleared!', {
       fontSize: '30px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
     const enc = this.encountersCleared
-    this.add.text(cx, cy - 12, `${enc} encounter${enc !== 1 ? 's' : ''} conquered`, {
+    this.add.text(cx, cy - 96, `${enc} encounter${enc !== 1 ? 's' : ''} conquered`, {
       fontSize: '16px', fontFamily: 'Arial', color: '#aaaaaa',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
-    this.add.text(cx, cy + 28, `+${this.totalXpGained} XP earned`, {
+    this.add.text(cx, cy - 60, `+${this.totalXpGained} XP earned`, {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#44ffaa', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
-    const btn = this.add.text(cx, cy + H / 2 - 32, 'Return to World', {
+    // Reward area — filled when combat:loot arrives. Each item is a hoverable
+    // chip; hovering shows a tooltip with its full stats.
+    socket?.once('combat:loot', (data: { items?: RewardItem[] }) => {
+      const items = data?.items ?? []
+      if (!items.length || !this.scene.isActive()) return
+      this.add.text(cx, cy - 24, '💎  Reward  —  hover an item to inspect its stats', {
+        fontSize: '13px', fontFamily: 'Georgia, serif', color: '#9be7ff',
+      }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
+      this.renderRewardChips(items, cx, cy + 14)
+    })
+
+    this.cameras.main.flash(700, 255, 215, 0)
+
+    const btn = this.add.text(cx, cy + H / 2 - 30, 'Return to World', {
       fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
       backgroundColor: '#2a1060', padding: { x: 24, y: 12 },
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
@@ -618,6 +630,100 @@ export class BiomeScene extends Phaser.Scene {
     btn.on('pointerover', () => btn.setColor('#ffd700'))
     btn.on('pointerout',  () => btn.setColor('#ffffff'))
     btn.on('pointerdown', () => this.returnToWorld())
+  }
+
+  private static readonly REWARD_COLORS: Record<string, string> = {
+    common: '#aaaaaa', uncommon: '#44cc44', rare: '#4488ff', epic: '#cc44ff', legendary: '#ffaa00',
+  }
+
+  /** Lay out the reward items as a centred, wrapping row of hoverable chips. */
+  private renderRewardChips(items: RewardItem[], cx: number, startY: number) {
+    const gap = 10
+    const made = items.map(it => {
+      const txt = this.add.text(0, 0, `${it.icon} ${this.truncate(it.name, 20)}`, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif',
+        color: BiomeScene.REWARD_COLORS[it.rarity] ?? '#dddddd',
+        backgroundColor: '#16163a', padding: { x: 8, y: 5 },
+      }).setOrigin(0, 0.5).setDepth(201).setScrollFactor(0)
+      return { it, txt, w: txt.width }
+    })
+
+    // Wrap chips into rows no wider than the modal.
+    const maxRowW = 520
+    const rows: (typeof made)[] = [[]]
+    let rowW = 0
+    for (const m of made) {
+      if (rowW + m.w + gap > maxRowW && rows[rows.length - 1].length) { rows.push([]); rowW = 0 }
+      rows[rows.length - 1].push(m); rowW += m.w + gap
+    }
+
+    let y = startY
+    for (const row of rows) {
+      const totalW = row.reduce((s, m) => s + m.w, 0) + gap * (row.length - 1)
+      let x = cx - totalW / 2
+      for (const m of row) {
+        m.txt.setPosition(x, y)
+        const hit = this.add.rectangle(x + m.w / 2, y, m.w, 28, 0, 0)
+          .setDepth(202).setScrollFactor(0).setInteractive({ useHandCursor: true })
+        hit.on('pointerover', () => this.showRewardTooltip(m.it, x + m.w / 2, y - 20))
+        hit.on('pointerout',  () => this.hideRewardTooltip())
+        x += m.w + gap
+      }
+      y += 34
+    }
+  }
+
+  /** Floating tooltip with an item's rarity, slot and attribute bonuses. */
+  private showRewardTooltip(it: RewardItem, x: number, y: number) {
+    this.hideRewardTooltip()
+    const gen = it.itemType ? EQUIPMENT_MAP[it.itemType] : undefined
+    const rar = it.rarity.charAt(0).toUpperCase() + it.rarity.slice(1)
+    const sub = gen ? `${rar}  ·  ${gen.slot}` : rar
+    const attrs = gen && gen.attributes.length
+      ? gen.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`).join('\n')
+      : 'No bonuses'
+
+    const c = this.add.container(0, 0).setDepth(210).setScrollFactor(0)
+    const name = this.add.text(0, 0, it.name, {
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      align: 'center', wordWrap: { width: 300 },
+    }).setOrigin(0.5, 0)
+    const subT = this.add.text(0, 0, sub, {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif',
+      color: BiomeScene.REWARD_COLORS[it.rarity] ?? '#bbbbbb', align: 'center',
+    }).setOrigin(0.5, 0)
+    const attrT = this.add.text(0, 0, attrs, {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#9bd0ff', align: 'center',
+    }).setOrigin(0.5, 0)
+
+    const padX = 14, padY = 10, lineGap = 4
+    const w = Math.max(name.width, subT.width, attrT.width) + padX * 2
+    const h = name.height + subT.height + attrT.height + lineGap * 2 + padY * 2
+    // Clamp horizontally so the box stays on screen; sit it above the chip.
+    const bx = Phaser.Math.Clamp(x, w / 2 + 8, GAME_WIDTH - w / 2 - 8)
+    const top = y - h
+    name.setPosition(bx, top + padY)
+    subT.setPosition(bx, top + padY + name.height + lineGap)
+    attrT.setPosition(bx, top + padY + name.height + subT.height + lineGap * 2)
+
+    const g = this.add.graphics()
+    g.fillStyle(0x0a0a1e, 0.97).fillRoundedRect(bx - w / 2, top, w, h, 8)
+    g.lineStyle(1, 0xffd700, 0.9).strokeRoundedRect(bx - w / 2, top, w, h, 8)
+    c.add([g, name, subT, attrT])
+    this.rewardTooltip = c
+  }
+
+  private hideRewardTooltip() {
+    this.rewardTooltip?.destroy()
+    this.rewardTooltip = null
+  }
+
+  private attrLabel(type: string): string {
+    return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+  }
+
+  private truncate(s: string, max: number): string {
+    return s.length > max ? s.slice(0, max - 1) + '…' : s
   }
 
   private showDefeatOverlay() {

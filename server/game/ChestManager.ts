@@ -65,10 +65,22 @@ export class ChestManager {
       if (!doc) return;
 
       const chestId = `chest_${userId}`;
+      const items = (doc.items as InventoryItem[]) ?? [];
+      // Migrate legacy (packed) chests: any item without a chestSlot gets the
+      // next free position, preserving its existing order in the first tab(s).
+      const used = new Set(items.map((i) => i.chestSlot).filter((s) => typeof s === 'number'));
+      let next = 0;
+      for (const it of items) {
+        if (typeof it.chestSlot !== 'number') {
+          while (used.has(next)) next++;
+          it.chestSlot = next;
+          used.add(next);
+        }
+      }
       const chest: ChestStorage = {
         chestId,
         ownerId:  userId,
-        items:    (doc.items as InventoryItem[]) ?? [],
+        items,
         // Tabbed chest = 4 tabs × 30 slots. Raise any legacy chest (saved with
         // maxSlots: 20) up to the current capacity so existing players get the
         // extra space; capacity is never trusted from the client.
@@ -159,18 +171,34 @@ export class ChestManager {
     chestId: string,
     fromPlayerId: string,
     item: InventoryItem,
+    toSlot?: number,
   ): boolean {
     const chest = this.chests.get(chestId);
     if (!chest) return false;
     if (chest.ownerId !== fromPlayerId) return false;
     if (chest.items.length >= chest.maxSlots) return false;
 
+    // Resolve the destination slot server-side: honour the requested slot when
+    // it is a valid, empty position; otherwise fall back to the first free slot.
+    const taken = new Set(chest.items.map((i) => i.chestSlot));
+    let slot =
+      typeof toSlot === 'number' && Number.isInteger(toSlot) &&
+      toSlot >= 0 && toSlot < chest.maxSlots && !taken.has(toSlot)
+        ? toSlot
+        : -1;
+    if (slot === -1) {
+      for (let s = 0; s < chest.maxSlots; s++) {
+        if (!taken.has(s)) { slot = s; break; }
+      }
+    }
+    if (slot === -1) return false; // no free slot
+
     // Remove from the player's inventory (validates ownership of the item)
     const removed = this.inventoryManager.removeItem(fromPlayerId, item.id);
     if (!removed) return false;
 
-    // Add to chest (use the item object that was already in the inventory)
-    chest.items.push({ ...item });
+    // Add to chest at the resolved position.
+    chest.items.push({ ...item, chestSlot: slot });
 
     this.persistChest(fromPlayerId, chest);
     return true;
@@ -200,10 +228,13 @@ export class ChestManager {
 
     const [item] = chest.items.splice(idx, 1);
 
-    // Add to the player's bag
-    const added = this.inventoryManager.addItem(toPlayerId, item);
+    // Add to the player's bag — drop the chest-only position field so the bag
+    // item is clean (it'll get a fresh slot if returned to the chest).
+    const bagItem = { ...item };
+    delete bagItem.chestSlot;
+    const added = this.inventoryManager.addItem(toPlayerId, bagItem);
     if (!added) {
-      // Rollback — put item back in chest
+      // Rollback — put item back in chest (with its original slot)
       chest.items.splice(idx, 0, item);
       return false;
     }

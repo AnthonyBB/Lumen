@@ -31,6 +31,8 @@ export interface IPlayerProgress extends Document {
   silver: number
   /** Crafting material counts (material id → quantity). */
   materials: Record<string, number>
+  /** Campaigns completed (drives the one-time first-campaign shard bonus). */
+  campaignsCompleted: number
   /** Allocated points per character attribute (strength/constitution/... ).
    *  Total earned = level*3; base attribute = 5 + allocated. */
   attributePoints: Record<string, number>
@@ -93,6 +95,11 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     materials: {
       type: Schema.Types.Mixed,
       default: () => ({}),
+    },
+    campaignsCompleted: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     attributePoints: {
       type: Schema.Types.Mixed,

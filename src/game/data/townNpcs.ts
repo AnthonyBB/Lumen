@@ -101,7 +101,7 @@ export const TOWN_NPCS: NpcDef[] = [
     x: 1610, y: 1360,
     sprite: 'npc_citizen3',
     lines: [
-      'Ready for battle? Spend your Skill Shards 🔷 here at Combat Training to learn attacks, spells and heals.',
+      'Ready for battle? Spend your Skill Shards 🔷 here at Combat Training to learn attacks, spells and heals. Earn shards by clearing campaigns out in the biomes!',
       'In a fight, whoever has the higher Speed strikes first — so watch your stats! Equip better gear to boost them.',
       'Defeat your foes and you\'ll earn XP and silver, and sometimes they\'ll drop equipment for you to claim. Clear a whole biome for a bigger reward!',
     ],
@@ -124,7 +124,7 @@ export const TOWN_NPCS: NpcDef[] = [
     sprite: 'npc_citizen5',
     lines: [
       'A clever plan wins the day! Strategies tell your hero how to fight smartly when a battle gets tough.',
-      'To learn them you need Combat Shards 🔶 — and those come from mastering your lessons at the Learning Center.',
+      'To learn them you need Combat Shards 🔶 — those are rare, and they drop when you clear a whole campaign out in the biomes.',
       'Bring your Combat Shards to the Strategy Hall behind me, and I\'ll teach you tactics for every kind of foe.',
     ],
   },

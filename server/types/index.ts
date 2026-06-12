@@ -44,6 +44,9 @@ export interface Player {
   silver: number;
   /** Crafting material counts (persisted): material id → quantity. */
   materials: Record<string, number>;
+  /** How many campaigns this player has completed (persisted). Drives the
+   *  one-time first-campaign shard bonus. */
+  campaignsCompleted: number;
   /** Points the player has allocated per character attribute (persisted).
    *  Total earned points = level*3; a base attribute = 5 + attributePoints[attr]. */
   attributePoints: Record<AttributeKey, number>;

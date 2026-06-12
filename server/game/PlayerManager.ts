@@ -182,6 +182,7 @@ export class PlayerManager {
       combatShards: 0,
       silver: 0,
       materials: {},
+      campaignsCompleted: 0,
       attributePoints: defaultAttributePoints(),
     };
 
@@ -277,6 +278,7 @@ export class PlayerManager {
     combatShards: number;
     silver: number;
     materials: Record<string, number>;
+    campaignsCompleted: number;
     attributePoints: Record<AttributeKey, number>;
   }> {
     try {
@@ -294,6 +296,7 @@ export class PlayerManager {
           combatShards: Math.max(0, doc.combatShards ?? 0),
           silver: Math.max(0, doc.silver ?? 0),
           materials: { ...((doc.materials as Record<string, number>) ?? {}) },
+          campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
           attributePoints: normaliseAttributePoints(doc.attributePoints),
         };
       }
@@ -305,6 +308,7 @@ export class PlayerManager {
       subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
       skillShards: 0, combatShards: 0, silver: 0, materials: {},
+      campaignsCompleted: 0,
       attributePoints: defaultAttributePoints(),
     };
   }
@@ -327,6 +331,7 @@ export class PlayerManager {
       combatShards?: number;
       silver?: number;
       materials?: Record<string, number>;
+      campaignsCompleted?: number;
       attributePoints?: Record<AttributeKey, number>;
     },
   ): void {
@@ -353,6 +358,7 @@ export class PlayerManager {
     player.combatShards = Math.max(0, Math.floor(progress.combatShards ?? 0));
     player.silver = Math.max(0, Math.floor(progress.silver ?? 0));
     player.materials = { ...(progress.materials ?? {}) };
+    player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
   }
 
   // -------------------------------------------------------------------------
@@ -425,6 +431,7 @@ export class PlayerManager {
         combatShards: player.combatShards,
         silver: player.silver,
         materials: player.materials,
+        campaignsCompleted: player.campaignsCompleted,
         attributePoints: player.attributePoints,
       },
       { upsert: true, new: true },
@@ -436,6 +443,20 @@ export class PlayerManager {
   // -------------------------------------------------------------------------
   // Shard currencies (skill / combat) — tracked balances, NOT inventory items.
   // -------------------------------------------------------------------------
+
+  /** Total campaigns this player has completed (persisted). */
+  getCampaignsCompleted(socketId: string): number {
+    return this.players.get(socketId)?.campaignsCompleted ?? 0;
+  }
+
+  /** Record a campaign completion. Returns the new total. Persists. */
+  recordCampaignCompletion(socketId: string): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    player.campaignsCompleted += 1;
+    this.persistProgress(socketId);
+    return player.campaignsCompleted;
+  }
 
   getSkillShards(socketId: string): number {
     return this.players.get(socketId)?.skillShards ?? 0;

@@ -437,14 +437,42 @@ export function registerHandlers(
       // chip rarity colours catalysts by their gate / base mats by tier.
       const tierRarity = (t: number): string =>
         t >= 7 ? 'legendary' : t >= 6 ? 'epic' : t >= 5 ? 'rare' : t >= 3 ? 'uncommon' : 'common';
-      socket.emit('combat:loot', {
-        campaignComplete,
-        items: drops.map((d) => {
-          const m = MATERIALS[d.materialId];
-          const rarity = m?.family === 'catalyst' ? (m.rarityGate ?? 'rare') : tierRarity(m?.tier ?? 1);
-          return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
-        }),
+      const items = drops.map((d) => {
+        const m = MATERIALS[d.materialId];
+        const rarity = m?.family === 'catalyst' ? (m.rarityGate ?? 'rare') : tierRarity(m?.tier ?? 1);
+        return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
       });
+
+      // ── Shard rewards (campaign completion only) ────────────────────────────
+      // Shards used to come from the Learning Center; now they drop from clearing
+      // campaigns. The first campaign ever grants a guaranteed 2 skill + 1 combat
+      // so a new player can start buying skills/strategies; after that they're a
+      // rare random drop (combat rarer than skill, both nudged up by difficulty).
+      if (campaignComplete) {
+        const firstEver = playerManager.getCampaignsCompleted(socket.id) === 0;
+        let skillAward = 0;
+        let combatAward = 0;
+        if (firstEver) {
+          skillAward = 2;
+          combatAward = 1;
+        } else {
+          const di = Math.max(0, (DIFFICULTIES as string[]).indexOf(diff)); // 0..4
+          if (Math.random() < 0.12 + di * 0.03) skillAward = 1;  // ~12%–24%
+          if (Math.random() < 0.04 + di * 0.015) combatAward = 1; // ~4%–10%
+        }
+        if (skillAward > 0) playerManager.addShards(socket.id, 'skill', skillAward);
+        if (combatAward > 0) playerManager.addShards(socket.id, 'combat', combatAward);
+        playerManager.recordCampaignCompletion(socket.id);
+
+        if (skillAward > 0) items.push({ name: `Skill Shard ×${skillAward}`, icon: '🔷', rarity: 'rare' });
+        if (combatAward > 0) items.push({ name: `Combat Shard ×${combatAward}`, icon: '🔶', rarity: 'epic' });
+        if (skillAward > 0 || combatAward > 0) {
+          pushCurrency(); // refresh the HUD shard counters
+          console.log(`[shards] ${player.username} campaign reward: +${skillAward} skill, +${combatAward} combat${firstEver ? ' (first clear bonus)' : ''}`);
+        }
+      }
+
+      socket.emit('combat:loot', { campaignComplete, items });
     }
   });
 

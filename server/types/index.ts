@@ -373,6 +373,10 @@ export interface InventoryItem {
   equipSlot?: EquipSlot;
   attributes?: ItemAttribute[];
   xpRequired?: number;
+  /** Weapons: level-scaled base damage range (drives the basic attack). */
+  baseDamage?: { min: number; max: number };
+  /** Armor: level-scaled base defense (adds to the Defense stat). */
+  baseDefense?: number;
   /** Absolute position (0-based) when stored in a chest, so the chest can hold
    *  items at specific tab/slot positions rather than packed from the start.
    *  Unset for bag items. */

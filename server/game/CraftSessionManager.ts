@@ -73,6 +73,9 @@ export interface CraftResult {
     rarity: Rarity;
     /** Rolled gear attributes (absent on potions). */
     attributes?: { type: string; value: number }[];
+    /** Weapon base damage range / armor base defense (absent on potions). */
+    baseDamage?: { min: number; max: number };
+    baseDefense?: number;
     /** Potion effect (absent on gear). */
     potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
   };
@@ -288,6 +291,8 @@ export class CraftSessionManager {
         icon: item.inv.icon,
         rarity: item.inv.rarity,
         attributes: item.inv.attributes,
+        baseDamage: item.inv.baseDamage,
+        baseDefense: item.inv.baseDefense,
         potion: item.inv.potion,
       },
       message: accuracy >= 0.8
@@ -330,6 +335,8 @@ export class CraftSessionManager {
         equipSlot: rolled.slot,
         attributes: rolled.attributes,
         xpRequired: rolled.xpRequired,
+        baseDamage: rolled.baseDamage,
+        baseDefense: rolled.baseDefense,
       },
       label: rolled.name,
       success: `You crafted a ${rolled.rarity} ${rolled.name}.`,

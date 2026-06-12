@@ -48,6 +48,10 @@ export interface ClientInventoryItem {
   equipSlot?: string;
   attributes?: { type: string; value: number }[];
   xpRequired?: number;
+  /** Weapons: level-scaled base damage range (drives the basic attack). */
+  baseDamage?: { min: number; max: number };
+  /** Armor: level-scaled base defense (adds to the Defense stat). */
+  baseDefense?: number;
   /** Brewed potion effect (absent on non-potions). */
   potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
   /** Absolute 0-based position when stored in a chest (unset for bag items). */

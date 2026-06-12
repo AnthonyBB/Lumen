@@ -701,6 +701,8 @@ export class PlayerManager {
 
     for (const item of Object.values(equipment)) {
       if (!item) continue;
+      // Base defense (armor) is a level-scaled core stat, separate from affixes.
+      if (typeof item.baseDefense === 'number') gear.defense += item.baseDefense;
       // Crafted gear carries its rolled attributes on the instance (set
       // server-side at craft time). These are the authoritative stat source.
       if (item.attributes && item.attributes.length) {

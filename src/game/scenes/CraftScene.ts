@@ -32,6 +32,8 @@ interface CraftResult {
     icon: string
     rarity: string
     attributes?: { type: string; value: number }[]
+    baseDamage?: { min: number; max: number }
+    baseDefense?: number
     potion?: { effect: 'heal' | 'mana' | 'restore'; power: number }
   }
   message: string
@@ -345,7 +347,11 @@ export class CraftScene extends Phaser.Scene {
         : item.potion.effect === 'mana' ? 'MP' : 'HP'
       return [`Restores ${item.potion.power} ${what}`]
     }
-    return (item.attributes ?? []).map((a) => `+${a.value} ${this.attrLabel(a.type)}`)
+    const lines: string[] = []
+    if (item.baseDamage) lines.push(`Damage: ${item.baseDamage.min}–${item.baseDamage.max}`)
+    if (typeof item.baseDefense === 'number') lines.push(`Defense: ${item.baseDefense}`)
+    for (const a of item.attributes ?? []) lines.push(`+${a.value} ${this.attrLabel(a.type)}`)
+    return lines
   }
 
   private attrLabel(type: string): string {

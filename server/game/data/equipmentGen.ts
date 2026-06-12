@@ -488,6 +488,31 @@ export interface CraftedItem {
   xpRequired: number
   icon: string
   description: string
+  /** Weapons only: a level-scaled base damage RANGE (drives the basic attack).
+   *  Width varies by weapon class — axes swing wildly, daggers are consistent. */
+  baseDamage?: { min: number; max: number }
+  /** Armor only: a level-scaled base defense value (adds to the Defense stat). */
+  baseDefense?: number
+}
+
+// ── Base damage / defense (scale with item LEVEL = tier, NOT rarity) ──────────
+
+/** Weapon base-damage midpoint by tier (the average hit). */
+function weaponDamageMid(tier: number): number {
+  return 8 + Math.max(1, tier) * 7 // tier1 ≈15 … tier7 ≈57
+}
+
+/** Per-class damage SPREAD (fraction of the midpoint): how swingy the range is.
+ *  Same average, different consistency — axes/hammers are wild, daggers steady. */
+const WEAPON_SPREAD: Partial<Record<SkillClass, number>> = {
+  axe: 0.52, hammer: 0.46, paladin: 0.4, spear: 0.34, sword: 0.3,
+  lightning_mage: 0.3, fire_mage: 0.26, ice_mage: 0.24,
+  shaman: 0.26, cleric: 0.22, bard: 0.2, monk: 0.2, assassin: 0.18,
+}
+
+/** Base armor defense multiplier per slot (× the tier ramp). Accessories: none. */
+const ARMOR_DEF_SLOT: Partial<Record<EquipSlot, number>> = {
+  chest: 1.6, legs: 1.2, helmet: 1.0, boots: 0.8, gloves: 0.7,
 }
 
 /** XP required to equip an item rolled from a given metal tier (1–7). Low tiers
@@ -530,6 +555,20 @@ export function rollCraftedItem(opts: RollOptions): CraftedItem {
     a.value = Math.max(1, v)
   }
 
+  // Base damage (weapons) / defense (armor) scale with item LEVEL (tier) + a
+  // small quiz-quality nudge — never with rarity.
+  let baseDamage: { min: number; max: number } | undefined
+  let baseDefense: number | undefined
+  if (slot === 'weapon') {
+    const mid = weaponDamageMid(tier) * qualityMult
+    const spread = (cls ? WEAPON_SPREAD[cls] ?? 0.3 : 0.3) + (rng() - 0.5) * 0.08 // per-item jitter
+    const min = Math.max(1, Math.round(mid * (1 - spread)))
+    baseDamage = { min, max: Math.max(min + 1, Math.round(mid * (1 + spread))) }
+  } else {
+    const mult = ARMOR_DEF_SLOT[slot]
+    if (mult !== undefined) baseDefense = Math.max(1, Math.round((2 + tier * 4) * mult * qualityMult))
+  }
+
   const icon = slot === 'weapon' ? (cls ? WEAPON_ICON[cls] : '🗡️') : SLOT_ICON[slot]
   return {
     name: buildName(rng, slot, rarity, cls, attributes),
@@ -539,6 +578,8 @@ export function rollCraftedItem(opts: RollOptions): CraftedItem {
     xpRequired: tierXpRequired(tier),
     icon,
     description: buildDescription(rng, slot, rarity, cls),
+    baseDamage,
+    baseDefense,
   }
 }
 

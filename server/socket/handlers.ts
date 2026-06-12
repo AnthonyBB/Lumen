@@ -41,6 +41,8 @@ import type {
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
 import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { resolveBattle } from '../game/combat/resolver.js';
+import { buildAllyCombatant, buildEnemyCombatant, type MobInput } from '../game/combat/adapter.js';
 import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
@@ -629,6 +631,116 @@ export function registerHandlers(
 
       socket.emit('combat:loot', { campaignComplete, items, richVein, catalystRarity });
     }
+  });
+
+  // ── campaign:resolve — autonomous party combat (server-authoritative) ──────
+  //
+  // The client sends the encounter (the campaign's mobs); the SERVER builds the
+  // party from the roster, runs the deterministic resolver, grants per-character
+  // rewards, and returns the event log for the client to ANIMATE. The client
+  // never decides the outcome or the rewards (docs/CHARACTERS_DESIGN.md §5).
+  socket.on('campaign:resolve', (payload: {
+    difficulty?: unknown; level?: unknown; campaignComplete?: unknown; mobs?: unknown;
+  }) => {
+    const player = requireJoinedPlayer('You must join before fighting.');
+    if (!player) return;
+
+    const diff: Difficulty | null =
+      typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
+        ? (payload.difficulty as Difficulty) : null;
+    if (!diff) { socket.emit('error', { message: 'Unknown campaign difficulty.' }); return; }
+
+    if (!Array.isArray(payload?.mobs) || payload.mobs.length === 0 || payload.mobs.length > 8) {
+      socket.emit('error', { message: 'Invalid encounter.' }); return;
+    }
+    const rawMobs = payload.mobs as Record<string, unknown>[];
+    const num = (v: unknown, lo: number, hi: number, dflt: number) =>
+      isSafeNumber(v, lo, hi) ? Math.floor(v as number) : dflt;
+    const mobs: MobInput[] = rawMobs.map((m, i) => ({
+      id: `e${i}`,
+      name: typeof m?.name === 'string' ? m.name.slice(0, 24) : 'Enemy',
+      maxHp: num(m?.maxHp, 1, 100000, 30),
+      attack: num(m?.attack, 1, 5000, 5),
+      defense: num(m?.defense, 0, 5000, 0),
+      speed: num(m?.speed, 1, 1000, 10),
+    }));
+    const mobLevels = rawMobs.map((m) => num(m?.level, 1, 100, 1));
+    const campaignComplete = payload?.campaignComplete === true;
+
+    const currentRank = playerManager.getAdventureRank(socket.id);
+
+    // Build the party (server-authoritative — from the roster + per-char gear).
+    const characters = playerManager.getCharacters(socket.id);
+    const allies = playerManager.getParty(socket.id)
+      .map((id) => {
+        const ch = characters.find((c) => c.id === id);
+        if (!ch) return null;
+        return buildAllyCombatant(ch, inventoryManager.equipmentFor(socket.id, id), currentRank);
+      })
+      .filter((c): c is NonNullable<typeof c> => !!c);
+    if (allies.length === 0) { socket.emit('error', { message: 'Your party is empty.' }); return; }
+
+    const enemies = mobs.map((m) => buildEnemyCombatant(m, currentRank));
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const { events, outcome } = resolveBattle({ allies, enemies, seed });
+
+    const levelUps: { id: string; newLevel: number }[] = [];
+    const rewards = { xpPerCharacter: 0, silver: 0, items: [] as { name: string; icon: string; rarity: string }[] };
+
+    if (outcome.victory) {
+      // Per-character XP — every ally in the team levels individually.
+      const encounterXp = Math.min(500, mobLevels.reduce((s, lvl) => s + (10 + lvl * 2), 0));
+      rewards.xpPerCharacter = encounterXp;
+      const activeId = playerManager.getActiveCharacter(socket.id)?.id;
+      for (const ally of allies) {
+        const res = playerManager.addXpToCharacter(socket.id, ally.id, encounterXp);
+        if (res?.leveledUp) {
+          levelUps.push({ id: ally.id, newLevel: res.newLevel });
+          // Reuse the existing celebration when it's the active character.
+          if (ally.id === activeId) {
+            socket.emit('player:xp_updated', { newXp: res.newXp, newLevel: res.newLevel, leveledUp: true, xpAwarded: encounterXp });
+          }
+        }
+      }
+
+      // Account-wide rewards: silver + materials (+ campaign shard bonus).
+      const repLevel = Math.max(1, ...mobLevels);
+      const silver = Math.min(5000, mobLevels.reduce((s, lvl) => s + Math.round(lvl * 1.5), 0));
+      if (silver > 0) playerManager.addSilver(socket.id, silver);
+      rewards.silver = silver;
+
+      const rankMult = rankMultiplier(currentRank);
+      const { drops } = rollMaterials(repLevel, diff, campaignComplete, rankMult);
+      if (drops.length) playerManager.grantMaterials(socket.id, drops);
+      const tierRarity = (t: number): string =>
+        t >= 7 ? 'legendary' : t >= 6 ? 'epic' : t >= 5 ? 'rare' : t >= 3 ? 'uncommon' : 'common';
+      rewards.items = drops.map((d) => {
+        const mat = MATERIALS[d.materialId];
+        const rarity = mat?.family === 'catalyst' ? (mat.rarityGate ?? 'rare') : tierRarity(mat?.tier ?? 1);
+        return { name: `${mat?.name ?? d.materialId} ×${d.qty}`, icon: mat?.icon ?? '📦', rarity };
+      });
+
+      if (campaignComplete) {
+        const firstEver = playerManager.getCampaignsCompleted(socket.id) === 0;
+        let skillAward = 0, combatAward = 0;
+        if (firstEver) { skillAward = 2; combatAward = 1; }
+        else {
+          const di = Math.max(0, (DIFFICULTIES as string[]).indexOf(diff));
+          if (Math.random() < 0.12 + di * 0.03) skillAward = Math.round(rankMult);
+          if (Math.random() < 0.04 + di * 0.015) combatAward = Math.round(rankMult);
+        }
+        if (skillAward > 0) { playerManager.addShards(socket.id, 'skill', skillAward); rewards.items.push({ name: `Skill Shard ×${skillAward}`, icon: '🔷', rarity: 'rare' }); }
+        if (combatAward > 0) { playerManager.addShards(socket.id, 'combat', combatAward); rewards.items.push({ name: `Combat Shard ×${combatAward}`, icon: '🔶', rarity: 'epic' }); }
+        playerManager.recordCampaignCompletion(socket.id);
+      }
+
+      playerManager.persistProgress(socket.id);
+      pushStats(); pushCurrency(); pushInventoryUpdate();
+    }
+
+    socket.emit('campaign:resolved', {
+      events, victory: outcome.victory, rounds: outcome.rounds, levelUps, rewards,
+    });
   });
 
   // ── learning:start ───────────────────────────────────────────────────────

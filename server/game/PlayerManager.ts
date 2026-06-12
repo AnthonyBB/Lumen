@@ -537,28 +537,34 @@ export class PlayerManager {
     return true;
   }
 
-  /** Apply XP gain, calculating level-ups server-side. */
-  addXp(socketId: string, amount: number): { newXp: number; newLevel: number; leveledUp: boolean } {
-    const ch = this.activeOf(socketId);
-    if (!ch) return { newXp: 0, newLevel: 1, leveledUp: false };
-
-    ch.xp += amount;
-
+  /** Apply XP to a specific character, calculating level-ups server-side. */
+  private applyXp(ch: Character, amount: number): { newXp: number; newLevel: number; leveledUp: boolean } {
+    ch.xp += Math.max(0, amount);
     const oldLevel = ch.level;
     // Progressive curve — each level costs more XP than the last (see xpForLevel).
     ch.level = levelForXp(ch.xp);
-
     if (ch.level > oldLevel) {
-      // Restore full HP on level-up and increase max HP
       ch.maxHp = maxHpForLevel(ch.level);
-      ch.hp = ch.maxHp;
+      ch.hp = ch.maxHp; // restore full HP on level-up
     }
+    return { newXp: ch.xp, newLevel: ch.level, leveledUp: ch.level > oldLevel };
+  }
 
-    return {
-      newXp: ch.xp,
-      newLevel: ch.level,
-      leveledUp: ch.level > oldLevel,
-    };
+  /** Apply XP gain to the ACTIVE character. */
+  addXp(socketId: string, amount: number): { newXp: number; newLevel: number; leveledUp: boolean } {
+    const ch = this.activeOf(socketId);
+    if (!ch) return { newXp: 0, newLevel: 1, leveledUp: false };
+    return this.applyXp(ch, amount);
+  }
+
+  /** Apply XP to a SPECIFIC roster character (party combat — each ally levels
+   *  individually). Returns null if the character isn't owned. */
+  addXpToCharacter(socketId: string, characterId: string, amount: number):
+    { newXp: number; newLevel: number; leveledUp: boolean } | null {
+    const player = this.players.get(socketId);
+    const ch = player?.characters.find((c) => c.id === characterId);
+    if (!ch) return null;
+    return this.applyXp(ch, amount);
   }
 
   // -------------------------------------------------------------------------

@@ -142,15 +142,15 @@ export class CraftScene extends Phaser.Scene {
   }
 
   private closeScene() {
-    this.scene.stop('ForgeScene')
     this.scene.resume('WorldScene')
+    this.scene.stop() // stop THIS scene (key-agnostic, survives renames)
   }
 
   // ── Chrome ────────────────────────────────────────────────────────────────
 
   private drawChrome() {
     const bg = this.add.graphics()
-    bg.fillStyle(0x1a120b, 0.97)
+    bg.fillStyle(0x1a120b, 1)
     bg.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
     const hg = this.add.graphics()
     hg.fillStyle(0x3a2616, 1)

@@ -6,6 +6,11 @@
 // server (party:combat_data); rewards (per-character XP) are granted server-side
 // via campaign:report. Idle / "auto" mode uses the separate PartyBattleScene
 // animator. See docs/CHARACTERS_DESIGN.md §5.
+//
+// Layout (top → bottom): header · enemy arena · turn/log strip · skill bar ·
+// a fixed 4-slot ally grid at the bottom (left-filled). The active unit is shown
+// with a soft glow (not a hard border), and each character remembers its last
+// chosen skill so it stays pre-selected on its next turn.
 // ============================================================
 
 import Phaser from 'phaser'
@@ -44,6 +49,7 @@ interface Unit {
   basicAttack: { min: number; max: number }
   skills: Skill[]
   alive: boolean
+  lastSkillId?: string   // remembered selection between rounds (allies)
   // status
   dots: { perTurn: number; rounds: number }[]
   hots: { perTurn: number; rounds: number }[]
@@ -58,22 +64,31 @@ interface Unit {
   container: Phaser.GameObjects.Container
   sprite: Phaser.GameObjects.Sprite
   baseTint: number
+  glow: Phaser.GameObjects.Graphics   // soft active/target highlight (behind sprite)
   hpBar: Phaser.GameObjects.Graphics
   hpText: Phaser.GameObjects.Text
   mpBar: Phaser.GameObjects.Graphics | null
-  ring: Phaser.GameObjects.Graphics
 }
 
-// Framed arena zones (mirrors the original BattleScene layout): a header bar, an
-// enemy arena (with a faint grid), an ally arena, a battle-log strip, and the
-// skill bar at the bottom.
+// ── Framed arena zones (top → bottom) ───────────────────────────────────────
 const HEADER_H     = 48
-const ENEMY_BOTTOM = 330
-const ALLY_BOTTOM  = 580
-const LOG_BOTTOM   = 624
-const SKILL_BAR_Y  = 674
-const ENEMY_ROW_Y  = HEADER_H + (ENEMY_BOTTOM - HEADER_H) / 2 - 10
-const ALLY_ROW_Y   = ENEMY_BOTTOM + (ALLY_BOTTOM - ENEMY_BOTTOM) / 2 - 10
+const ENEMY_BOTTOM = 292
+const LOG_BOTTOM   = 340   // turn hint + log strip:  ENEMY_BOTTOM → LOG_BOTTOM
+const SKILL_BOTTOM = 476   // skill bar zone:          LOG_BOTTOM   → SKILL_BOTTOM
+const ENEMY_ROW_Y  = HEADER_H + (ENEMY_BOTTOM - HEADER_H) / 2
+const SKILL_Y      = LOG_BOTTOM + (SKILL_BOTTOM - LOG_BOTTOM) / 2
+const ALLY_ROW_Y   = 588
+
+// Fixed 4-slot ally grid at the bottom (a single character sits in the left slot).
+const ALLY_SLOTS    = 4
+const ALLY_SLOT_W   = 150
+const ALLY_SLOT_GAP = 20
+const ALLY_BLOCK_W  = ALLY_SLOTS * ALLY_SLOT_W + (ALLY_SLOTS - 1) * ALLY_SLOT_GAP
+const ALLY_GRID_LEFT = (GAME_WIDTH - ALLY_BLOCK_W) / 2
+const ALLY_SLOT_CY  = (SKILL_BOTTOM + GAME_HEIGHT) / 2
+
+const allySlotX = (i: number): number =>
+  ALLY_GRID_LEFT + ALLY_SLOT_W / 2 + i * (ALLY_SLOT_W + ALLY_SLOT_GAP)
 
 export class PartyManualBattleScene extends Phaser.Scene {
   private battleData!: PartyManualData
@@ -85,12 +100,15 @@ export class PartyManualBattleScene extends Phaser.Scene {
   private phase: 'idle' | 'ally_input' | 'target_select' | 'animating' | 'done' = 'idle'
   private active: Unit | null = null
   private pendingSkill: Skill | null = null
+  private selectedSkillId: string | null = null
   private rankMult = 1
 
   private logText!: Phaser.GameObjects.Text
   private roundText!: Phaser.GameObjects.Text
-  private skillButtons: Phaser.GameObjects.Container[] = []
   private hintText!: Phaser.GameObjects.Text
+  private skillButtons: Phaser.GameObjects.Container[] = []
+  private targetHits: Phaser.GameObjects.Rectangle[] = []
+  private targetUnits: Unit[] = []
 
   constructor() { super({ key: 'PartyManualBattleScene' }) }
 
@@ -98,8 +116,8 @@ export class PartyManualBattleScene extends Phaser.Scene {
     this.battleData = data
     this.allies = []; this.enemies = []; this.order = []
     this.turnIdx = 0; this.round = 0; this.phase = 'idle'
-    this.active = null; this.pendingSkill = null
-    this.skillButtons = []
+    this.active = null; this.pendingSkill = null; this.selectedSkillId = null
+    this.skillButtons = []; this.targetHits = []; this.targetUnits = []
     this.rankMult = rankMultiplier(RankStore.get())
   }
 
@@ -109,15 +127,15 @@ export class PartyManualBattleScene extends Phaser.Scene {
     this.roundText = this.add.text(GAME_WIDTH - 12, HEADER_H / 2, '', {
       fontSize: '14px', fontFamily: 'Georgia, serif', color: '#ffd54f', fontStyle: 'bold',
     }).setOrigin(1, 0.5).setDepth(20)
-    this.hintText = this.add.text(GAME_WIDTH / 2, (ALLY_BOTTOM + LOG_BOTTOM) / 2 - 8, '', {
+    this.hintText = this.add.text(GAME_WIDTH / 2, ENEMY_BOTTOM + (LOG_BOTTOM - ENEMY_BOTTOM) / 2 - 8, '', {
       fontSize: '14px', fontFamily: 'Arial', color: '#9be7ff', fontStyle: 'bold',
     }).setOrigin(0.5).setDepth(20)
-    this.logText = this.add.text(GAME_WIDTH / 2, (ALLY_BOTTOM + LOG_BOTTOM) / 2 + 10, '', {
+    this.logText = this.add.text(GAME_WIDTH / 2, ENEMY_BOTTOM + (LOG_BOTTOM - ENEMY_BOTTOM) / 2 + 10, '', {
       fontSize: '12px', fontFamily: 'Arial', color: '#cdd6f4',
     }).setOrigin(0.5).setDepth(20)
 
     // Build units.
-    this.allies = this.battleData.allies.map((c, i) => this.makeAlly(c, i, this.battleData.allies.length))
+    this.allies = this.battleData.allies.map((c, i) => this.makeAlly(c, i))
     this.enemies = this.battleData.mobs.map((m, i) => this.makeEnemy(m, i, this.battleData.mobs.length))
     // Render HP/MP bars immediately so panels aren't blank before the first hit.
     for (const u of [...this.allies, ...this.enemies]) this.drawBars(u)
@@ -125,24 +143,33 @@ export class PartyManualBattleScene extends Phaser.Scene {
     this.time.delayedCall(500, () => this.startRound())
   }
 
-  /** Framed arena background: zone fills, separators, a faint enemy-zone grid and
-   *  a header bar — the structure that made the original BattleScene read cleanly. */
+  /** Framed arena background: zone fills, separators, a faint enemy-zone grid, a
+   *  header bar and the four ally slot frames at the bottom. */
   private drawArena() {
     const bg = this.add.graphics().setDepth(0)
     bg.fillStyle(0x07060f, 1).fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
     bg.fillStyle(0x110c18, 1).fillRect(0, HEADER_H, GAME_WIDTH, ENEMY_BOTTOM - HEADER_H)   // enemy arena
-    bg.fillStyle(0x0d0a16, 1).fillRect(0, ENEMY_BOTTOM, GAME_WIDTH, ALLY_BOTTOM - ENEMY_BOTTOM) // ally arena
-    bg.fillStyle(0x0a0814, 1).fillRect(0, ALLY_BOTTOM, GAME_WIDTH, LOG_BOTTOM - ALLY_BOTTOM)     // log strip
-    bg.fillStyle(0x0d0b1a, 1).fillRect(0, LOG_BOTTOM, GAME_WIDTH, GAME_HEIGHT - LOG_BOTTOM)      // skill strip
+    bg.fillStyle(0x0a0814, 1).fillRect(0, ENEMY_BOTTOM, GAME_WIDTH, LOG_BOTTOM - ENEMY_BOTTOM) // log strip
+    bg.fillStyle(0x0d0b1a, 1).fillRect(0, LOG_BOTTOM, GAME_WIDTH, SKILL_BOTTOM - LOG_BOTTOM)    // skill bar
+    bg.fillStyle(0x0d0a16, 1).fillRect(0, SKILL_BOTTOM, GAME_WIDTH, GAME_HEIGHT - SKILL_BOTTOM) // ally grid
 
     bg.lineStyle(1, 0x332244, 1)
-    for (const y of [HEADER_H, ENEMY_BOTTOM, ALLY_BOTTOM, LOG_BOTTOM]) bg.lineBetween(0, y, GAME_WIDTH, y)
+    for (const y of [HEADER_H, ENEMY_BOTTOM, LOG_BOTTOM, SKILL_BOTTOM]) bg.lineBetween(0, y, GAME_WIDTH, y)
 
     // Faint arena grid behind the enemies.
     const grid = this.add.graphics().setDepth(1).setAlpha(0.06)
     grid.lineStyle(1, 0x6644aa, 1)
     for (let x = 0; x < GAME_WIDTH; x += 64) grid.lineBetween(x, HEADER_H, x, ENEMY_BOTTOM)
     for (let y = HEADER_H; y < ENEMY_BOTTOM; y += 48) grid.lineBetween(0, y, GAME_WIDTH, y)
+
+    // Ally slot frames — a row of four, so an under-full party reads as a grid.
+    const slots = this.add.graphics().setDepth(1)
+    const sh = GAME_HEIGHT - SKILL_BOTTOM - 28
+    for (let i = 0; i < ALLY_SLOTS; i++) {
+      const x = allySlotX(i)
+      slots.fillStyle(0x12101f, 0.55).fillRoundedRect(x - ALLY_SLOT_W / 2, ALLY_SLOT_CY - sh / 2, ALLY_SLOT_W, sh, 12)
+      slots.lineStyle(1, 0x2a2740, 0.9).strokeRoundedRect(x - ALLY_SLOT_W / 2, ALLY_SLOT_CY - sh / 2, ALLY_SLOT_W, sh, 12)
+    }
 
     // Header bar.
     this.add.text(GAME_WIDTH / 2, HEADER_H / 2, '⚔  BATTLE  ⚔', {
@@ -167,7 +194,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
     return [basic, ...owned]
   }
 
-  private baseUnit(side: 'ally' | 'enemy', x: number, y: number): Omit<Unit, 'id' | 'name' | 'maxHp' | 'hp' | 'maxMana' | 'mana' | 'attack' | 'defense' | 'speed' | 'healing' | 'basicAttack' | 'skills' | 'container' | 'sprite' | 'baseTint' | 'hpBar' | 'hpText' | 'mpBar' | 'ring'> {
+  private baseUnit(side: 'ally' | 'enemy', x: number, y: number): Omit<Unit, 'id' | 'name' | 'maxHp' | 'hp' | 'maxMana' | 'mana' | 'attack' | 'defense' | 'speed' | 'healing' | 'basicAttack' | 'skills' | 'container' | 'sprite' | 'baseTint' | 'glow' | 'hpBar' | 'hpText' | 'mpBar'> {
     return {
       side, alive: true, dots: [], hots: [], defenseDown: 0, defenseDownRounds: 0,
       slow: 0, slowRounds: 0, stunRounds: 0, asleepRounds: 0, shield: 0,
@@ -175,8 +202,8 @@ export class PartyManualBattleScene extends Phaser.Scene {
     }
   }
 
-  private makeAlly(c: ClientCombatant, i: number, n: number): Unit {
-    const x = this.slotX(i, n); const y = ALLY_ROW_Y
+  private makeAlly(c: ClientCombatant, i: number): Unit {
+    const x = allySlotX(i); const y = ALLY_ROW_Y
     const view = this.drawUnitView(c.name, 'ally', x, y, { withMp: true })
     return {
       ...this.baseUnit('ally', x, y),
@@ -187,9 +214,9 @@ export class PartyManualBattleScene extends Phaser.Scene {
   }
 
   private makeEnemy(m: MobDef, i: number, n: number): Unit {
-    const x = this.slotX(i, n); const y = ENEMY_ROW_Y
-    const view = this.drawUnitView(`${m.name}  Lv.${m.level}`, 'enemy', x, y, {
-      frame: m.frame ?? 0, tint: m.tint ?? 0xffffff,
+    const x = this.enemySlotX(i, n); const y = ENEMY_ROW_Y
+    const view = this.drawUnitView(m.name, 'enemy', x, y, {
+      frame: m.frame ?? 0, tint: m.tint ?? 0xffffff, level: m.level,
     })
     return {
       ...this.baseUnit('enemy', x, y),
@@ -200,20 +227,23 @@ export class PartyManualBattleScene extends Phaser.Scene {
     }
   }
 
-  private slotX(i: number, n: number): number {
+  private enemySlotX(i: number, n: number): number {
     const slotW = Math.min(230, (GAME_WIDTH - 80) / Math.max(1, n))
     return (GAME_WIDTH - n * slotW) / 2 + slotW / 2 + i * slotW
   }
 
-  /** Build a unit's on-screen view: a real sprite (Tiny-Dungeon mob / hero) with
-   *  a ground shadow, a name label, an HP bar (+ MP bar for allies) and a hidden
-   *  selection ring — mirroring the old BattleScene's look. */
+  /** Build a unit's on-screen view: a soft glow (behind), a real sprite
+   *  (Tiny-Dungeon mob / hero) with a ground shadow, a name label, an HP bar
+   *  (+ MP bar for allies). The glow — not a hard border — marks active/target. */
   private drawUnitView(
     name: string, side: 'ally' | 'enemy', x: number, y: number,
-    opts: { withMp?: boolean; frame?: number; tint?: number },
+    opts: { withMp?: boolean; frame?: number; tint?: number; level?: number },
   ) {
     const ally = side === 'ally'
     const c = this.add.container(x, y).setDepth(5)
+
+    // Soft highlight glow (hidden until active / targetable) — drawn behind sprite.
+    const glow = this.add.graphics(); c.add(glow)
 
     // Ground shadow.
     c.add(this.add.ellipse(0, 30, 54, 14, 0x000000, 0.4))
@@ -226,11 +256,9 @@ export class PartyManualBattleScene extends Phaser.Scene {
     if (!ally && baseTint !== 0xffffff) sprite.setTint(baseTint)
     c.add(sprite)
 
-    // Selection ring (hidden until it's this unit's turn / a valid target).
-    const ring = this.add.graphics(); c.add(ring)
-
-    // Name label above the sprite.
-    c.add(this.add.text(0, -52, name.length > 16 ? name.slice(0, 15) + '…' : name, {
+    // Name label above the sprite (enemies append their level, kept short to fit).
+    const label = opts.level != null ? `${this.truncate(name, 13)} Lv.${opts.level}` : this.truncate(name, 16)
+    c.add(this.add.text(0, -52, label, {
       fontSize: '12px', fontFamily: 'Georgia, serif', color: ally ? '#cfe0ff' : '#ffd0d0',
       fontStyle: 'bold', stroke: '#000000', strokeThickness: 3,
     }).setOrigin(0.5))
@@ -243,7 +271,11 @@ export class PartyManualBattleScene extends Phaser.Scene {
     let mpBar: Phaser.GameObjects.Graphics | null = null
     if (opts.withMp) { mpBar = this.add.graphics(); c.add(mpBar) }
 
-    return { container: c, sprite, baseTint, hpBar, hpText, mpBar, ring }
+    return { container: c, sprite, baseTint, glow, hpBar, hpText, mpBar }
+  }
+
+  private truncate(s: string, max: number): string {
+    return s.length > max ? s.slice(0, max - 1) + '…' : s
   }
 
   private static readonly BAR_W = 96
@@ -263,6 +295,31 @@ export class PartyManualBattleScene extends Phaser.Scene {
       u.mpBar.fillStyle(0x000000, 0.5).fillRoundedRect(-w / 2, 64, w, 5, 2)
       u.mpBar.fillStyle(0x5a8cff, 1).fillRoundedRect(-w / 2, 64, Math.round(w * (u.mana / u.maxMana)), 5, 2)
     }
+  }
+
+  // ── Highlight glow (replaces the hard selection border) ─────────────────────
+
+  private setGlow(u: Unit, color: number, pulse: boolean) {
+    this.tweens.killTweensOf(u.glow)
+    u.glow.clear().setAlpha(1)
+    u.glow.fillStyle(color, 0.14).fillEllipse(0, 2, 128, 138)
+    u.glow.fillStyle(color, 0.22).fillEllipse(0, 0, 86, 98)
+    if (pulse) {
+      this.tweens.add({
+        targets: u.glow, alpha: { from: 0.5, to: 1 },
+        duration: 650, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      })
+    }
+  }
+
+  private clearGlow(u: Unit) {
+    this.tweens.killTweensOf(u.glow)
+    u.glow.clear().setAlpha(1)
+  }
+
+  private highlightActive(u: Unit) {
+    for (const x of [...this.allies, ...this.enemies]) this.clearGlow(x)
+    this.setGlow(u, 0xffd54f, true)
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -323,11 +380,6 @@ export class PartyManualBattleScene extends Phaser.Scene {
 
   private advance() { this.turnIdx++; this.time.delayedCall(220, () => this.nextTurn()) }
 
-  private highlightActive(u: Unit) {
-    for (const x of [...this.allies, ...this.enemies]) x.ring.clear()
-    u.ring.lineStyle(3, 0xffd54f, 0.9).strokeRoundedRect(-50, -58, 100, 112, 12)
-  }
-
   // ── Enemy AI ───────────────────────────────────────────────────────────────
   private enemyAct(u: Unit) {
     const targets = this.living('ally')
@@ -338,61 +390,117 @@ export class PartyManualBattleScene extends Phaser.Scene {
   }
 
   // ── Manual ally input ──────────────────────────────────────────────────────
+
+  /** Square skill buttons, centred in the skill bar zone (above the ally grid).
+   *  The character's remembered skill (or its first usable one) starts selected. */
   private showSkillBar(u: Unit) {
+    const remembered = u.lastSkillId && u.skills.some(s => s.id === u.lastSkillId) ? u.lastSkillId : null
+    this.selectedSkillId = remembered ?? u.skills[0]?.id ?? null
+    this.renderSkillBar(u)
+  }
+
+  private renderSkillBar(u: Unit) {
     this.clearSkillBar()
-    const usable = u.skills.filter(s => s.mpCost <= u.mana)
     const n = u.skills.length
-    const bw = Math.min(150, (GAME_WIDTH - 60) / n - 8)
-    const startX = (GAME_WIDTH - (n * (bw + 8) - 8)) / 2 + bw / 2
+    const gap = 14
+    const size = Math.min(112, Math.floor((GAME_WIDTH - 60) / n) - gap)  // square side
+    const total = n * size + (n - 1) * gap
+    const startX = (GAME_WIDTH - total) / 2 + size / 2
     u.skills.forEach((s, i) => {
-      const x = startX + i * (bw + 8)
-      const enabled = usable.includes(s)
-      this.skillButtons.push(this.makeSkillButton(s, x, SKILL_BAR_Y, bw, enabled))
+      const x = startX + i * (size + gap)
+      const enabled = s.mpCost <= u.mana
+      const selected = this.selectedSkillId === s.id
+      this.skillButtons.push(this.makeSkillButton(s, x, SKILL_Y, size, enabled, selected))
     })
   }
 
-  private makeSkillButton(s: Skill, x: number, y: number, w: number, enabled: boolean) {
+  private makeSkillButton(s: Skill, x: number, y: number, size: number, enabled: boolean, selected: boolean) {
     const c = this.add.container(x, y).setDepth(15)
-    const g = this.add.graphics()
-    g.fillStyle(enabled ? 0x1a2340 : 0x201826, 1).fillRoundedRect(-w / 2, -26, w, 52, 8)
-    g.lineStyle(2, enabled ? s.color : 0x554455, 0.9).strokeRoundedRect(-w / 2, -26, w, 52, 8)
-    c.add(g)
-    c.add(this.add.text(0, -12, `${s.icon} ${s.name}`, { fontSize: '12px', color: enabled ? '#fff' : '#776', fontStyle: 'bold' }).setOrigin(0.5))
+    const g = this.add.graphics(); c.add(g)
+    this.paintSkillButton(g, s, size, enabled, selected)
+
+    c.add(this.add.text(0, -size / 2 + 12, `${s.icon} ${s.name}`, {
+      fontSize: '11px', fontFamily: 'Arial', color: enabled ? '#ffffff' : '#776', fontStyle: 'bold',
+      align: 'center', wordWrap: { width: size - 12 },
+    }).setOrigin(0.5, 0))
+
     const label = s.powerLabel || (s.isHeal ? `Heal ${s.damageMin}` : `${s.damageMin}–${s.damageMax}`)
-    c.add(this.add.text(0, 8, `${label}${s.mpCost ? `  ·  ${s.mpCost} MP` : ''}`, { fontSize: '10px', color: enabled ? '#bcd' : '#665' }).setOrigin(0.5))
-    if (enabled) {
-      const hit = this.add.rectangle(0, 0, w, 52, 0, 0).setInteractive({ useHandCursor: true })
-      hit.on('pointerdown', () => this.chooseSkill(s))
-      c.add(hit)
+    c.add(this.add.text(0, -4, label, {
+      fontSize: '9px', fontFamily: 'Arial', color: enabled ? '#bcd6ff' : '#665',
+      align: 'center', wordWrap: { width: size - 12 }, lineSpacing: 1,
+    }).setOrigin(0.5, 0))
+
+    if (s.mpCost > 0) {
+      c.add(this.add.text(0, size / 2 - 18, `${s.mpCost} MP`, {
+        fontSize: '10px', fontFamily: 'Arial', color: enabled ? '#8ab6ff' : '#556', fontStyle: 'bold',
+      }).setOrigin(0.5, 0))
     }
+
+    const hit = this.add.rectangle(0, 0, size, size, 0, 0).setInteractive({ useHandCursor: enabled })
+    if (enabled) {
+      hit.on('pointerover', () => this.paintSkillButton(g, s, size, true, true))
+      hit.on('pointerout', () => this.paintSkillButton(g, s, size, true, this.selectedSkillId === s.id))
+      hit.on('pointerdown', () => this.onSkillClick(s))
+    }
+    c.add(hit)
     return c
+  }
+
+  private paintSkillButton(g: Phaser.GameObjects.Graphics, s: Skill, size: number, enabled: boolean, selected: boolean) {
+    const w = size, h = size
+    g.clear()
+    const fill = !enabled ? 0x18141e : selected ? 0x223158 : 0x141a30
+    g.fillStyle(fill, 1).fillRoundedRect(-w / 2, -h / 2, w, h, 10)
+    const border = !enabled ? 0x443a4a : selected ? 0xffd54f : s.color
+    g.lineStyle(selected ? 3 : 2, border, selected ? 1 : 0.85).strokeRoundedRect(-w / 2, -h / 2, w, h, 10)
+    if (selected && enabled) g.lineStyle(1, 0xffe9a0, 0.5).strokeRoundedRect(-w / 2 + 3, -h / 2 + 3, w - 6, h - 6, 8)
   }
 
   private clearSkillBar() { this.skillButtons.forEach(b => b.destroy()); this.skillButtons = [] }
 
+  /** Clear the target-pick highlights + hit zones (keeps the active glow). */
+  private clearTargetSelection() {
+    this.targetHits.forEach(h => h.destroy()); this.targetHits = []
+    for (const t of this.targetUnits) if (t !== this.active) this.clearGlow(t)
+    this.targetUnits = []
+  }
+
+  private onSkillClick(s: Skill) {
+    if (this.phase !== 'ally_input' && this.phase !== 'target_select') return
+    if (!this.active || s.mpCost > this.active.mana) return
+    // Visible response: this skill becomes the selection (and is remembered).
+    this.selectedSkillId = s.id
+    this.active.lastSkillId = s.id
+    this.clearTargetSelection()
+    this.renderSkillBar(this.active)
+    this.chooseSkill(s)
+  }
+
   private chooseSkill(s: Skill) {
-    if (this.phase !== 'ally_input' || !this.active) return
-    const u = this.active
+    const u = this.active!
     if (s.targeting === 'self') { this.castSkill(u, s, [u]); return }
     if (s.targeting === 'aoe') { this.castSkill(u, s, this.foesOf(u)); return }
     // single — pick a target (enemy for damage, ally for heal).
     this.pendingSkill = s
     this.phase = 'target_select'
     const targets = s.isHeal ? this.friendsOf(u) : this.foesOf(u)
+    this.targetUnits = targets
     this.hintText.setText(`Choose a target for ${s.name}`)
     for (const t of targets) {
-      t.ring.lineStyle(3, s.isHeal ? 0x66ff99 : 0xff6666, 0.9).strokeRoundedRect(-50, -58, 100, 112, 12)
-      const hit = this.add.rectangle(t.x, t.y, 100, 112, 0, 0).setInteractive({ useHandCursor: true }).setDepth(16)
+      this.setGlow(t, s.isHeal ? 0x66ff99 : 0xff6666, true)
+      const hit = this.add.rectangle(t.x, t.y, 100, 120, 0, 0)
+        .setInteractive({ useHandCursor: true }).setDepth(16)
       hit.on('pointerdown', () => {
         if (this.phase !== 'target_select') return
-        this.children.list.filter(o => o instanceof Phaser.GameObjects.Rectangle && (o as Phaser.GameObjects.Rectangle).depth === 16).forEach(o => o.destroy())
         this.castSkill(u, this.pendingSkill!, [t])
       })
+      this.targetHits.push(hit)
     }
   }
 
   // ── Skill resolution ───────────────────────────────────────────────────────
   private castSkill(caster: Unit, skill: Skill, targets: Unit[]) {
+    this.clearTargetSelection()
     this.clearSkillBar()
     this.hintText.setText('')
     this.phase = 'animating'
@@ -468,7 +576,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
     this.drawBars(tgt)
     this.float(tgt, `-${dmg}`, color)
     if (tgt.hp <= 0 && tgt.alive) {
-      tgt.alive = false; tgt.container.setAlpha(0.4); tgt.ring.clear()
+      tgt.alive = false; tgt.container.setAlpha(0.4); this.clearGlow(tgt)
       tgt.sprite.setTint(0x444444)
     }
     return dmg
@@ -500,6 +608,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
     if (this.phase === 'done') return
     this.phase = 'done'
     this.clearSkillBar()
+    this.clearTargetSelection()
     const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
     socket?.emit('campaign:report', {
       difficulty: this.battleData.difficulty, level: this.battleData.level,

@@ -122,9 +122,6 @@ function rollBatch(ladder: string[], difficulty: Difficulty, units: number): Mat
     .map(([tier, qty]) => ({ materialId: ladder[tier], qty }));
 }
 
-/** Difficulty index from which a campaign is GUARANTEED a catalyst (hard+). */
-const CATALYST_GUARANTEE_IDX = 4; // novice0 … hard4 … legendary9
-
 export interface MaterialRoll {
   drops: MaterialDrop[];
   /** A campaign "rich vein" — doubled the material haul (drives the end-screen FX). */
@@ -133,9 +130,9 @@ export interface MaterialRoll {
 
 /**
  * Roll the materials a victory grants. Campaigns drop a mixed batch of metal +
- * reagent (tiers blended per difficulty) plus a catalyst — guaranteed at hard+,
- * chance-based below — and occasionally hit a "rich vein" that doubles the haul.
- * Per-encounter wins drop a smaller, chance-based amount. No finished gear ever
+ * reagent (tiers blended per difficulty) plus a chance-based, difficulty-gated
+ * catalyst, and occasionally hit a "rich vein" that doubles the haul. Per-
+ * encounter wins drop a smaller, chance-based amount. No finished gear ever
  * drops — only materials.
  */
 export function rollMaterials(
@@ -153,10 +150,8 @@ export function rollMaterials(
     drops.push(...rollBatch(METAL_BY_TIER, difficulty, units));
     drops.push(...rollBatch(REAGENT_BY_TIER, difficulty, units));
 
-    // Catalyst jackpot: guaranteed at hard+ (floored to uncommon), chance-based below.
-    let catRarity = pickRarity(difficulty);
-    if (di >= CATALYST_GUARANTEE_IDX && catRarity === 'common') catRarity = 'uncommon';
-    const cat = CATALYST_BY_RARITY[catRarity];
+    // Catalyst: chance-based per difficulty (a common roll = no catalyst). Never guaranteed.
+    const cat = CATALYST_BY_RARITY[pickRarity(difficulty)];
     if (cat) drops.push({ materialId: cat, qty: 1 });
   } else if (Math.random() < dropChance(level, difficulty)) {
     const fam = Math.random() < 0.5 ? METAL_BY_TIER : REAGENT_BY_TIER;

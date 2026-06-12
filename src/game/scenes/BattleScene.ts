@@ -20,6 +20,7 @@ import { BASIC_ATTACK } from '../data/skills'
 import type { Skill } from '../data/skills'
 import { SKILL_MAP } from '../data/skillTrees'
 import { StatsStore } from '../systems/StatsStore'
+import { InventoryStore, type ClientInventoryItem } from '../systems/InventoryStore'
 import type { CombatSkill, SkillClass } from '../data/skillTrees'
 import { TD_MONSTERS } from '../data/tileFrames'
 import { DIFFICULTIES, type Difficulty } from '../data/mobs'
@@ -158,6 +159,8 @@ export class BattleScene extends Phaser.Scene {
   private manaRegen = 0
   private playerSpeed = DEFAULT_PLAYER_SPEED
   private playerDefense = 0   // equipment-derived defense will feed this later
+  /** The character gear/stats inspect overlay (null when closed). */
+  private charPanel: Phaser.GameObjects.Container | null = null
   private xpGained = 0
   private silverGained = 0
 
@@ -843,6 +846,24 @@ export class BattleScene extends Phaser.Scene {
         fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
       }).setOrigin(0.5, 0.5).setDepth(5)
 
+      // Click the card to inspect this character's gear + stats.
+      this.add.text(cardX + slotW - 8, cardY + 6, 'ⓘ', {
+        fontSize: '13px', fontFamily: 'Arial', color: '#7fa8ff',
+      }).setOrigin(1, 0).setDepth(6)
+      const cardZone = this.add.zone(cardX, cardY, slotW, cardH).setOrigin(0)
+        .setDepth(7).setInteractive({ useHandCursor: true })
+      cardZone.on('pointerover', () => {
+        bg.clear()
+        bg.fillStyle(0x1e1e44, 0.95).fillRoundedRect(cardX, cardY, slotW, cardH, 10)
+        bg.lineStyle(2, 0x7fa8ff, 1).strokeRoundedRect(cardX, cardY, slotW, cardH, 10)
+      })
+      cardZone.on('pointerout', () => {
+        bg.clear()
+        bg.fillStyle(0x161636, 0.95).fillRoundedRect(cardX, cardY, slotW, cardH, 10)
+        bg.lineStyle(1, 0x4a4a7a, 1).strokeRoundedRect(cardX, cardY, slotW, cardH, 10)
+      })
+      cardZone.on('pointerdown', () => this.showCharacterPanel())
+
       // HP + MP bar geometry for this slot.
       const barX = cardX + 14
       const barW = slotW - 28
@@ -880,6 +901,95 @@ export class BattleScene extends Phaser.Scene {
     this.playerMpGfx.fillStyle(0x222233, 1).fillRoundedRect(barX, mpY, barW, 14, 4)
     this.playerMpGfx.fillStyle(0x3a78d8, 1).fillRoundedRect(barX, mpY, Math.round(barW * mpPct), 14, 4)
     this.playerMpText.setText(`${Math.floor(this.playerMana)} / ${this.playerMaxMana}  MP`)
+  }
+
+  // ── Character inspect (gear + stats) ────────────────────────────────────────
+
+  /** Modal overlay showing the clicked party member's equipped gear and stats.
+   *  Data comes from the server-pushed StatsStore + InventoryStore snapshots. */
+  private showCharacterPanel() {
+    if (this.charPanel) { this.charPanel.destroy(); this.charPanel = null; return } // toggle
+
+    const stats = StatsStore.get()
+    const eq = (InventoryStore.get()?.equipment ?? {}) as Record<string, ClientInventoryItem | undefined>
+    const level = stats?.level ?? 1
+
+    const RARITY: Record<string, string> = {
+      common: '#cfd8dc', uncommon: '#66bb6a', rare: '#42a5f5', epic: '#ab47bc', legendary: '#ffb300',
+    }
+    const SLOTS: [string, string][] = [
+      ['mainHand', 'Weapon'], ['offHand', 'Off-hand'], ['helm', 'Helm'], ['chest', 'Chest'],
+      ['legs', 'Legs'], ['gloves', 'Gloves'], ['shoes', 'Boots'], ['belt', 'Belt'],
+      ['necklace', 'Necklace'], ['ring1', 'Ring'], ['ring2', 'Ring'], ['earring', 'Earring'],
+    ]
+
+    const pw = 600, ph = 470
+    const px = (GAME_WIDTH - pw) / 2, py = (GAME_HEIGHT - ph) / 2
+    const c = this.add.container(0, 0).setDepth(50)
+    this.charPanel = c
+    const close = () => { c.destroy(); this.charPanel = null }
+
+    // Dim backdrop — click anywhere outside the panel to close.
+    const backdrop = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.6)
+      .setOrigin(0).setInteractive()
+    backdrop.on('pointerdown', close)
+    c.add(backdrop)
+
+    const g = this.add.graphics()
+    g.fillStyle(0x12122a, 1).fillRoundedRect(px, py, pw, ph, 12)
+    g.lineStyle(2, 0x4a4a7a, 1).strokeRoundedRect(px, py, pw, ph, 12)
+    c.add(g)
+    // Swallow clicks on the panel body so they don't fall through to the backdrop.
+    c.add(this.add.zone(px, py, pw, ph).setOrigin(0).setInteractive())
+
+    c.add(this.add.text(px + pw / 2, py + 22, `Your Hero  ·  Level ${level}`, {
+      fontSize: '20px', fontFamily: 'Georgia, serif', color: '#ffd54f', fontStyle: 'bold',
+    }).setOrigin(0.5))
+
+    const closeBtn = this.add.text(px + pw - 16, py + 18, '✕', {
+      fontSize: '18px', color: '#ff8888', fontStyle: 'bold',
+    }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true })
+    closeBtn.on('pointerover', () => closeBtn.setColor('#ffbbbb'))
+    closeBtn.on('pointerout', () => closeBtn.setColor('#ff8888'))
+    closeBtn.on('pointerdown', close)
+    c.add(closeBtn)
+
+    // Left column — equipped gear.
+    const colLX = px + 28
+    let ly = py + 62
+    c.add(this.add.text(colLX, ly, 'EQUIPPED GEAR', {
+      fontSize: '12px', fontFamily: 'Arial', color: '#8888aa', fontStyle: 'bold',
+    }))
+    ly += 26
+    for (const [key, label] of SLOTS) {
+      const item = eq[key]
+      c.add(this.add.text(colLX, ly, label, { fontSize: '12px', color: '#9a9ac0' }))
+      c.add(item
+        ? this.add.text(colLX + 92, ly, `${item.icon ?? ''} ${item.name}`, {
+            fontSize: '12px', color: RARITY[item.rarity] ?? '#ffffff', fontStyle: 'bold',
+          }).setWordWrapWidth(180)
+        : this.add.text(colLX + 92, ly, '— empty —', { fontSize: '12px', color: '#55556e', fontStyle: 'italic' }))
+      ly += 26
+    }
+
+    // Right column — attributes + derived stats.
+    const colRX = px + pw / 2 + 18
+    let ry = py + 62
+    c.add(this.add.text(colRX, ry, 'STATS', {
+      fontSize: '12px', fontFamily: 'Arial', color: '#8888aa', fontStyle: 'bold',
+    }))
+    ry += 26
+    const rows = [...(stats?.attributes ?? []), ...(stats?.derived ?? [])]
+    if (rows.length === 0) {
+      c.add(this.add.text(colRX, ry, 'Stats not loaded yet.', { fontSize: '12px', color: '#9a9ac0' }))
+    }
+    for (const r of rows) {
+      c.add(this.add.text(colRX, ry, r.label, { fontSize: '12px', color: '#9a9ac0' }))
+      c.add(this.add.text(px + pw - 28, ry, r.isPercent ? `${r.total}%` : `${r.total}`, {
+        fontSize: '12px', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(1, 0))
+      ry += 21
+    }
   }
 
   // ── Floating damage labels ─────────────────────────────────────────────────

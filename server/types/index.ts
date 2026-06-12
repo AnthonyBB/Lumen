@@ -359,6 +359,9 @@ export interface InventoryItem {
   stackable: boolean;
   /** Client-facing icon key / emoji. */
   icon: string;
+  /** Present on brewed potions (Alchemy Lab): what the potion does + how much.
+   *  `restore` affects both HP and MP. Combat auto-use is wired separately. */
+  potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
   /** Absolute position (0-based) when stored in a chest, so the chest can hold
    *  items at specific tab/slot positions rather than packed from the start.
    *  Unset for bag items. */

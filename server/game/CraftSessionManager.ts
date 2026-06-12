@@ -19,8 +19,8 @@ import type { PlayerManager } from './PlayerManager.js';
 import type { InventoryManager } from './InventoryManager.js';
 import type { Question, ClientQuestion, InventoryItem } from '../types/index.js';
 import { TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
-import { RECIPE_MAP, type Recipe } from './data/recipes.js';
-import { METAL_BY_TIER, MATERIALS, MAX_TIER } from './data/materials.js';
+import { RECIPE_MAP, isAlchemy, type Recipe } from './data/recipes.js';
+import { METAL_BY_TIER, REAGENT_BY_TIER, MATERIALS, MAX_TIER } from './data/materials.js';
 import {
   EQUIPMENT_MAP,
   RARITY_ORDER,
@@ -30,6 +30,16 @@ import {
 
 export const CRAFT_QUESTION_COUNT = 5;
 export const CRAFT_PASS_THRESHOLD = 3;
+
+/** Potion name prefix by tier (1..7) — bigger tier, grander name. */
+const QUALITY_WORD = ['Minor', 'Lesser', '', 'Greater', 'Major', 'Superior', 'Supreme'];
+
+/** One-line potion descriptions, parameterised by potency. */
+const POTION_DESC: Record<'heal' | 'mana' | 'restore', (p: number) => string> = {
+  heal: (p) => `Restores ${p} HP when used.`,
+  mana: (p) => `Restores ${p} MP when used.`,
+  restore: (p) => `Restores ${p} HP and ${p} MP when used.`,
+};
 
 interface MaterialCost {
   materialId: string;
@@ -93,9 +103,14 @@ export class CraftSessionManager {
     private readonly inventoryManager: InventoryManager,
   ) {}
 
-  /** Metal (+ optional catalyst) a recipe/tier/catalyst combination costs. */
+  /** The base material (metal or reagent) a recipe spends at a given tier. */
+  private baseMaterial(recipe: Recipe, tier: number): string {
+    return isAlchemy(recipe.building) ? REAGENT_BY_TIER[tier] : METAL_BY_TIER[tier];
+  }
+
+  /** Base material (+ optional catalyst) a recipe/tier/catalyst combination costs. */
   private costFor(recipe: Recipe, tier: number, catalystId: string | null): MaterialCost[] {
-    const costs: MaterialCost[] = [{ materialId: METAL_BY_TIER[tier], qty: recipe.metalCost }];
+    const costs: MaterialCost[] = [{ materialId: this.baseMaterial(recipe, tier), qty: recipe.materialCost }];
     if (catalystId) costs.push({ materialId: catalystId, qty: 1 });
     return costs;
   }
@@ -223,17 +238,20 @@ export class CraftSessionManager {
     const passed = score >= CRAFT_PASS_THRESHOLD;
     const { recipe, tier, catalystId, playerId } = session;
 
+    const accuracy = score / total;
+    const catalystRarity = catalystId ? MATERIALS[catalystId]?.rarityGate ?? 'common' : 'common';
+
     if (!passed) {
-      // Failed quiz: the metal is wasted, but the catalyst is preserved.
+      // Failed quiz: the base material is wasted, but the catalyst is preserved.
       this.playerManager.consumeMaterials(playerId, [
-        { materialId: METAL_BY_TIER[tier], qty: recipe.metalCost },
+        { materialId: this.baseMaterial(recipe, tier), qty: recipe.materialCost },
       ]);
       this.playerManager.persistProgress(playerId);
       return {
         success: false,
         score,
         total,
-        message: `The forge sputtered — you needed ${CRAFT_PASS_THRESHOLD}/${total}. The ore was lost, but your catalyst is safe. Keep studying!`,
+        message: `The craft failed — you needed ${CRAFT_PASS_THRESHOLD}/${total}. The base materials were lost, but your catalyst is safe. Keep studying!`,
       };
     }
 
@@ -243,35 +261,82 @@ export class CraftSessionManager {
       return { success: false, score, total, message: 'Your materials ran out before the craft finished.' };
     }
 
-    const catalystRarity = catalystId ? MATERIALS[catalystId]?.rarityGate ?? 'common' : 'common';
-    const accuracy = score / total;
-    const rolled = this.rollItem(recipe, tier, catalystRarity, accuracy);
-    if (!rolled) {
-      return { success: false, score, total, message: 'No matching item could be crafted. Materials refunded.' };
+    const item = recipe.potion
+      ? this.brewPotion(recipe, tier, catalystRarity, accuracy)
+      : this.forgeGear(recipe, tier, catalystRarity, accuracy);
+    if (!item) {
+      return { success: false, score, total, message: 'Nothing could be crafted from these materials.' };
     }
 
-    const item: InventoryItem = {
-      id: randomUUID(),
-      itemType: rolled.id, // eq_NNNN — EQUIPMENT_MAP key for equip/stat lookups
-      name: rolled.name,
-      description: rolled.description,
-      rarity: rolled.rarity,
-      stats: {},
-      quantity: 1,
-      stackable: false,
-      icon: rolled.icon,
-    };
-    this.inventoryManager.addItem(playerId, item);
+    this.inventoryManager.addItem(playerId, item.inv);
     this.playerManager.persistProgress(playerId);
 
     return {
       success: true,
       score,
       total,
-      item: { name: rolled.name, icon: rolled.icon, rarity: rolled.rarity },
+      item: { name: item.label, icon: item.inv.icon, rarity: item.inv.rarity },
       message: accuracy >= 0.8
-        ? `Masterwork! You crafted a ${rolled.rarity} ${rolled.name}.`
-        : `You crafted a ${rolled.rarity} ${rolled.name}. A cleaner quiz would temper a finer piece.`,
+        ? `Masterwork! ${item.success}`
+        : `${item.success} A cleaner quiz would yield an even finer result.`,
+    };
+  }
+
+  /** Forge a weapon/armor item from EQUIPMENT_MAP. */
+  private forgeGear(recipe: Recipe, tier: number, maxRarity: Rarity, accuracy: number):
+    { inv: InventoryItem; label: string; success: string } | null {
+    const rolled = this.rollItem(recipe, tier, maxRarity, accuracy);
+    if (!rolled) return null;
+    return {
+      inv: {
+        id: randomUUID(),
+        itemType: rolled.id, // eq_NNNN — EQUIPMENT_MAP key for equip/stat lookups
+        name: rolled.name,
+        description: rolled.description,
+        rarity: rolled.rarity,
+        stats: {},
+        quantity: 1,
+        stackable: false,
+        icon: rolled.icon,
+      },
+      label: rolled.name,
+      success: `You crafted a ${rolled.rarity} ${rolled.name}.`,
+    };
+  }
+
+  /**
+   * Brew a stackable potion. Reagent TIER sets base potency; the catalyst (via
+   * achieved rarity) multiplies it. Identical potions stack by itemType. Combat
+   * auto-use is wired separately (folded into the Strategy loadout).
+   */
+  private brewPotion(recipe: Recipe, tier: number, maxRarity: Rarity, accuracy: number):
+    { inv: InventoryItem; label: string; success: string } | null {
+    const effect = recipe.potion!;
+    // Accuracy can downgrade the achieved rarity below the catalyst's gate.
+    const steps = accuracy >= 0.8 ? 0 : accuracy >= 0.6 ? 1 : 2;
+    const rarity = RARITY_ORDER[Math.max(0, RARITY_ORDER.indexOf(maxRarity) - steps)];
+    const rarityMult = 1 + RARITY_ORDER.indexOf(rarity) * 0.5; // common 1× … legendary 3×
+    const power = Math.round(25 * tier * rarityMult);
+    const qty = 2 + (accuracy >= 0.8 ? 1 : 0); // a clean brew yields an extra dose
+
+    const prefix = QUALITY_WORD[Math.min(QUALITY_WORD.length - 1, tier - 1)];
+    const name = `${prefix} ${recipe.name}`.trim();
+    return {
+      inv: {
+        id: randomUUID(),
+        // Stable type so identical potions stack in the bag.
+        itemType: `potion_${effect}_t${tier}_${rarity}`,
+        name,
+        description: POTION_DESC[effect](power),
+        rarity,
+        stats: {},
+        quantity: qty,
+        stackable: true,
+        icon: recipe.icon,
+        potion: { effect, power },
+      },
+      label: name,
+      success: `You brewed ${qty}× ${rarity} ${name} (restores ${power}).`,
     };
   }
 

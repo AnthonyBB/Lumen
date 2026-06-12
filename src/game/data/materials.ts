@@ -64,5 +64,13 @@ export const MAX_TIER = 7
 /** Metal id for a given tier (1–7); index 0 is unused. */
 export const METAL_BY_TIER: string[] = ['', ...METAL_DEFS.map((m) => m[0])]
 
-/** Catalysts in ascending rarity, for the Forge's catalyst picker. */
+/** Reagent id for a given tier (1–7); index 0 is unused. Used by the Alchemy Lab. */
+export const REAGENT_BY_TIER: string[] = ['', ...REAGENT_DEFS.map((r) => r[0])]
+
+/** The base-material ladder a crafting building spends (metals vs reagents). */
+export function ladderFor(building: 'forge' | 'armory' | 'alchemy'): string[] {
+  return building === 'alchemy' ? REAGENT_BY_TIER : METAL_BY_TIER
+}
+
+/** Catalysts in ascending rarity, for the catalyst picker. */
 export const CATALYSTS: Material[] = CATALYST_DEFS.map(([id]) => MATERIALS[id])

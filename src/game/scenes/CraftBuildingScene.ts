@@ -36,6 +36,12 @@ const THEMES: Record<CraftBuilding, Theme> = {
     accent: 0x6fb7ff, npcKey: 'npc_citizen4', npcName: 'Sera the Armorer',
     wallProps: ['🛡️', '⛑️', '🧤', '🥾'],
   },
+  alchemy: {
+    title: '⚗️  The Alchemy Lab',
+    floor: 0x1e2922, floorAlt: 0x24302a, wall: 0x132019, wallTrim: 0x274a38,
+    accent: 0x66ffb0, npcKey: 'npc_citizen5', npcName: 'Mira the Alchemist',
+    wallProps: ['❤️', '🔷', '💧', '🌿'],
+  },
 }
 
 const WALL_BAND = 96 // top wall height
@@ -191,7 +197,7 @@ export class CraftBuildingScene extends Phaser.Scene {
       anvil.fillRect(cx - 18, benchY - 10, 36, 18)        // waist
       anvil.fillStyle(0x3a3a42, 1)
       anvil.fillRect(cx - 56, benchY - 26, 112, 18)       // face + horn
-    } else {
+    } else if (this.building === 'armory') {
       // Armor bench + weapon rack on the back wall.
       const rack = this.add.graphics().setDepth(3)
       rack.fillStyle(0x14161d, 1)
@@ -207,9 +213,32 @@ export class CraftBuildingScene extends Phaser.Scene {
       bench.fillRect(cx - 60, benchY + 4, 120, 18)
       bench.fillStyle(0x363a45, 1)
       bench.fillRect(cx - 60, benchY - 8, 120, 12)
+    } else {
+      // Shelves of reagents on the back wall.
+      const shelf = this.add.graphics().setDepth(3)
+      shelf.fillStyle(0x122019, 1)
+      shelf.fillRoundedRect(cx - 90, WALL_BAND - 2, 180, 24, 5)
+      this.add.text(cx, WALL_BAND + 10, '🧫 🌿 🍄 🌱', { fontSize: '18px' }).setOrigin(0.5).setDepth(4)
+
+      // A bubbling cauldron on a stand.
+      const stand = this.add.graphics().setDepth(15)
+      stand.fillStyle(0x101512, 1)
+      stand.fillRect(cx - 44, benchY + 4, 88, 22)          // cauldron body
+      stand.fillStyle(0x2a221a, 1)
+      stand.fillRect(cx - 24, benchY + 26, 48, 14)         // legs/base
+      const brew = this.add.ellipse(cx, benchY + 4, 78, 24, t.accent, 0.85).setDepth(16)
+      this.tweens.add({
+        targets: brew, scaleX: 1.1, scaleY: 1.3, alpha: 0.5,
+        duration: 800, yoyo: true, repeat: -1, ease: 'Sine.inOut',
+      })
+      // Rising bubbles.
+      for (const dx of [-14, 6, 18]) {
+        const b = this.add.text(cx + dx, benchY, '∘', { fontSize: '16px', color: '#dfffe9' }).setOrigin(0.5).setDepth(17)
+        this.tweens.add({ targets: b, y: benchY - 26, alpha: 0, duration: 1400, repeat: -1, delay: (dx + 14) * 80, ease: 'Sine.out' })
+      }
     }
 
-    // The smith — stands behind the bench, facing the player.
+    // The smith / alchemist — stands behind the station, facing the player.
     this.npcRing = this.add.graphics().setDepth(14)
     this.npc = this.add.sprite(cx, benchY - 40, this.theme.npcKey).setDepth(16).setScale(2)
     const anim = `${this.theme.npcKey}_idle`

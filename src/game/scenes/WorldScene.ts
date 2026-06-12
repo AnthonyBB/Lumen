@@ -234,6 +234,7 @@ export class WorldScene extends Phaser.Scene {
       { label: 'Combat Strategy', x: 1715, y: 1610, w: 196, h: 196 },
       { label: 'The Forge',       x: 1290, y: 1700, w: 200, h: 170 },
       { label: 'The Armory',      x: 895,  y: 1010, w: 200, h: 170 },
+      { label: 'Alchemy Lab',     x: 620,  y: 1640, w: 200, h: 170 },
     ]
 
     this.buildings = []
@@ -1087,11 +1088,15 @@ export class WorldScene extends Phaser.Scene {
           this.scene.launch('MarketScene')
           return
         }
-        if (nearBuilding.label === 'The Forge' || nearBuilding.label === 'The Armory') {
+        const craftBuilding =
+          nearBuilding.label === 'The Forge'  ? 'forge'  :
+          nearBuilding.label === 'The Armory' ? 'armory' :
+          nearBuilding.label === 'Alchemy Lab' ? 'alchemy' : null
+        if (craftBuilding) {
           this.player.setVelocity(0, 0)
           this.scene.stop('UIScene')
           this.scene.start('CraftBuildingScene', {
-            building: nearBuilding.label === 'The Forge' ? 'forge' : 'armory',
+            building: craftBuilding,
             returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
           })
           return

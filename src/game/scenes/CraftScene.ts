@@ -3,13 +3,16 @@ import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { recipesFor, type Recipe, type CraftBuilding } from '../data/recipes'
 import {
-  MATERIALS, METAL_BY_TIER, MAX_TIER, CATALYSTS, type Material,
+  MATERIALS, ladderFor, MAX_TIER, CATALYSTS, type Material,
 } from '../data/materials'
 
-/** Per-building UI flavour. */
-const BUILDING_UI: Record<CraftBuilding, { title: string; prompt: string; subject: string }> = {
-  forge:  { title: '🔥  THE  FORGE',  prompt: 'Choose a weapon to forge', subject: 'Math' },
-  armory: { title: '🛡️  THE  ARMORY', prompt: 'Choose armor to craft',    subject: 'Science' },
+/** Per-building UI flavour. `tierNote` describes what the base-material tier sets. */
+const BUILDING_UI: Record<CraftBuilding, {
+  title: string; prompt: string; subject: string; material: string; tierNote: string
+}> = {
+  forge:   { title: '🔥  THE  FORGE',       prompt: 'Choose a weapon to forge', subject: 'Math',    material: 'ore',     tierNote: 'sets weapon level' },
+  armory:  { title: '🛡️  THE  ARMORY',      prompt: 'Choose armor to craft',    subject: 'Science', material: 'ore',     tierNote: 'sets armor level' },
+  alchemy: { title: '⚗️  THE  ALCHEMY  LAB', prompt: 'Choose a potion to brew',  subject: 'Science', material: 'reagent', tierNote: 'sets potency' },
 }
 
 /** Client view of a craft-quiz question (server strips the correct index). */
@@ -202,28 +205,31 @@ export class CraftScene extends Phaser.Scene {
       x += cardW + gap
     }
 
-    // Metal tier picker — only tiers the player owns enough of are selectable.
+    // Base-material tier picker — only tiers the player owns enough of selectable.
+    const ui = BUILDING_UI[this.building]
+    const ladder = ladderFor(this.building)
+    const cost = this.selectedRecipe.materialCost
     let y = 250
-    this.content.add(this.label(cx, y, `Metal tier  (costs ${this.selectedRecipe.metalCost} ore — sets weapon level)`, '14px', '#d7ccc8').setOrigin(0.5))
+    this.content.add(this.label(cx, y, `${ui.material === 'reagent' ? 'Reagent' : 'Metal'} tier  (costs ${cost} ${ui.material} — ${ui.tierNote})`, '14px', '#d7ccc8').setOrigin(0.5))
     y += 30
     const tileW = 86, tgap = 8
     const totalTW = MAX_TIER * tileW + (MAX_TIER - 1) * tgap
     let tx = cx - totalTW / 2
     let bestAffordable = 0
     for (let t = 1; t <= MAX_TIER; t++) {
-      const mat = MATERIALS[METAL_BY_TIER[t]]
-      const owned = this.materials[METAL_BY_TIER[t]] ?? 0
-      const affordable = owned >= this.selectedRecipe.metalCost
+      const mat = MATERIALS[ladder[t]]
+      const owned = this.materials[ladder[t]] ?? 0
+      const affordable = owned >= cost
       if (affordable) bestAffordable = t
       const selected = t === this.selectedTier
       this.content.add(this.card(tx, y, tileW, 58, selected, !affordable))
       this.content.add(this.label(tx + tileW / 2, y + 16, `${mat.name} ${ROMAN[t]}`, '11px', affordable ? '#ffffff' : '#6d5b4f', true).setOrigin(0.5))
-      this.content.add(this.label(tx + tileW / 2, y + 38, `${owned} ore`, '11px', affordable ? '#cfd8dc' : '#6d5b4f').setOrigin(0.5))
+      this.content.add(this.label(tx + tileW / 2, y + 38, `${owned} ${ui.material}`, '11px', affordable ? '#cfd8dc' : '#6d5b4f').setOrigin(0.5))
       if (affordable) this.hit(tx, y, tileW, 58, () => { this.selectedTier = t; this.render() })
       tx += tileW + tgap
     }
     // Keep the selection valid/affordable.
-    if ((this.materials[METAL_BY_TIER[this.selectedTier]] ?? 0) < this.selectedRecipe.metalCost) {
+    if ((this.materials[ladder[this.selectedTier]] ?? 0) < cost) {
       this.selectedTier = bestAffordable
     }
 
@@ -254,7 +260,7 @@ export class CraftScene extends Phaser.Scene {
     // Begin button.
     const canCraft = bestAffordable > 0
     y += 96
-    const btn = this.button(cx - 130, y, 260, 52, canCraft ? 'Begin Crafting ⚒️' : 'Need more ore', canCraft, () => {
+    const btn = this.button(cx - 130, y, 260, 52, canCraft ? 'Begin Crafting ⚒️' : `Need more ${ui.material}`, canCraft, () => {
       this.feedback.setText('')
       this.socket?.emit('craft:start', {
         recipeId: this.selectedRecipe.id,
@@ -263,7 +269,7 @@ export class CraftScene extends Phaser.Scene {
       })
     })
     this.content.add(btn)
-    this.content.add(this.label(cx, y + 70, 'Answer 3 of 5 questions to forge. A perfect quiz reaches the catalyst’s full rarity.', '12px', '#8d6e63').setOrigin(0.5))
+    this.content.add(this.label(cx, y + 70, 'Answer 3 of 5 questions to craft. A perfect quiz reaches the catalyst’s full rarity.', '12px', '#8d6e63').setOrigin(0.5))
   }
 
   private renderQuiz() {

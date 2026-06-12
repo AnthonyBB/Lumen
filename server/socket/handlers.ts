@@ -409,6 +409,32 @@ export function registerHandlers(
     if (result.sessionComplete) pushHaste(); // a passed test changed the interval
   });
 
+  // ── party:combat_data — the party's combat units for MANUAL live combat ─────
+  //
+  // The client only has the ACTIVE character's stats; for a hand-played party
+  // fight it needs every party member's combat data. Server-authoritative: stats
+  // are derived here (rank-scaled gear, etc.); the client builds battle units +
+  // skill bars from this and runs the interactive fight.
+  socket.on('party:combat_data', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    const currentRank = playerManager.getAdventureRank(socket.id);
+    const characters = playerManager.getCharacters(socket.id);
+    const allies = playerManager.getParty(socket.id)
+      .map((id) => {
+        const ch = characters.find((c) => c.id === id);
+        if (!ch) return null;
+        const c = buildAllyCombatant(ch, inventoryManager.equipmentFor(socket.id, id), currentRank);
+        return {
+          id: ch.id, name: ch.name, class: ch.class, level: ch.level,
+          maxHp: c.maxHp, attack: c.attack, defense: c.defense, speed: c.speed,
+          maxMana: c.maxMana, healing: c.healingPower, basicAttack: c.basicAttack,
+          skillRanks: { ...ch.skillRanks }, strategyLoadout: [...ch.strategyLoadout],
+        };
+      })
+      .filter((a): a is NonNullable<typeof a> => !!a);
+    socket.emit('party:combat_data', { allies });
+  });
+
   // ── Idle / auto-battle (§6/§7) ─────────────────────────────────────────────
   socket.on('idle:get', () => {
     if (!requireJoinedPlayer('You must join first.')) return;

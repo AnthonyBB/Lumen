@@ -589,6 +589,15 @@ export function registerHandlers(
     // Character / Equipment screens render the moment the player joins.
     pushStats();
 
+    // Push the rank / roster / haste views too. The client fires their `*:get`
+    // requests synchronously on connect, BEFORE this async join finishes creating
+    // the in-memory player record — so those gets hit requireJoinedPlayer() and
+    // bail with no data (e.g. the Adventure Rank dropdown would stay stuck at
+    // "—"). Re-pushing here guarantees they render once the join completes.
+    pushAdventureRank();
+    pushRoster();
+    pushHaste();
+
     // Credit any idle battles the deployed team fought while the player was away,
     // and push the current deployment status.
     settleIdle();

@@ -15,7 +15,11 @@ import { inventoryItemSchema } from './InventoryItemSchema.js';
 interface PlayerInventoryDoc extends Document {
   userId:    string;
   items:     unknown[];
+  /** Legacy flat equipment (pre-roster saves). Migrated into
+   *  `equipmentByCharacter` on first access. */
   equipment: Record<string, unknown>;
+  /** Per-character equipment: characterId → equipped slots. */
+  equipmentByCharacter: Record<string, unknown>;
   gold:      number;
   updatedAt: Date;
 }
@@ -43,6 +47,8 @@ const playerInventorySchema = new Schema(
     userId:    { type: String, required: true, index: true, unique: true },
     items:     { type: [inventoryItemSchema], default: [] },
     equipment: { type: equipmentSlotsSchema, default: () => ({}) },
+    // characterId → equipped slots (the roster model; see CHARACTERS_DESIGN.md §1).
+    equipmentByCharacter: { type: Schema.Types.Mixed, default: () => ({}) },
     gold:      { type: Number, default: 0 },
     updatedAt: { type: Date, default: Date.now },
   },

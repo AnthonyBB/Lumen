@@ -180,10 +180,16 @@ export function registerHandlers(
     return player;
   };
 
+  /** The active character's id (the roster member current ops target). */
+  const activeCharId = (): string => playerManager.getActiveCharacter(socket.id)?.id ?? '';
+
+  /** The active character's inventory snapshot (shared bag + its equipment). */
+  const activeSnapshot = () => inventoryManager.getSnapshot(socket.id, activeCharId());
+
   /** Push the player's current inventory so HUD counters refresh. */
   const pushInventoryUpdate = (): void => {
-    const inventory = inventoryManager.getInventory(socket.id);
-    if (inventory) socket.emit('inventory:updated', inventory);
+    const snapshot = activeSnapshot();
+    if (snapshot) socket.emit('inventory:updated', snapshot);
   };
 
   /**
@@ -192,8 +198,7 @@ export function registerHandlers(
    * Server-authoritative — the client only renders this; it never sends stats.
    */
   const pushStats = (): void => {
-    const inventory = inventoryManager.getInventory(socket.id);
-    const equipment = inventory?.equipment ?? {};
+    const equipment = inventoryManager.equipmentFor(socket.id, activeCharId());
     const payload = playerManager.applyDerivedStats(socket.id, equipment);
     if (payload) socket.emit('stats:update', payload);
   };
@@ -366,7 +371,7 @@ export function registerHandlers(
 
     // Push the freshly-loaded inventory + shard balances so HUD counters render
     // immediately — the client's get requests can race this async join handler.
-    const joinInventory = inventoryManager.getInventory(socket.id);
+    const joinInventory = activeSnapshot();
     if (joinInventory) socket.emit('inventory:data', joinInventory);
     pushCurrency();
     // Derive Max HP from attributes + gear and push the stats breakdown so the
@@ -895,13 +900,13 @@ export function registerHandlers(
 
   // ── inventory:get ────────────────────────────────────────────────────────
   socket.on('inventory:get', () => {
-    const inventory = inventoryManager.getInventory(socket.id);
-    if (!inventory) {
+    const snapshot = activeSnapshot();
+    if (!snapshot) {
       socket.emit('error', { message: 'Inventory not found. Have you joined yet?' });
       return;
     }
     // Safe to send: stats come from the server; correctIndex is never in inventory data.
-    socket.emit('inventory:data', inventory);
+    socket.emit('inventory:data', snapshot);
   });
 
   // NOTE: the legacy `inventory:equip` / `inventory:unequip` handlers were
@@ -974,7 +979,7 @@ export function registerHandlers(
       label = bagItem.name;
     }
 
-    const success = inventoryManager.equipGeneratedItem(socket.id, payload.itemId, slotKey);
+    const success = inventoryManager.equipGeneratedItem(socket.id, activeCharId(), payload.itemId, slotKey);
     if (!success) {
       socket.emit('error', { message: 'Could not equip that item.' });
       return;
@@ -1006,7 +1011,7 @@ export function registerHandlers(
     const player = requireJoinedPlayer('You must join before unequipping items.');
     if (!player) return;
 
-    if (!inventoryManager.unequipItem(socket.id, payload.slot)) {
+    if (!inventoryManager.unequipItem(socket.id, activeCharId(), payload.slot)) {
       socket.emit('error', { message: 'That slot is empty.' });
       return;
     }
@@ -1209,7 +1214,7 @@ export function registerHandlers(
       return;
     }
 
-    const inventory = inventoryManager.getInventory(socket.id);
+    const inventory = activeSnapshot();
     if (!inventory) {
       socket.emit('error', { message: 'You must join before opening a chest.' });
       return;
@@ -1269,7 +1274,7 @@ export function registerHandlers(
       return;
     }
 
-    const updatedInventory = inventoryManager.getInventory(socket.id)!;
+    const updatedInventory = activeSnapshot()!;
     const updatedChest = chestManager.getChest(payload.chestId)!;
     socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
   });
@@ -1298,7 +1303,7 @@ export function registerHandlers(
       }
       socket.emit('chest:updated', {
         chest: chestManager.getChest(payload.chestId)!,
-        inventory: inventoryManager.getInventory(socket.id)!,
+        inventory: activeSnapshot()!,
       });
     } else {
       if (!inventoryManager.deleteItem(socket.id, payload.itemId)) {

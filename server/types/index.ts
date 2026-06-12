@@ -437,6 +437,21 @@ export interface EquipmentSlots {
 
 export interface PlayerInventory {
   playerId: string;
+  /** The shared, ACCOUNT-wide item bag. */
+  items: InventoryItem[];
+  /** Equipment per character (characterId → equipped slots). The bag is shared
+   *  across the roster; equipment is per-character (see docs/CHARACTERS_DESIGN.md §1). */
+  equipmentByCharacter: Record<string, EquipmentSlots>;
+  /** Flat equipment loaded from a pre-roster save, migrated into the active
+   *  character's slots on first access then cleared. */
+  legacyEquipment?: EquipmentSlots;
+  gold: number;
+}
+
+/** The client-facing inventory projection (a single character's equipment plus
+ *  the shared bag) — what `inventory:data` / `inventory:updated` carry. */
+export interface InventorySnapshot {
+  playerId: string;
   items: InventoryItem[];
   equipment: EquipmentSlots;
   gold: number;

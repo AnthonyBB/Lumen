@@ -6,6 +6,7 @@ import ContentModePrompt from '../components/ContentModePrompt'
 import LevelUpCelebration from '../components/LevelUpCelebration'
 import RosterPanel, { type RosterData } from '../components/RosterPanel'
 import StudyPanel, { type HasteData } from '../components/StudyPanel'
+import IdlePanel, { type IdleStatus } from '../components/IdlePanel'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
@@ -31,6 +32,12 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   const [rosterOpen, setRosterOpen] = useState(false)
   const [haste, setHaste] = useState<HasteData | null>(null)
   const [studyOpen, setStudyOpen] = useState(false)
+  const [idleStatus, setIdleStatus] = useState<IdleStatus | null>(null)
+  const [idleOpen, setIdleOpen] = useState(false)
+  const [idleSummary, setIdleSummary] = useState<{
+    battles: number; wins: number; losses: number; xpPerCharacter: number; silver: number
+    items: { name: string; icon: string; rarity: string }[]
+  } | null>(null)
 
   const emit = (event: string, payload?: unknown) => {
     const sock = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
@@ -72,6 +79,8 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
 
     s.on('roster:data', (d: RosterData) => setRoster(d))
     s.on('haste:data', (d: HasteData) => setHaste(d))
+    s.on('idle:status', (d: IdleStatus) => setIdleStatus(d))
+    s.on('idle:summary', (d: typeof idleSummary) => { if (d && d.battles > 0) setIdleSummary(d) })
 
     s.on('connect', () => {
       // (Re)join on every connect — including reconnects after a server
@@ -83,6 +92,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       s.emit('adventureRank:get')
       s.emit('roster:get')
       s.emit('haste:get')
+      s.emit('idle:get')
       // Bind the inventory store to this (possibly new) socket so the HUD
       // shard counters receive inventory:data / inventory:updated pushes.
       InventoryStore.init(s)
@@ -164,6 +174,36 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
         <StudyPanel haste={haste} onClose={() => setStudyOpen(false)} />
       )}
 
+      {/* Idle campaigns panel */}
+      {idleOpen && idleStatus && (
+        <IdlePanel status={idleStatus} onClose={() => setIdleOpen(false)} />
+      )}
+
+      {/* "While you were away" idle summary (shown on login) */}
+      {idleSummary && (
+        <div className="fixed inset-0 z-[58] flex items-center justify-center bg-black/70 p-4" onClick={() => setIdleSummary(null)}>
+          <div className="w-full max-w-md rounded-2xl border border-lumen-gold/40 bg-lumen-dark p-6 text-center shadow-2xl shadow-purple-900/40" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-display text-2xl text-lumen-gold">While you were away…</h2>
+            <p className="mt-2 text-sm text-gray-300">
+              Your team fought <span className="text-lumen-gold">{idleSummary.battles}</span> battles
+              ({idleSummary.wins} won, {idleSummary.losses} lost)
+            </p>
+            {idleSummary.xpPerCharacter > 0 && (
+              <p className="mt-3 font-display text-lg text-green-300">+{idleSummary.xpPerCharacter} XP to each fighter</p>
+            )}
+            {idleSummary.silver > 0 && <p className="text-sm text-amber-200">+{idleSummary.silver} 🪙 silver</p>}
+            {idleSummary.items.length > 0 && (
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                {idleSummary.items.slice(0, 10).map((it, i) => (
+                  <span key={i} className="rounded-lg bg-white/5 px-2 py-1 text-xs text-gray-200">{it.icon} {it.name}</span>
+                ))}
+              </div>
+            )}
+            <button onClick={() => setIdleSummary(null)} className="mt-5 rounded-lg bg-lumen-gold/90 px-6 py-2 font-display font-bold text-lumen-dark hover:bg-lumen-gold">Collect</button>
+          </div>
+        </div>
+      )}
+
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
         <div
@@ -234,6 +274,17 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
                 : '—'}
             </p>
             <p className="text-[10px] text-gray-500 mt-1">Study to speed up idle battles.</p>
+          </button>
+          <button
+            onClick={() => idleStatus && setIdleOpen(true)}
+            disabled={!idleStatus}
+            className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
+          >
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Idle Camps</p>
+            <p className="font-display text-lg text-lumen-gold truncate">
+              {idleStatus?.assigned ? `${idleStatus.biome}` : 'Not deployed'}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-1">Send a team to fight while away.</p>
           </button>
         </div>
       </div>

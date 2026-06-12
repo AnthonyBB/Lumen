@@ -43,6 +43,7 @@ import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
 import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
 import { resolveBattle } from '../game/combat/resolver.js';
 import { buildAllyCombatant, buildEnemyCombatant, type MobInput } from '../game/combat/adapter.js';
+import { resolveIdle } from '../game/combat/idle.js';
 import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
@@ -229,6 +230,29 @@ export function registerHandlers(
     });
   };
 
+  /** Push the idle deployment status. */
+  const pushIdle = (): void => {
+    const idle = playerManager.getIdle(socket.id);
+    socket.emit('idle:status', {
+      assigned: !!idle,
+      biome: idle?.biome ?? null,
+      difficulty: idle?.difficulty ?? null,
+      intervalMinutes: playerManager.getHaste(socket.id).intervalMinutes,
+    });
+  };
+
+  /** Credit any idle battles owed since the last access, push the summary, and
+   *  refresh the affected state. Safe to call on login and on idle screen open. */
+  const settleIdle = (): void => {
+    const summary = resolveIdle(playerManager, inventoryManager, socket.id);
+    if (summary && summary.battles > 0) {
+      socket.emit('idle:summary', summary);
+      pushStats();
+      pushCurrency();
+      pushInventoryUpdate();
+    }
+  };
+
   // ── players:get_online ────────────────────────────────────────────────────
   socket.on('players:get_online', () => {
     socket.emit('players:online', onlinePlayers.size)
@@ -385,6 +409,32 @@ export function registerHandlers(
     if (result.sessionComplete) pushHaste(); // a passed test changed the interval
   });
 
+  // ── Idle / auto-battle (§6/§7) ─────────────────────────────────────────────
+  socket.on('idle:get', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle();
+    pushIdle();
+  });
+
+  socket.on('idle:assign', (payload: { biome?: unknown; difficulty?: unknown }) => {
+    if (typeof payload?.difficulty !== 'string' || !(DIFFICULTIES as string[]).includes(payload.difficulty)) {
+      socket.emit('error', { message: 'Unknown campaign difficulty.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle(); // credit the prior deployment before redeploying
+    const biome = typeof payload?.biome === 'string' ? payload.biome.slice(0, 32) : 'Campaign';
+    playerManager.assignIdle(socket.id, biome, payload.difficulty);
+    pushIdle();
+  });
+
+  socket.on('idle:clear', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle();
+    playerManager.clearIdle(socket.id);
+    pushIdle();
+  });
+
   // ── stats:get — Character / Equipment screens request the stat breakdown ──
   //
   // Read-only.  Recomputes attributes + derived combat stats from the player's
@@ -512,6 +562,11 @@ export function registerHandlers(
     // Derive Max HP from attributes + gear and push the stats breakdown so the
     // Character / Equipment screens render the moment the player joins.
     pushStats();
+
+    // Credit any idle battles the deployed team fought while the player was away,
+    // and push the current deployment status.
+    settleIdle();
+    pushIdle();
 
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {

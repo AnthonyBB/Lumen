@@ -87,6 +87,19 @@ export interface Player {
    *  one; they reduce the automated-battle interval and expire on rolling 3-day
    *  clocks (see docs/CHARACTERS_DESIGN.md §3). */
   hasteStacks: HasteStack[];
+  /** The team's idle campaign assignment, or null when not deployed. Resolved
+   *  lazily on access (see docs/CHARACTERS_DESIGN.md §6/§7). */
+  idle: IdleAssignment | null;
+}
+
+/** A team deployed to fight a campaign automatically while the player is away. */
+export interface IdleAssignment {
+  /** Campaign biome (for display). */
+  biome: string;
+  /** Campaign difficulty (a Difficulty key). */
+  difficulty: string;
+  /** Unix ms up to which idle battles have already been credited. */
+  lastResolvedAt: number;
 }
 
 /** One Study-to-Haste stack: a timed interval reduction. */

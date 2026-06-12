@@ -11,6 +11,7 @@ import type {
   Player,
   Character,
   HasteStack,
+  IdleAssignment,
   PublicPlayer,
   Subject,
   AttributeKey,
@@ -345,6 +346,17 @@ function sanitiseHasteStacks(raw: unknown): HasteStack[] {
     .slice(-MAX_HASTE_STACKS);
 }
 
+/** Sanitise a persisted idle assignment. */
+function sanitiseIdle(raw: unknown): IdleAssignment | null {
+  const i = raw as Partial<IdleAssignment> | null | undefined;
+  if (!i || typeof i.difficulty !== 'string' || typeof i.biome !== 'string') return null;
+  return {
+    biome: i.biome,
+    difficulty: i.difficulty,
+    lastResolvedAt: typeof i.lastResolvedAt === 'number' ? i.lastResolvedAt : Date.now(),
+  };
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -376,6 +388,7 @@ export interface LoadedProgress {
   campaignsCompleted: number;
   recruitTokens: number;
   hasteStacks: HasteStack[];
+  idle: IdleAssignment | null;
 }
 
 /** Skill shards granted for completing any quiz (effort reward, every test). */
@@ -443,6 +456,7 @@ export class PlayerManager {
       campaignsCompleted: 0,
       recruitTokens: 0,
       hasteStacks: [],
+      idle: null,
     };
 
     this.players.set(socketId, player);
@@ -636,6 +650,7 @@ export class PlayerManager {
           campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
           recruitTokens: Math.max(0, (doc as { recruitTokens?: number }).recruitTokens ?? 0),
           hasteStacks: sanitiseHasteStacks((doc as { hasteStacks?: unknown }).hasteStacks),
+          idle: sanitiseIdle((doc as { idle?: unknown }).idle),
         };
       }
     } catch (err) {
@@ -648,7 +663,7 @@ export class PlayerManager {
       party: [starter.id],
       subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false,
       topicPasses: {}, unlockedStrategies: [], combatShards: 0, silver: 0, materials: {},
-      campaignsCompleted: 0, recruitTokens: 0, hasteStacks: [],
+      campaignsCompleted: 0, recruitTokens: 0, hasteStacks: [], idle: null,
     };
   }
 
@@ -671,6 +686,7 @@ export class PlayerManager {
     player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
     player.recruitTokens = Math.max(0, Math.floor(progress.recruitTokens ?? 0));
     player.hasteStacks = sanitiseHasteStacks(progress.hasteStacks);
+    player.idle = sanitiseIdle(progress.idle);
 
     // Roster — finalise each character: clamp its allocation to its level cap and
     // keep only strategy-loadout entries that are in the account's catalog.
@@ -764,6 +780,7 @@ export class PlayerManager {
         campaignsCompleted: player.campaignsCompleted,
         recruitTokens: player.recruitTokens,
         hasteStacks: player.hasteStacks,
+        idle: player.idle,
         // Legacy mirror of the active character's level/xp — kept so older code
         // paths / dashboards reading the flat fields still see sane values.
         xp: activeChar.xp,
@@ -880,6 +897,40 @@ export class PlayerManager {
     player.recruitTokens -= amount;
     this.persistProgress(socketId);
     return true;
+  }
+
+  // ── Idle campaign assignment (§6/§7) ─────────────────────────────────────
+  getIdle(socketId: string): IdleAssignment | null {
+    return this.players.get(socketId)?.idle ?? null;
+  }
+
+  /** Deploy the team to a campaign (or re-deploy). Resets the resolve clock. */
+  assignIdle(socketId: string, biome: string, difficulty: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    player.idle = { biome, difficulty, lastResolvedAt: Date.now() };
+    this.persistProgress(socketId);
+    return true;
+  }
+
+  /** Recall the team (stop idle combat). */
+  clearIdle(socketId: string): void {
+    const player = this.players.get(socketId);
+    if (!player) return;
+    player.idle = null;
+    this.persistProgress(socketId);
+  }
+
+  /** Advance the idle resolve clock after crediting battles. */
+  setIdleResolvedAt(socketId: string, ts: number): void {
+    const player = this.players.get(socketId);
+    if (player?.idle) { player.idle.lastResolvedAt = ts; this.persistProgress(socketId); }
+  }
+
+  /** The raw haste stacks (for the idle timeline walk). */
+  getHasteStacks(socketId: string): HasteStack[] {
+    const player = this.players.get(socketId);
+    return player ? this.pruneHaste(player) : [];
   }
 
   // ── Study-to-Haste (§3) ──────────────────────────────────────────────────

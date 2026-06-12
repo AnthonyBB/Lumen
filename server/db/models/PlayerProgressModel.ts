@@ -50,6 +50,8 @@ export interface IPlayerProgress extends Document {
   recruitTokens: number
   /** Study-to-Haste stacks ({ expiresAt, minutes }). */
   hasteStacks: unknown[]
+  /** Idle campaign assignment ({ biome, difficulty, lastResolvedAt }) or null. */
+  idle: unknown
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -147,6 +149,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     hasteStacks: {
       type: Schema.Types.Mixed,
       default: () => [],
+    },
+    idle: {
+      type: Schema.Types.Mixed,
+      default: null,
     },
   },
   { timestamps: true },

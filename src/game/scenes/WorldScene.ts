@@ -228,13 +228,12 @@ export class WorldScene extends Phaser.Scene {
     // organic village rather than a square. Each building's frontage is dressed
     // by decorateBuilding() so the props follow wherever a building sits.
     const buildingDefs = [
-      { label: 'Learning Center', x: 895,  y: 1010, w: 192, h: 192 },
       { label: 'Tavern',          x: 1395, y: 870,  w: 220, h: 180 },
       { label: 'Combat Training', x: 1780, y: 1150, w: 252, h: 180 },
       { label: 'Market',          x: 935,  y: 1575, w: 220, h: 157 },
       { label: 'Combat Strategy', x: 1715, y: 1610, w: 196, h: 196 },
       { label: 'The Forge',       x: 1290, y: 1700, w: 200, h: 170 },
-      { label: 'The Armory',      x: 620,  y: 1260, w: 200, h: 170 },
+      { label: 'The Armory',      x: 895,  y: 1010, w: 200, h: 170 },
     ]
 
     this.buildings = []
@@ -1070,13 +1069,6 @@ export class WorldScene extends Phaser.Scene {
     } else if (nearBuilding && !this.popupOpen) {
       this.promptText.setText('Press E to enter').setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        if (nearBuilding.label === 'Learning Center') {
-          this.scene.stop('UIScene')
-          this.scene.start('ClassroomScene', {
-            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
-          })
-          return
-        }
         if (nearBuilding.label === 'Combat Strategy') {
           this.player.setVelocity(0, 0)
           this.scene.pause('WorldScene')
@@ -1095,16 +1087,13 @@ export class WorldScene extends Phaser.Scene {
           this.scene.launch('MarketScene')
           return
         }
-        if (nearBuilding.label === 'The Forge') {
+        if (nearBuilding.label === 'The Forge' || nearBuilding.label === 'The Armory') {
           this.player.setVelocity(0, 0)
-          this.scene.pause('WorldScene')
-          this.scene.launch('CraftScene', { building: 'forge' })
-          return
-        }
-        if (nearBuilding.label === 'The Armory') {
-          this.player.setVelocity(0, 0)
-          this.scene.pause('WorldScene')
-          this.scene.launch('CraftScene', { building: 'armory' })
+          this.scene.stop('UIScene')
+          this.scene.start('CraftBuildingScene', {
+            building: nearBuilding.label === 'The Forge' ? 'forge' : 'armory',
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Tavern') {

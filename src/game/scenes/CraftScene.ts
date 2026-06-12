@@ -48,6 +48,8 @@ export class CraftScene extends Phaser.Scene {
 
   private building: CraftBuilding = 'forge'
   private recipes: Recipe[] = []
+  /** Scene to resume when this overlay closes (the building interior). */
+  private parentScene = 'WorldScene'
 
   private materials: Record<string, number> = {}
   private state: 'select' | 'quiz' | 'result' = 'select'
@@ -65,8 +67,9 @@ export class CraftScene extends Phaser.Scene {
     super({ key: 'CraftScene' })
   }
 
-  init(data: { building?: CraftBuilding }) {
+  init(data: { building?: CraftBuilding; parentScene?: string }) {
     this.building = data?.building ?? 'forge'
+    this.parentScene = data?.parentScene ?? 'WorldScene'
     this.recipes = recipesFor(this.building)
     this.selectedRecipe = this.recipes[0]
     this.state = 'select'
@@ -142,7 +145,7 @@ export class CraftScene extends Phaser.Scene {
   }
 
   private closeScene() {
-    this.scene.resume('WorldScene')
+    this.scene.resume(this.parentScene)
     this.scene.stop() // stop THIS scene (key-agnostic, survives renames)
   }
 

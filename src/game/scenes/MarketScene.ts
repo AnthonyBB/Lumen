@@ -17,7 +17,7 @@ import {
   type ClientInventoryItem,
   type ClientPlayerInventory,
 } from '../systems/InventoryStore'
-import { EQUIPMENT_MAP, ATTRIBUTE_TYPES, type EquipSlot, type AttributeType } from '../data/equipmentGen'
+import { ATTRIBUTE_TYPES, type EquipSlot, type AttributeType } from '../data/equipmentGen'
 
 // ── Types mirroring the server's MarketListing snapshot ─────────────────────
 
@@ -664,22 +664,18 @@ export class MarketScene extends Phaser.Scene {
   /** Attribute-filter test for a market listing (no filter ⇒ always true). */
   private listingHasAttr(l: MarketListing): boolean {
     if (!this.attrFilter) return true
-    const gen = EQUIPMENT_MAP[l.itemType]
-    const attrs = gen ? gen.attributes : (l.itemData.attributes ?? [])
-    return attrs.some((a) => a.type === this.attrFilter)
+    return (l.itemData.attributes ?? []).some((a) => a.type === this.attrFilter)
   }
 
   /** Attribute-filter test for a bag item (no filter ⇒ always true). */
   private bagItemHasAttr(item: ClientInventoryItem): boolean {
     if (!this.attrFilter) return true
-    const gen = EQUIPMENT_MAP[item.itemType]
-    return !!gen && gen.attributes.some((a) => a.type === this.attrFilter)
+    return !!item.attributes && item.attributes.some((a) => a.type === this.attrFilter)
   }
 
-  /** The market slot for a bag item (generated gear has an exact slot). */
+  /** The market slot for a bag item (crafted gear carries its own slot). */
   private slotOf(item: ClientInventoryItem): EquipSlot | null {
-    const gen = EQUIPMENT_MAP[item.itemType]
-    if (gen) return gen.slot
+    if (item.equipSlot) return item.equipSlot as EquipSlot
     // Legacy heuristic mirrors the server's buildItemSnapshot fallback.
     const s = item.stats ?? {}
     if (typeof s.attack === 'number' && s.attack > 0) return 'weapon'
@@ -690,11 +686,10 @@ export class MarketScene extends Phaser.Scene {
   // ── Price helpers (DISPLAY ONLY — server recomputes authoritatively) ─────
 
   private displayBasePrice(item: ClientInventoryItem): number {
-    const gen = EQUIPMENT_MAP[item.itemType]
-    if (gen) {
-      const rv = RARITY_VALUE[gen.rarity] ?? RARITY_VALUE.common
-      const attrSum = gen.attributes.reduce((a, x) => a + Math.abs(x.value), 0)
-      return rv + attrSum * 3 + Math.floor(gen.xpRequired / 20)
+    if (item.attributes && item.attributes.length) {
+      const rv = RARITY_VALUE[item.rarity] ?? RARITY_VALUE.common
+      const attrSum = item.attributes.reduce((a, x) => a + Math.abs(x.value), 0)
+      return rv + attrSum * 3 + Math.floor((item.xpRequired ?? 0) / 20)
     }
     const statSum = Object.values(item.stats ?? {}).reduce(
       (a, v) => a + (typeof v === 'number' ? v : 0), 0)
@@ -702,10 +697,6 @@ export class MarketScene extends Phaser.Scene {
   }
 
   private bonusSummary(data: { itemType: string; attributes?: MarketAttribute[]; stats?: Record<string, number | undefined> }): string {
-    const gen = EQUIPMENT_MAP[data.itemType]
-    if (gen) {
-      return gen.attributes.map((a) => `+${a.value} ${this.attrLabel(a.type)}`).join('  ')
-    }
     if (data.attributes && data.attributes.length) {
       return data.attributes.map((a) => `+${a.value} ${this.attrLabel(a.type)}`).join('  ')
     }
@@ -719,10 +710,9 @@ export class MarketScene extends Phaser.Scene {
     return type.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
   }
 
-  /** Live catalogue icon for generated gear (so emoji fixes apply to already
-   *  listed items whose snapshot carries a stale glyph), else the snapshot icon. */
-  private iconFor(itemType: string, fallback: string): string {
-    return EQUIPMENT_MAP[itemType]?.icon ?? fallback
+  /** Item icon — each item carries its own rolled icon now. */
+  private iconFor(_itemType: string, fallback: string): string {
+    return fallback
   }
 
   // ── Row drawers ───────────────────────────────────────────────────────────
@@ -829,7 +819,7 @@ export class MarketScene extends Phaser.Scene {
       id: item.id, itemType: item.itemType, name: item.name, icon: item.icon,
       rarity: item.rarity, slot: this.slotOf(item) ?? '',
       stats: { ...(item.stats as Record<string, number | undefined>) } as Record<string, number>,
-      attributes: EQUIPMENT_MAP[item.itemType]?.attributes,
+      attributes: item.attributes,
     }
     this.drawRowFrame(
       this.iconFor(item.itemType, item.icon), item.rarity, item.name, rarName, this.bonusSummary(dataForModal), y,

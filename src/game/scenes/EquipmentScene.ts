@@ -18,7 +18,7 @@ import {
   type ClientPlayerInventory,
 } from '../systems/InventoryStore'
 import { StatsStore, type ClientStats, type ClientStatRow } from '../systems/StatsStore'
-import { EQUIPMENT_MAP, type EquipSlot } from '../data/equipmentGen'
+import type { EquipSlot } from '../data/equipmentGen'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -77,9 +77,9 @@ const LEGACY_ITEM_SLOT: Record<string, SlotKey> = {
   winged_boots:    'shoes',
 }
 
-/** True when a bag item is equippable (generated gear OR known legacy gear). */
-function isEquippable(itemType: string): boolean {
-  return !!EQUIPMENT_MAP[itemType] || !!LEGACY_ITEM_SLOT[itemType]
+/** True when a bag item is equippable (crafted gear OR known legacy gear). */
+function isEquippable(item: ClientInventoryItem): boolean {
+  return !!item.equipSlot || !!LEGACY_ITEM_SLOT[item.itemType]
 }
 
 // Paper-doll layout: the wizard sits in the centre, slots flank it in two
@@ -259,7 +259,7 @@ export class EquipmentScene extends Phaser.Scene {
   private applyInventory(inv: ClientPlayerInventory) {
     this.equipped = (inv.equipment ?? {}) as Partial<Record<SlotKey, ClientInventoryItem>>
     // Both generated gear (equipmentGen) AND legacy ItemDatabase gear are equippable.
-    this.gearItems = (inv.items ?? []).filter(i => isEquippable(i.itemType))
+    this.gearItems = (inv.items ?? []).filter(i => isEquippable(i))
     if (this.selectedItem && !this.gearItems.some(i => i.id === this.selectedItem!.id)) {
       this.selectedItem = null
     }
@@ -284,16 +284,14 @@ export class EquipmentScene extends Phaser.Scene {
 
   /** Display-only: which slot a bag item would land in (server decides the real one). */
   private slotForItem(item: ClientInventoryItem): SlotKey | null {
-    const catalog = EQUIPMENT_MAP[item.itemType]
-    if (catalog) return EQUIP_SLOT_TO_KEY[catalog.slot]
+    if (item.equipSlot) return EQUIP_SLOT_TO_KEY[item.equipSlot as EquipSlot]
     return LEGACY_ITEM_SLOT[item.itemType] ?? null
   }
 
-  /** Short human-readable bonus summary for a bag item (generated or legacy). */
+  /** Short human-readable bonus summary for a bag item (crafted or legacy). */
   private itemBonusSummary(item: ClientInventoryItem): string {
-    const gen = EQUIPMENT_MAP[item.itemType]
-    if (gen) {
-      return gen.attributes
+    if (item.attributes && item.attributes.length) {
+      return item.attributes
         .map(a => `+${a.value} ${this.attrLabel(a.type)}`)
         .join('  ')
     }
@@ -304,12 +302,9 @@ export class EquipmentScene extends Phaser.Scene {
       .join('  ')
   }
 
-  /** Display icon for an item — preferring the live catalogue icon for
-   *  generated gear so emoji fixes apply even to already-owned items (whose
-   *  snapshot may carry a stale/unsupported glyph), falling back to the
-   *  item's own icon for legacy gear. */
+  /** Display icon for an item (its own rolled icon). */
   private displayIcon(item: ClientInventoryItem): string {
-    return EQUIPMENT_MAP[item.itemType]?.icon ?? item.icon
+    return item.icon
   }
 
   /** Pretty label for a generated-item attribute type. */
@@ -703,12 +698,11 @@ export class EquipmentScene extends Phaser.Scene {
     )
 
     // Text info
-    const catalog    = EQUIPMENT_MAP[item.itemType]
     const slotKey    = this.slotForItem(item)
     const rarName    = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
     const rarHex     = rarCol.toString(16).padStart(6, '0')
     const slotLabel  = slotKey ? SLOT_LABELS[slotKey] : item.itemType
-    const xpNote     = catalog && catalog.xpRequired > 0 ? `  ·  needs ${catalog.xpRequired} XP` : ''
+    const xpNote     = (item.xpRequired ?? 0) > 0 ? `  ·  needs ${item.xpRequired} XP` : ''
     const nameText   = this.add.text(rowX + 70, rowY + 9,  item.name, {
       fontSize: '14px', fontFamily: 'Georgia, serif', color: '#dde0ff', fontStyle: 'bold',
     })

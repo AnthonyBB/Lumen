@@ -30,7 +30,6 @@ import {
   ROAD, ROAD_GRASS_TINT,
 } from '../data/tileFrames'
 import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
-import { EQUIPMENT_MAP } from '../data/equipmentGen'
 import { StatsStore } from '../systems/StatsStore'
 
 // ── World dimensions ────────────────────────────────────────────────────────
@@ -683,12 +682,11 @@ export class BiomeScene extends Phaser.Scene {
   /** Floating tooltip with an item's rarity, slot and attribute bonuses. */
   private showRewardTooltip(it: RewardItem, x: number, y: number) {
     this.hideRewardTooltip()
-    const gen = it.itemType ? EQUIPMENT_MAP[it.itemType] : undefined
+    // Campaign rewards are crafting materials / shards now — they carry no gear
+    // attributes, so the tooltip just shows the name + rarity tier.
     const rar = it.rarity.charAt(0).toUpperCase() + it.rarity.slice(1)
-    const sub = gen ? `${rar}  ·  ${gen.slot}` : rar
-    const attrs = gen && gen.attributes.length
-      ? gen.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`).join('\n')
-      : 'No bonuses'
+    const sub = rar
+    const attrs = ''
 
     const c = this.add.container(0, 0).setDepth(210).setScrollFactor(0)
     const name = this.add.text(0, 0, it.name, {
@@ -723,10 +721,6 @@ export class BiomeScene extends Phaser.Scene {
   private hideRewardTooltip() {
     this.rewardTooltip?.destroy()
     this.rewardTooltip = null
-  }
-
-  private attrLabel(type: string): string {
-    return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
   }
 
   private truncate(s: string, max: number): string {

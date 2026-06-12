@@ -39,7 +39,7 @@ import type {
   ItemRarity,
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
-import { EQUIPMENT_MAP, ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
+import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
 import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
 import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
@@ -840,24 +840,25 @@ export function registerHandlers(
     }
 
     // Resolve the destination slot + name, supporting BOTH item models:
-    //  • Generated gear (EQUIPMENT_MAP) — server-derived slot + XP gate.
+    //  • Crafted gear — carries its own equipSlot + tier-derived XP gate on the
+    //    instance (rolled server-side at craft time; see CraftSessionManager).
     //  • Legacy ItemDatabase gear (worn_sword, etc.) — its catalogue slot, no
     //    XP gate.  Its {attack,defense,hp} stats fold into derived stats during
     //    stat computation (see PlayerManager.computeStats).
     let slotKey: EquipmentSlotKey;
     let label: string;
 
-    const catalogItem = EQUIPMENT_MAP[bagItem.itemType];
-    if (catalogItem) {
-      // XP gate — enforced server-side; player.xp is server-authoritative
-      if (player.xp < catalogItem.xpRequired) {
+    if (bagItem.equipSlot) {
+      // XP gate — enforced server-side; player.xp is server-authoritative.
+      const need = bagItem.xpRequired ?? 0;
+      if (player.xp < need) {
         socket.emit('error', {
-          message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
+          message: `You need ${need} XP to equip ${bagItem.name} (you have ${player.xp}). Keep adventuring!`,
         });
         return;
       }
-      slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
-      label = catalogItem.name;
+      slotKey = EQUIP_SLOT_TO_KEY[bagItem.equipSlot];
+      label = bagItem.name;
     } else {
       const legacySlot = getItemSlot(bagItem.itemType);
       if (!legacySlot) {

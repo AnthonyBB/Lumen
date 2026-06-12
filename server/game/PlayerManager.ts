@@ -19,7 +19,7 @@ import type {
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
-import { EQUIPMENT_MAP, type AttributeType } from './data/equipmentGen.js';
+import type { AttributeType } from './data/equipmentGen.js';
 
 /** Round to one decimal place (keeps percent-style stats readable). */
 function round1(n: number): number {
@@ -701,9 +701,10 @@ export class PlayerManager {
 
     for (const item of Object.values(equipment)) {
       if (!item) continue;
-      const generated = EQUIPMENT_MAP[item.itemType];
-      if (generated) {
-        for (const a of generated.attributes) {
+      // Crafted gear carries its rolled attributes on the instance (set
+      // server-side at craft time). These are the authoritative stat source.
+      if (item.attributes && item.attributes.length) {
+        for (const a of item.attributes) {
           const t = a.type as AttributeType;
           if ((ATTRIBUTE_KEYS as readonly string[]).includes(t)) {
             attrGear[t as AttributeKey] += a.value;

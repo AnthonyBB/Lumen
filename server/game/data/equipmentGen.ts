@@ -58,34 +58,6 @@ export interface ItemAttribute {
   value: number
 }
 
-export interface EquipmentItem {
-  id: string               // deterministic, e.g. 'eq_0042'
-  name: string
-  slot: EquipSlot
-  classes: SkillClass[]    // which classes can equip
-  rarity: Rarity
-  attributes: ItemAttribute[]
-  xpRequired: number       // XP the player must have earned to equip
-  icon: string             // single emoji
-  description: string      // one kid-friendly sentence
-}
-
-// ------------------------------------------------------------
-// Seeded PRNG — mulberry32 (do not change the seed!)
-// ------------------------------------------------------------
-
-const SEED = 0x4c554d45 // 'LUME'
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0
-  return function () {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 // ------------------------------------------------------------
 // Static part lists
@@ -364,11 +336,6 @@ const ATTR_POWER_WEIGHT: Record<AttributeType, number> = {
 
 const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary']
 
-/** Cumulative roll thresholds: 40 / 30 / 18 / 9 / 3. */
-const RARITY_THRESHOLDS: [Rarity, number][] = [
-  ['common', 0.40], ['uncommon', 0.70], ['rare', 0.88], ['epic', 0.97], ['legendary', 1.0],
-]
-
 const RARITY_ATTR_COUNT: Record<Rarity, [number, number]> = {
   common: [0, 1], uncommon: [1, 2], rare: [2, 3], epic: [3, 4], legendary: [4, 5],
 }
@@ -388,14 +355,6 @@ function pick<T>(rng: () => number, arr: T[]): T {
 
 function rollInt(rng: () => number, min: number, max: number): number {
   return min + Math.floor(rng() * (max - min + 1))
-}
-
-function rollRarity(rng: () => number): Rarity {
-  const r = rng()
-  for (const [rarity, threshold] of RARITY_THRESHOLDS) {
-    if (r < threshold) return rarity
-  }
-  return 'legendary'
 }
 
 /** Pick a weighted attribute type, excluding already-chosen types. */
@@ -435,13 +394,6 @@ function rollAttributes(rng: () => number, pool: WeightedAttr[], rarity: Rarity)
     attrs.push({ type, value })
   }
   return attrs
-}
-
-// Gear no longer carries an XP requirement to equip — every item is usable as
-// soon as it's owned. The field is kept (always 0) for catalog/pricing shape
-// compatibility; the equip gate in the socket handler is now a no-op.
-function computeXpRequired(_attrs: ItemAttribute[], _rarity: Rarity): number {
-  return 0
 }
 
 /** Order an item's attributes by power (value × weight), strongest first.
@@ -528,82 +480,76 @@ function buildDescription(
   return pick(rng, templates)
 }
 
-/** Roman numeral helper for de-duplicating colliding names. */
-function toRoman(n: number): string {
-  const numerals: [number, string][] = [
-    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
-  ]
-  let out = ''
-  for (const [v, s] of numerals) {
-    while (n >= v) { out += s; n -= v }
-  }
-  return out
+// ------------------------------------------------------------
+// Craft-time roller
+// ------------------------------------------------------------
+//
+// Items are no longer baked into a fixed catalog — each one is rolled when it
+// is crafted (server-side, in CraftSessionManager) and then carries its own
+// attributes/slot/xpRequired on the persisted inventory instance. The
+// prefix/suffix name system and attribute pools above are reused as-is.
+
+/** A freshly-rolled item. It has no catalog id — the bag assigns a UUID. */
+export interface CraftedItem {
+  name: string
+  slot: EquipSlot
+  rarity: Rarity
+  attributes: ItemAttribute[]
+  xpRequired: number
+  icon: string
+  description: string
 }
 
-// ------------------------------------------------------------
-// Main generator
-// ------------------------------------------------------------
+/** XP required to equip an item rolled from a given metal tier (1–7). Low tiers
+ *  are ungated so a fresh hero can use starter/early gear; it ramps with tier. */
+const XP_REQUIRED_BY_TIER = [0, 0, 0, 600, 1800, 4200, 8500, 15000]
 
-const ITEMS_PER_CLASS = 70   // 13 × 70 = 910 themed items
-const GENERIC_COUNT = 90     // + 90 any-class items = 1000
-
-export function generateEquipment(): EquipmentItem[] {
-  const rng = mulberry32(SEED)
-  const items: EquipmentItem[] = []
-  const nameCounts = new Map<string, number>()
-  let index = 0
-
-  // Round-robin slots within each class block guarantees every slot
-  // appears for every class (70 items / 8 slots ≥ 8 each).
-  function buildItem(cls: SkillClass | null, slot: EquipSlot): EquipmentItem {
-    const rarity = rollRarity(rng)
-    const pool = cls ? CLASS_ATTR_POOL[cls] : GENERIC_ATTR_POOL
-    const attributes = rollAttributes(rng, pool, rarity)
-    const xpRequired = computeXpRequired(attributes, rarity)
-
-    let name = buildName(rng, slot, rarity, cls, attributes)
-    const seen = nameCounts.get(name) ?? 0
-    nameCounts.set(name, seen + 1)
-    if (seen > 0) name = `${name} ${toRoman(seen + 1)}`
-
-    const icon = slot === 'weapon'
-      ? (cls ? WEAPON_ICON[cls] : '🗡️')
-      : SLOT_ICON[slot]
-
-    const item: EquipmentItem = {
-      id: `eq_${String(index).padStart(4, '0')}`,
-      name,
-      slot,
-      classes: cls ? [cls] : [...CLASSES],
-      rarity,
-      attributes,
-      xpRequired,
-      icon,
-      description: buildDescription(rng, slot, rarity, cls),
-    }
-    index++
-    return item
-  }
-
-  // 910 class-themed items, slots round-robin per class
-  for (const cls of CLASSES) {
-    for (let i = 0; i < ITEMS_PER_CLASS; i++) {
-      items.push(buildItem(cls, SLOTS[i % SLOTS.length]))
-    }
-  }
-
-  // 90 generic any-class items
-  for (let i = 0; i < GENERIC_COUNT; i++) {
-    items.push(buildItem(null, SLOTS[i % SLOTS.length]))
-  }
-
-  return items
+export function tierXpRequired(tier: number): number {
+  return XP_REQUIRED_BY_TIER[Math.max(1, Math.min(MAX_GEN_TIER, tier))] ?? 0
 }
 
-export const ALL_EQUIPMENT: EquipmentItem[] = generateEquipment()
+const MAX_GEN_TIER = 7
 
-export const EQUIPMENT_MAP: Record<string, EquipmentItem> = Object.fromEntries(
-  ALL_EQUIPMENT.map((item) => [item.id, item]),
-)
+export interface RollOptions {
+  slot: EquipSlot
+  /** Equipment class for flavour/naming/attribute pool, or null for any-class. */
+  cls: SkillClass | null
+  rarity: Rarity
+  /** Material tier (1–7) — scales attribute magnitude + the equip XP gate. */
+  tier: number
+  /** Quiz accuracy 0..1 — nudges the stat rolls within the rarity band. */
+  quizQuality: number
+}
 
-export { RARITY_ORDER, CLASSES as EQUIPMENT_CLASSES, SLOTS as EQUIPMENT_SLOTS }
+/**
+ * Roll one item. Uses Math.random (every craft is unique). Attribute magnitudes
+ * scale with the metal tier and, within the rarity band, with quiz quality.
+ */
+export function rollCraftedItem(opts: RollOptions): CraftedItem {
+  const rng = Math.random
+  const { slot, cls, rarity, tier, quizQuality } = opts
+  const pool = cls ? CLASS_ATTR_POOL[cls] : GENERIC_ATTR_POOL
+  const attributes = rollAttributes(rng, pool, rarity)
+
+  const tierMult = 1 + (Math.max(1, tier) - 1) * 0.5        // tier1 ×1 … tier7 ×4
+  const qualityMult = 0.85 + Math.max(0, Math.min(1, quizQuality)) * 0.3 // 0.85 … 1.15
+  for (const a of attributes) {
+    let v = Math.round(a.value * tierMult * qualityMult)
+    const cap = ATTR_CAP[a.type]
+    if (cap !== undefined) v = Math.min(v, cap)
+    a.value = Math.max(1, v)
+  }
+
+  const icon = slot === 'weapon' ? (cls ? WEAPON_ICON[cls] : '🗡️') : SLOT_ICON[slot]
+  return {
+    name: buildName(rng, slot, rarity, cls, attributes),
+    slot,
+    rarity,
+    attributes,
+    xpRequired: tierXpRequired(tier),
+    icon,
+    description: buildDescription(rng, slot, rarity, cls),
+  }
+}
+
+export { RARITY_ORDER }

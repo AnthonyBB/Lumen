@@ -7,12 +7,7 @@
 // chosen items are added straight to the player's server-side inventory.
 // ============================================================
 
-import {
-  EQUIPMENT_MAP,
-  RARITY_ORDER,
-  type EquipmentItem,
-  type Rarity,
-} from './data/equipmentGen.js';
+import type { Rarity } from './data/equipmentGen.js';
 import {
   METAL_BY_TIER, REAGENT_BY_TIER, CATALYST_BY_RARITY, MAX_TIER,
 } from './data/materials.js';
@@ -21,18 +16,6 @@ import {
 export type Difficulty = 'beginner' | 'easy' | 'medium' | 'hard' | 'expert';
 
 export const DIFFICULTIES: Difficulty[] = ['beginner', 'easy', 'medium', 'hard', 'expert'];
-
-// Lazily index the 1000-item catalog by rarity (built once on first roll).
-let byRarity: Record<Rarity, EquipmentItem[]> | null = null;
-function itemsByRarity(): Record<Rarity, EquipmentItem[]> {
-  if (byRarity) return byRarity;
-  const map: Record<Rarity, EquipmentItem[]> = {
-    common: [], uncommon: [], rare: [], epic: [], legendary: [],
-  };
-  for (const item of Object.values(EQUIPMENT_MAP)) map[item.rarity].push(item);
-  byRarity = map;
-  return map;
-}
 
 const DIFF_IDX: Record<Difficulty, number> = {
   beginner: 0, easy: 1, medium: 2, hard: 3, expert: 4,
@@ -74,46 +57,6 @@ function pickRarity(difficulty: Difficulty): Rarity {
     if (r <= 0) return rarity;
   }
   return 'common';
-}
-
-/** Random item of a rarity, falling back to the nearest lower tier with stock. */
-function pickItemOfRarity(rarity: Rarity): EquipmentItem | null {
-  const pools = itemsByRarity();
-  const idx = RARITY_ORDER.indexOf(rarity);
-  for (let i = idx; i >= 0; i--) {
-    const pool = pools[RARITY_ORDER[i]];
-    if (pool && pool.length) return pool[Math.floor(Math.random() * pool.length)];
-  }
-  return null;
-}
-
-/**
- * Roll combat loot for a victory.
- *  - Per encounter: a small-to-medium chance of a single item.
- *  - Campaign completion (whole biome cleared): a guaranteed, sizeable reward —
- *    several items with a boosted rarity distribution.
- * Everything scales with enemy `level` and biome `difficulty`.
- */
-export function rollCombatDrops(
-  level: number,
-  difficulty: Difficulty,
-  campaignComplete: boolean,
-): EquipmentItem[] {
-  const drops: EquipmentItem[] = [];
-
-  if (campaignComplete) {
-    // 2 (easy) → 4 (hard), +1 for high-level biomes.
-    const count = 2 + DIFF_IDX[difficulty] + (level >= 60 ? 1 : 0);
-    for (let i = 0; i < count; i++) {
-      const it = pickItemOfRarity(pickRarity(difficulty));
-      if (it) drops.push(it);
-    }
-  } else if (Math.random() < dropChance(level, difficulty)) {
-    const it = pickItemOfRarity(pickRarity(difficulty));
-    if (it) drops.push(it);
-  }
-
-  return drops;
 }
 
 // ── Material drops (the new campaign reward — see docs/CRAFTING_DESIGN.md) ─────

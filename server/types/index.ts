@@ -327,6 +327,8 @@ export interface ErrorPayload {
 // Inventory
 // ---------------------------------------------------------------------------
 
+import type { ItemAttribute, EquipSlot } from '../game/data/equipmentGen.js';
+
 export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 export type EquipmentSlotKey =
   | 'mainHand'
@@ -365,6 +367,12 @@ export interface InventoryItem {
   /** Present on brewed potions (Alchemy Lab): what the potion does + how much.
    *  `restore` affects both HP and MP. Combat auto-use is wired separately. */
   potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
+  /** Present on crafted/equippable gear (rolled at craft time, server-side):
+   *  where it equips, its rolled attributes, and the XP needed to equip it.
+   *  These are the authoritative source for stats — the client never sets them. */
+  equipSlot?: EquipSlot;
+  attributes?: ItemAttribute[];
+  xpRequired?: number;
   /** Absolute position (0-based) when stored in a chest, so the chest can hold
    *  items at specific tab/slot positions rather than packed from the start.
    *  Unset for bag items. */

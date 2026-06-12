@@ -22,9 +22,8 @@ import { TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
 import { RECIPE_MAP, isAlchemy, type Recipe } from './data/recipes.js';
 import { METAL_BY_TIER, REAGENT_BY_TIER, MATERIALS, MAX_TIER } from './data/materials.js';
 import {
-  EQUIPMENT_MAP,
+  rollCraftedItem,
   RARITY_ORDER,
-  type EquipmentItem,
   type Rarity,
 } from './data/equipmentGen.js';
 
@@ -282,15 +281,30 @@ export class CraftSessionManager {
     };
   }
 
-  /** Forge a weapon/armor item from EQUIPMENT_MAP. */
+  /**
+   * Forge a weapon/armor item by ROLLING it at craft time (server-side). The
+   * catalyst sets the MAX rarity; quiz accuracy can downgrade it and also nudges
+   * the stat magnitudes within the band. The rolled attributes/slot/xpRequired
+   * live on the item instance — they are the authoritative stat source.
+   */
   private forgeGear(recipe: Recipe, tier: number, maxRarity: Rarity, accuracy: number):
     { inv: InventoryItem; label: string; success: string } | null {
-    const rolled = this.rollItem(recipe, tier, maxRarity, accuracy);
-    if (!rolled) return null;
+    const steps = accuracy >= 0.8 ? 0 : accuracy >= 0.6 ? 1 : 2;
+    const rarity = RARITY_ORDER[Math.max(0, RARITY_ORDER.indexOf(maxRarity) - steps)];
+    const slot = recipe.weaponClass ? 'weapon' : recipe.armorSlot;
+    if (!slot) return null;
+
+    const rolled = rollCraftedItem({
+      slot,
+      cls: recipe.weaponClass ?? null,
+      rarity,
+      tier,
+      quizQuality: accuracy,
+    });
     return {
       inv: {
         id: randomUUID(),
-        itemType: rolled.id, // eq_NNNN — EQUIPMENT_MAP key for equip/stat lookups
+        itemType: `gear_${slot}`, // descriptive; gear is non-stackable so it need not be unique
         name: rolled.name,
         description: rolled.description,
         rarity: rolled.rarity,
@@ -298,6 +312,9 @@ export class CraftSessionManager {
         quantity: 1,
         stackable: false,
         icon: rolled.icon,
+        equipSlot: rolled.slot,
+        attributes: rolled.attributes,
+        xpRequired: rolled.xpRequired,
       },
       label: rolled.name,
       success: `You crafted a ${rolled.rarity} ${rolled.name}.`,
@@ -338,42 +355,6 @@ export class CraftSessionManager {
       label: name,
       success: `You brewed ${qty}× ${rarity} ${name} (restores ${power}).`,
     };
-  }
-
-  /**
-   * Pick an item from EQUIPMENT_MAP matching the recipe (a weapon of its class,
-   * or armor of its slot) at the achieved rarity. The catalyst sets the MAX
-   * rarity; quiz accuracy can downgrade it. Within the matching pool the metal
-   * TIER selects the item-level band (by xpRequired).
-   */
-  private rollItem(
-    recipe: Recipe,
-    tier: number,
-    maxRarity: Rarity,
-    accuracy: number,
-  ): EquipmentItem | null {
-    const steps = accuracy >= 0.8 ? 0 : accuracy >= 0.6 ? 1 : 2;
-    const targetIdx = Math.max(0, RARITY_ORDER.indexOf(maxRarity) - steps);
-
-    // Weapon recipes match a class on the 'weapon' slot; armor recipes match the
-    // recipe's slot (any class).
-    const matches = (it: EquipmentItem): boolean =>
-      recipe.weaponClass
-        ? it.slot === 'weapon' && it.classes.includes(recipe.weaponClass)
-        : it.slot === recipe.armorSlot;
-
-    // Try the achieved rarity, then fall back to the nearest lower rarity in stock.
-    for (let i = targetIdx; i >= 0; i--) {
-      const pool = Object.values(EQUIPMENT_MAP).filter(
-        (it) => matches(it) && it.rarity === RARITY_ORDER[i],
-      );
-      if (pool.length === 0) continue;
-      pool.sort((a, b) => a.xpRequired - b.xpRequired);
-      // Map tier 1..MAX_TIER onto the sorted pool so higher tier = higher level.
-      const band = Math.floor(((tier - 1) / (MAX_TIER - 1)) * (pool.length - 1));
-      return pool[Math.min(pool.length - 1, Math.max(0, band))];
-    }
-    return null;
   }
 
   getSession(sessionId: string): CraftSession | undefined {

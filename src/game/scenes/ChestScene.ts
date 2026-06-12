@@ -12,7 +12,6 @@ import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import type { ClientInventoryItem } from '../systems/InventoryStore'
-import { EQUIPMENT_MAP } from '../data/equipmentGen'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -715,15 +714,14 @@ export class ChestScene extends Phaser.Scene {
   private showItemDetails(item: ClientInventoryItem, x: number, y: number) {
     this.hideItemDetails()
 
-    const gen = EQUIPMENT_MAP[item.itemType]
     const rarCol = RARITY_COLOR[item.rarity] ?? RARITY_COLOR.common
     const rarHex = rarCol.toString(16).padStart(6, '0')
     const rarName = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
-    const slot = gen?.slot ?? ''
+    const slot = item.equipSlot ?? ''
 
     let bonuses: string
-    if (gen && gen.attributes.length) {
-      bonuses = gen.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`).join('\n')
+    if (item.attributes && item.attributes.length) {
+      bonuses = item.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`).join('\n')
     } else {
       const raw = Object.entries(item.stats ?? {})
         .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)

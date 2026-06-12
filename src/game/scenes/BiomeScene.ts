@@ -243,12 +243,16 @@ export class BiomeScene extends Phaser.Scene {
     // Bend each diagonal leg into a right angle by inserting a corner node, so
     // the path reads as straight axis-aligned segments (which the road pack
     // autotiles cleanly) while staying winding.  The auto-walker follows the
-    // corners, so movement still tracks the drawn road.  H-first vs V-first is
-    // seeded, keeping the per-biome route deterministic but varied.
+    // corners, so movement still tracks the drawn road.  The corner is always
+    // placed VERTICAL-first: because the campaign climbs upward toward the
+    // enemies, walking the vertical leg first always heads TOWARD the next
+    // encounter, then a short horizontal leg aligns onto the node — instead of
+    // randomly wandering sideways (sometimes away from the mobs) first.
     this.pathNodes = this.insertPathCorners(this.pathNodes)
   }
 
-  /** Insert an axis-aligned corner between any two diagonally-offset nodes. */
+  /** Insert an axis-aligned corner between any two diagonally-offset nodes,
+   *  always vertical-first so the walker advances toward the next node first. */
   private insertPathCorners(nodes: PathNode[]): PathNode[] {
     const out: PathNode[] = []
     for (let i = 0; i < nodes.length; i++) {
@@ -257,10 +261,11 @@ export class BiomeScene extends Phaser.Scene {
       const b = nodes[i + 1]
       if (!b) break
       if (a.x === b.x || a.y === b.y) continue   // already straight — no corner
-      const hFirst = this.rng.frac() < 0.5
+      // Corner shares a.x then b.y → walk the vertical (toward-the-enemy) leg
+      // first, then the horizontal alignment leg.
       out.push({
-        x: hFirst ? b.x : a.x,
-        y: hFirst ? a.y : b.y,
+        x: a.x,
+        y: b.y,
         type: 'walk', cleared: false,
         markerGfx: null, markerLabel: null, markerSprite: null,
       })

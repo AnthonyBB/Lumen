@@ -1,10 +1,16 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import { WEAPON_RECIPES, type WeaponRecipe } from '../data/recipes'
+import { recipesFor, type Recipe, type CraftBuilding } from '../data/recipes'
 import {
   MATERIALS, METAL_BY_TIER, MAX_TIER, CATALYSTS, type Material,
 } from '../data/materials'
+
+/** Per-building UI flavour. */
+const BUILDING_UI: Record<CraftBuilding, { title: string; prompt: string; subject: string }> = {
+  forge:  { title: '🔥  THE  FORGE',  prompt: 'Choose a weapon to forge', subject: 'Math' },
+  armory: { title: '🛡️  THE  ARMORY', prompt: 'Choose armor to craft',    subject: 'Science' },
+}
 
 /** Client view of a craft-quiz question (server strips the correct index). */
 interface CraftQuestion {
@@ -29,19 +35,24 @@ const RARITY_COLOR: Record<string, string> = {
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII']
 
 /**
- * The Forge — craft a weapon by answering a short Math quiz. The server owns the
- * questions, material spend and item roll (see CraftSessionManager); this scene
- * only collects the player's recipe/tier/catalyst choices and renders the quiz.
+ * A crafting building — forge a weapon or craft armor by answering a short quiz.
+ * The server owns the questions, material spend and item roll (see
+ * CraftSessionManager); this scene only collects the player's recipe/tier/
+ * catalyst choices and renders the quiz. The `building` launch param selects
+ * which recipes + subject + chrome are shown (Forge = Math, Armory = Science).
  */
-export class ForgeScene extends Phaser.Scene {
+export class CraftScene extends Phaser.Scene {
   private socket: Socket | null = null
   private content!: Phaser.GameObjects.Container
   private feedback!: Phaser.GameObjects.Text
 
+  private building: CraftBuilding = 'forge'
+  private recipes: Recipe[] = []
+
   private materials: Record<string, number> = {}
   private state: 'select' | 'quiz' | 'result' = 'select'
 
-  private selectedRecipe: WeaponRecipe = WEAPON_RECIPES[0]
+  private selectedRecipe!: Recipe
   private selectedTier = 1
   private selectedCatalystId: string | null = null
 
@@ -51,7 +62,16 @@ export class ForgeScene extends Phaser.Scene {
   private lastResult: CraftResult | null = null
 
   constructor() {
-    super({ key: 'ForgeScene' })
+    super({ key: 'CraftScene' })
+  }
+
+  init(data: { building?: CraftBuilding }) {
+    this.building = data?.building ?? 'forge'
+    this.recipes = recipesFor(this.building)
+    this.selectedRecipe = this.recipes[0]
+    this.state = 'select'
+    this.selectedTier = 1
+    this.selectedCatalystId = null
   }
 
   create() {
@@ -138,7 +158,7 @@ export class ForgeScene extends Phaser.Scene {
     hg.fillRect(0, 0, GAME_WIDTH, 56)
     hg.lineStyle(2, 0xff8a50, 1)
     hg.lineBetween(0, 56, GAME_WIDTH, 56)
-    this.add.text(GAME_WIDTH / 2, 28, '🔥  THE  FORGE', {
+    this.add.text(GAME_WIDTH / 2, 28, BUILDING_UI[this.building].title, {
       fontSize: '22px', color: '#ffcc80', fontStyle: 'bold',
     }).setOrigin(0.5)
     this.add.text(24, 28, 'ESC  Close', { fontSize: '14px', color: '#bcaaa4' }).setOrigin(0, 0.5)
@@ -156,14 +176,14 @@ export class ForgeScene extends Phaser.Scene {
   private renderSelect() {
     const cx = GAME_WIDTH / 2
 
-    this.content.add(this.label(cx, 78, 'Choose a weapon to forge', '16px', '#d7ccc8').setOrigin(0.5))
+    this.content.add(this.label(cx, 78, BUILDING_UI[this.building].prompt, '16px', '#d7ccc8').setOrigin(0.5))
 
     // Recipe cards row.
-    const n = WEAPON_RECIPES.length
+    const n = this.recipes.length
     const cardW = 120, gap = 16
     const totalW = n * cardW + (n - 1) * gap
     let x = cx - totalW / 2
-    for (const r of WEAPON_RECIPES) {
+    for (const r of this.recipes) {
       const selected = r.id === this.selectedRecipe.id
       const card = this.card(x, 104, cardW, 110, selected)
       this.content.add(card)
@@ -226,7 +246,7 @@ export class ForgeScene extends Phaser.Scene {
     // Begin button.
     const canCraft = bestAffordable > 0
     y += 96
-    const btn = this.button(cx - 130, y, 260, 52, canCraft ? 'Begin Forging ⚒️' : 'Need more ore', canCraft, () => {
+    const btn = this.button(cx - 130, y, 260, 52, canCraft ? 'Begin Crafting ⚒️' : 'Need more ore', canCraft, () => {
       this.feedback.setText('')
       this.socket?.emit('craft:start', {
         recipeId: this.selectedRecipe.id,
@@ -241,7 +261,7 @@ export class ForgeScene extends Phaser.Scene {
   private renderQuiz() {
     const cx = GAME_WIDTH / 2
     if (!this.question) return
-    this.content.add(this.label(cx, 90, `Forging a ${this.selectedRecipe.name}`, '15px', '#ffcc80', true).setOrigin(0.5))
+    this.content.add(this.label(cx, 90, `Crafting a ${this.selectedRecipe.name}  ·  ${BUILDING_UI[this.building].subject} quiz`, '15px', '#ffcc80', true).setOrigin(0.5))
 
     this.content.add(this.card(cx - 380, 120, 760, 90, false))
     this.content.add(this.label(cx, 165, this.question.question, '18px', '#ffffff').setOrigin(0.5).setWordWrapWidth(720))
@@ -279,7 +299,7 @@ export class ForgeScene extends Phaser.Scene {
     this.content.add(this.button(cx - 270, 470, 250, 52, 'Forge Again', true, () => {
       this.state = 'select'; this.feedback.setText(''); this.socket?.emit('materials:get'); this.render()
     }))
-    this.content.add(this.button(cx + 20, 470, 250, 52, 'Leave the Forge', true, () => this.closeScene()))
+    this.content.add(this.button(cx + 20, 470, 250, 52, 'Leave', true, () => this.closeScene()))
   }
 
   // ── Small UI helpers ─────────────────────────────────────────────────────────

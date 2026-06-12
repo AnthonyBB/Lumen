@@ -19,7 +19,7 @@ import type { PlayerManager } from './PlayerManager.js';
 import type { InventoryManager } from './InventoryManager.js';
 import type { Question, ClientQuestion, InventoryItem } from '../types/index.js';
 import { TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
-import { RECIPE_MAP, type WeaponRecipe } from './data/recipes.js';
+import { RECIPE_MAP, type Recipe } from './data/recipes.js';
 import { METAL_BY_TIER, MATERIALS, MAX_TIER } from './data/materials.js';
 import {
   EQUIPMENT_MAP,
@@ -39,7 +39,7 @@ interface MaterialCost {
 interface CraftSession {
   sessionId: string;
   playerId: string;
-  recipe: WeaponRecipe;
+  recipe: Recipe;
   tier: number;
   /** Catalyst material id chosen for this craft, or null for a common item. */
   catalystId: string | null;
@@ -94,7 +94,7 @@ export class CraftSessionManager {
   ) {}
 
   /** Metal (+ optional catalyst) a recipe/tier/catalyst combination costs. */
-  private costFor(recipe: WeaponRecipe, tier: number, catalystId: string | null): MaterialCost[] {
+  private costFor(recipe: Recipe, tier: number, catalystId: string | null): MaterialCost[] {
     const costs: MaterialCost[] = [{ materialId: METAL_BY_TIER[tier], qty: recipe.metalCost }];
     if (catalystId) costs.push({ materialId: catalystId, qty: 1 });
     return costs;
@@ -162,7 +162,7 @@ export class CraftSessionManager {
   }
 
   /** Gather up to CRAFT_QUESTION_COUNT questions for a subject at/under a grade. */
-  private pickQuestions(recipe: WeaponRecipe, grade: number): Question[] {
+  private pickQuestions(recipe: Recipe, grade: number): Question[] {
     for (let g = grade; g >= 1; g--) {
       const topics = TOPICS_BY_SUBJECT_GRADE[recipe.subject]?.[g] ?? [];
       // Shuffle the grade's topics so repeated crafts vary their subject matter.
@@ -245,9 +245,9 @@ export class CraftSessionManager {
 
     const catalystRarity = catalystId ? MATERIALS[catalystId]?.rarityGate ?? 'common' : 'common';
     const accuracy = score / total;
-    const rolled = this.rollWeapon(recipe.weaponClass, tier, catalystRarity, accuracy);
+    const rolled = this.rollItem(recipe, tier, catalystRarity, accuracy);
     if (!rolled) {
-      return { success: false, score, total, message: 'No matching weapon could be forged. Materials refunded.' , };
+      return { success: false, score, total, message: 'No matching item could be crafted. Materials refunded.' };
     }
 
     const item: InventoryItem = {
@@ -270,18 +270,19 @@ export class CraftSessionManager {
       total,
       item: { name: rolled.name, icon: rolled.icon, rarity: rolled.rarity },
       message: accuracy >= 0.8
-        ? `Masterwork! You forged a ${rolled.rarity} ${rolled.name}.`
-        : `You forged a ${rolled.rarity} ${rolled.name}. A cleaner quiz would temper a finer blade.`,
+        ? `Masterwork! You crafted a ${rolled.rarity} ${rolled.name}.`
+        : `You crafted a ${rolled.rarity} ${rolled.name}. A cleaner quiz would temper a finer piece.`,
     };
   }
 
   /**
-   * Pick a weapon from EQUIPMENT_MAP for the class at the achieved rarity.
-   * The catalyst sets the MAX rarity; quiz accuracy can downgrade it. Within the
-   * matching pool the metal TIER selects the item-level band (by xpRequired).
+   * Pick an item from EQUIPMENT_MAP matching the recipe (a weapon of its class,
+   * or armor of its slot) at the achieved rarity. The catalyst sets the MAX
+   * rarity; quiz accuracy can downgrade it. Within the matching pool the metal
+   * TIER selects the item-level band (by xpRequired).
    */
-  private rollWeapon(
-    weaponClass: WeaponRecipe['weaponClass'],
+  private rollItem(
+    recipe: Recipe,
     tier: number,
     maxRarity: Rarity,
     accuracy: number,
@@ -289,11 +290,17 @@ export class CraftSessionManager {
     const steps = accuracy >= 0.8 ? 0 : accuracy >= 0.6 ? 1 : 2;
     const targetIdx = Math.max(0, RARITY_ORDER.indexOf(maxRarity) - steps);
 
-    // Try the achieved rarity, then fall back to the nearest lower rarity that
-    // has weapons for this class.
+    // Weapon recipes match a class on the 'weapon' slot; armor recipes match the
+    // recipe's slot (any class).
+    const matches = (it: EquipmentItem): boolean =>
+      recipe.weaponClass
+        ? it.slot === 'weapon' && it.classes.includes(recipe.weaponClass)
+        : it.slot === recipe.armorSlot;
+
+    // Try the achieved rarity, then fall back to the nearest lower rarity in stock.
     for (let i = targetIdx; i >= 0; i--) {
       const pool = Object.values(EQUIPMENT_MAP).filter(
-        (it) => it.slot === 'weapon' && it.classes.includes(weaponClass) && it.rarity === RARITY_ORDER[i],
+        (it) => matches(it) && it.rarity === RARITY_ORDER[i],
       );
       if (pool.length === 0) continue;
       pool.sort((a, b) => a.xpRequired - b.xpRequired);

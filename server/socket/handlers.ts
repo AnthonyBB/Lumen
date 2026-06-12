@@ -49,6 +49,13 @@ import {
   type MarketListing,
 } from '../game/MarketManager.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
+import { User } from '../db/models/User.js';
+import {
+  ageFromDateOfBirth,
+  defaultRankForAge,
+  ADVENTURE_RANKS,
+  RANK_MAP,
+} from '../game/data/adventureRanks.js';
 import { randomUUID } from 'crypto';
 import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
 import {
@@ -210,6 +217,33 @@ export function registerHandlers(
     pushCurrency();
   })
 
+  // ── Adventure rank — the grade band the player is served questions from ────
+  //
+  // The player may freely choose any rank (it is NOT age-gated — only the
+  // initial default is derived from age). Server-authoritative: the chosen rank
+  // gates which curriculum grades the player's quizzes draw from.
+  const pushAdventureRank = (): void => {
+    socket.emit('adventureRank:data', {
+      rankId: playerManager.getAdventureRank(socket.id),
+      ranks: ADVENTURE_RANKS.map((r) => ({
+        id: r.id, name: r.name, minGrade: r.minGrade, maxGrade: r.maxGrade,
+      })),
+    });
+  };
+  socket.on('adventureRank:get', () => {
+    if (!requireJoinedPlayer('You must join before viewing your rank.')) return;
+    pushAdventureRank();
+  });
+  socket.on('adventureRank:set', (payload: { rankId?: unknown }) => {
+    if (typeof payload?.rankId !== 'string' || !RANK_MAP[payload.rankId]) {
+      socket.emit('error', { message: 'Unknown adventure rank.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join before setting your rank.')) return;
+    playerManager.setAdventureRank(socket.id, payload.rankId);
+    pushAdventureRank();
+  });
+
   // ── stats:get — Character / Equipment screens request the stat breakdown ──
   //
   // Read-only.  Recomputes attributes + derived combat stats from the player's
@@ -294,6 +328,25 @@ export function registerHandlers(
 
     // Restore persisted XP / level / shard-progress / shop unlocks
     playerManager.applyProgress(socket.id, savedProgress);
+
+    // Adventure Rank: if the player has never had a rank persisted, derive a
+    // sensible DEFAULT from their account age (server-authoritative) and persist
+    // it. Existing ranks are left untouched.
+    if (!savedProgress.rankPersisted) {
+      try {
+        const account = await User.findOne({ username }).lean();
+        if (account?.dateOfBirth) {
+          const rankId = defaultRankForAge(ageFromDateOfBirth(new Date(account.dateOfBirth)));
+          playerManager.setAdventureRank(socket.id, rankId);
+        } else {
+          // No DOB on file — keep the default rank but persist it so this branch
+          // does not re-run every join.
+          playerManager.setAdventureRank(socket.id, playerManager.getAdventureRank(socket.id));
+        }
+      } catch (err) {
+        console.error('[join] adventure-rank default error:', err);
+      }
+    }
 
     // Join the Socket.io room for this zone
     socket.join(player.zone);
@@ -508,6 +561,16 @@ export function registerHandlers(
     if (topic.grade !== currentGrade) {
       socket.emit('error', {
         message: `That topic is grade ${topic.grade}, but your current ${topic.subject} grade is ${currentGrade}.`,
+      });
+      return;
+    }
+
+    // Adventure Rank gate (server-authoritative) — the topic's grade must fall
+    // within the player's rank grade band. The client cannot widen its band.
+    const band = playerManager.getRankGradeBand(socket.id);
+    if (topic.grade < band.min || topic.grade > band.max) {
+      socket.emit('error', {
+        message: `That topic is grade ${topic.grade}, outside your adventure rank's grade band (${band.min}-${band.max}).`,
       });
       return;
     }

@@ -18,7 +18,6 @@ import type { QuestionEngine } from './QuestionEngine.js';
 import type { PlayerManager } from './PlayerManager.js';
 import type { InventoryManager } from './InventoryManager.js';
 import type { Question, ClientQuestion, InventoryItem } from '../types/index.js';
-import { TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
 import { RECIPE_MAP, isAlchemy, type Recipe } from './data/recipes.js';
 import { METAL_BY_TIER, REAGENT_BY_TIER, MATERIALS, MAX_TIER } from './data/materials.js';
 import {
@@ -155,11 +154,12 @@ export class CraftSessionManager {
       return { error: 'You do not have the materials for this craft.' };
     }
 
-    // Quiz drawn from the player's CURRENT grade in the recipe's subject so the
-    // craft difficulty always tracks the learner (adaptive). Fall back down the
-    // grades if the current grade's topics have no authored questions yet.
-    const grade = player.subjectGrades[recipe.subject];
-    const questions = this.pickQuestions(recipe, grade);
+    // Quiz drawn from the player's ADVENTURE RANK grade band in the recipe's
+    // subject (server-authoritative — the client cannot widen its band). The
+    // band spans several grades, so questions vary across the whole band rather
+    // than being pinned to the (currently frozen) per-subject grade.
+    const band = this.playerManager.getRankGradeBand(playerId);
+    const questions = this.pickQuestions(recipe.subject, band);
     if (questions.length === 0) {
       return { error: 'No crafting trials are available right now. Try another weapon.' };
     }
@@ -187,18 +187,27 @@ export class CraftSessionManager {
     };
   }
 
-  /** Gather up to CRAFT_QUESTION_COUNT questions for a subject at/under a grade. */
-  private pickQuestions(recipe: Recipe, grade: number): Question[] {
-    for (let g = grade; g >= 1; g--) {
-      const topics = TOPICS_BY_SUBJECT_GRADE[recipe.subject]?.[g] ?? [];
-      // Shuffle the grade's topics so repeated crafts vary their subject matter.
-      const order = [...topics].sort(() => Math.random() - 0.5);
-      for (const topic of order) {
-        const qs = this.questionEngine.getQuizQuestions(topic.id, CRAFT_QUESTION_COUNT);
-        if (qs.length >= CRAFT_QUESTION_COUNT) return qs;
-      }
+  /**
+   * Gather up to CRAFT_QUESTION_COUNT questions for a subject drawn from the
+   * player's adventure-rank grade band. Falls back to a NARROWER pool only as a
+   * graceful degradation when the band itself has too few authored questions:
+   *  1. the full band (preferred),
+   *  2. the band's top grade alone,
+   *  3. any single in-band grade that has questions.
+   * A craft still serves a (possibly shorter) quiz rather than failing outright.
+   */
+  private pickQuestions(subject: Recipe['subject'], band: { min: number; max: number }): Question[] {
+    // Preferred: pooled across the whole rank band.
+    const pooled = this.questionEngine.getQuizQuestionsForBand(subject, band.min, band.max, CRAFT_QUESTION_COUNT);
+    if (pooled.length >= CRAFT_QUESTION_COUNT) return pooled;
+
+    // Degrade gracefully: try in-band grades top-down for any non-empty pool.
+    for (let g = band.max; g >= band.min; g--) {
+      const qs = this.questionEngine.getQuizQuestionsForBand(subject, g, g, CRAFT_QUESTION_COUNT);
+      if (qs.length > 0) return qs;
     }
-    return [];
+    // Last resort — whatever the band yielded (may be 0).
+    return pooled;
   }
 
   /**

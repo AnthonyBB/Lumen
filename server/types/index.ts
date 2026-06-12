@@ -27,6 +27,9 @@ export interface Player {
   /** Current grade per subject (persisted), 1..12, or 13 (MASTERED_GRADE) when
    *  all 12 grades of a subject are complete. Subjects progress independently. */
   subjectGrades: Record<Subject, number>;
+  /** Adventure rank id (persisted) — gates which curriculum grade band the
+   *  player is served questions from. See game/data/adventureRanks.ts. */
+  adventureRank: string;
   /** topicId → number of quiz passes (persisted), 0..3. A topic is COMPLETE at 3. */
   topicPasses: Record<string, number>;
   /** Skill ids purchased with Skill Shards (persisted). */

@@ -168,6 +168,8 @@ export class BattleScene extends Phaser.Scene {
 
   /** Skills shown in the bar: basic Attack + server-confirmed purchases only. */
   private battleSkills: Skill[] = [BASIC_ATTACK]
+  /** Per-battle basic Attack — its damage range comes from the equipped weapon. */
+  private basicAttackSkill: Skill = BASIC_ATTACK
   private skillPage = 0
 
   // ── HUD refs ─────────────────────────────────────────────────────────────
@@ -208,6 +210,10 @@ export class BattleScene extends Phaser.Scene {
     this.playerMaxMana = Math.round(derived.find(r => r.key === 'mana')?.total ?? 0)
     this.manaRegen     = derived.find(r => r.key === 'manaRegen')?.total ?? 0
     this.playerMana    = this.playerMaxMana
+
+    // The basic Attack's damage range comes from the equipped weapon (level-
+    // scaled, with per-weapon variance), falling back to the bare-fists default.
+    this.basicAttackSkill = this.makeBasicAttack()
 
     this.loadOwnedSkills()
     this.buildMobs()
@@ -507,7 +513,14 @@ export class BattleScene extends Phaser.Scene {
       .map(id => SKILL_MAP[id])
       .filter((s): s is CombatSkill => !!s)
       .sort((a, b) => a.tier - b.tier)
-    this.battleSkills = [BASIC_ATTACK, ...owned.map(toBattleSkill)]
+    this.battleSkills = [this.basicAttackSkill, ...owned.map(toBattleSkill)]
+  }
+
+  /** Basic Attack with the equipped weapon's level-scaled damage range (or the
+   *  bare default when no weapon is equipped). */
+  private makeBasicAttack(): Skill {
+    const bd = InventoryStore.get()?.equipment?.mainHand?.baseDamage
+    return bd ? { ...BASIC_ATTACK, damageMin: bd.min, damageMax: bd.max } : BASIC_ATTACK
   }
 
   // ── Skill panel ───────────────────────────────────────────────────────────
@@ -786,10 +799,10 @@ export class BattleScene extends Phaser.Scene {
     } else if (this.mobs.some(m => m.alive)) {
       // Convenience: default to the free basic Attack so the player can just
       // click an enemy. They can still pick a different skill instead.
-      this.selectedSkill = BASIC_ATTACK
+      this.selectedSkill = this.basicAttackSkill
       this.resetSkillButtons()
       this.phase = 'target_select'
-      this.setLog(`${BASIC_ATTACK.icon}  ${BASIC_ATTACK.name} ready — click an enemy, or pick another skill.`, '#ffdd88')
+      this.setLog(`${this.basicAttackSkill.icon}  ${this.basicAttackSkill.name} ready — click an enemy, or pick another skill.`, '#ffdd88')
       this.highlightAliveMobs(true)
     } else {
       this.selectedSkill = null

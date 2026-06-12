@@ -239,6 +239,8 @@ export function getGeneratedStarterItems(): InventoryItem[] {
       equipSlot: rolled.slot,
       attributes: rolled.attributes,
       xpRequired: rolled.xpRequired,
+      baseDamage: rolled.baseDamage,
+      baseDefense: rolled.baseDefense,
     };
   });
 }

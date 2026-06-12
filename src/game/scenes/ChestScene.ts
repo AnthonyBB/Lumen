@@ -719,9 +719,13 @@ export class ChestScene extends Phaser.Scene {
     const rarName = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
     const slot = item.equipSlot ?? ''
 
+    const lines: string[] = []
+    if (item.baseDamage) lines.push(`Damage: ${item.baseDamage.min}–${item.baseDamage.max}`)
+    if (typeof item.baseDefense === 'number') lines.push(`Defense: ${item.baseDefense}`)
+    for (const a of item.attributes ?? []) lines.push(`+${a.value} ${this.attrLabel(a.type)}`)
     let bonuses: string
-    if (item.attributes && item.attributes.length) {
-      bonuses = item.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`).join('\n')
+    if (lines.length) {
+      bonuses = lines.join('\n')
     } else {
       const raw = Object.entries(item.stats ?? {})
         .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)

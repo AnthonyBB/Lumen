@@ -294,10 +294,12 @@ export class EquipmentScene extends Phaser.Scene {
 
   /** Short human-readable bonus summary for a bag item (crafted or legacy). */
   private itemBonusSummary(item: ClientInventoryItem): string {
-    if (item.attributes && item.attributes.length) {
-      return item.attributes
-        .map(a => `+${a.value} ${this.attrLabel(a.type)}`)
-        .join('  ')
+    const base: string[] = []
+    if (item.baseDamage) base.push(`${item.baseDamage.min}–${item.baseDamage.max} dmg`)
+    if (typeof item.baseDefense === 'number') base.push(`${item.baseDefense} def`)
+    if (base.length || (item.attributes && item.attributes.length)) {
+      const affixes = (item.attributes ?? []).map(a => `+${a.value} ${this.attrLabel(a.type)}`)
+      return [...base, ...affixes].join('  ')
     }
     // Legacy items carry raw {attack,defense,hp,xp} stats.
     return Object.entries(item.stats)
@@ -592,14 +594,16 @@ export class EquipmentScene extends Phaser.Scene {
 
     const rarHex = RARITY_COLOR[item.rarity].toString(16).padStart(6, '0')
     const rarName = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
-    const bonuses = (item.attributes && item.attributes.length)
-      ? item.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`)
-      : ['No bonuses']
+    const stats: string[] = []
+    if (item.baseDamage) stats.push(`Damage: ${item.baseDamage.min}–${item.baseDamage.max}`)
+    if (typeof item.baseDefense === 'number') stats.push(`Defense: ${item.baseDefense}`)
+    for (const a of item.attributes ?? []) stats.push(`+${a.value} ${this.attrLabel(a.type)}`)
+    if (!stats.length) stats.push('No bonuses')
 
     const rows: { text: string; color: string; size: number; bold?: boolean }[] = [
       { text: `${item.icon}  ${item.name}`, color: '#ffffff', size: 14, bold: true },
       { text: `${rarName}  ·  ${SLOT_LABELS[slotKey]}`, color: `#${rarHex}`, size: 11 },
-      ...bonuses.map(b => ({ text: b, color: '#9be7ff', size: 12 })),
+      ...stats.map(b => ({ text: b, color: '#9be7ff', size: 12 })),
     ]
 
     const padX = 12, padY = 10, gap = 4

@@ -24,6 +24,7 @@ import {
   DEFAULT_RANK_ID,
   normaliseRankId,
   gradeBandForRank,
+  effectiveRankMultiplier,
 } from './data/adventureRanks.js';
 import type { AttributeType } from './data/equipmentGen.js';
 
@@ -734,10 +735,17 @@ export class PlayerManager {
       mp_regen: 0, hp_regen: 0,
     };
 
+    // Gear core power (base defense) scales by the LOWER of the item's craft
+    // rank and the player's current rank — a low-rank piece stays weak when
+    // carried up; a high-rank piece gives no edge at a lower rank (anti-farming,
+    // see docs/ADVENTURE_RANKS_DESIGN.md §1).
+    const currentRank = normaliseRankId(player.adventureRank);
     for (const item of Object.values(equipment)) {
       if (!item) continue;
       // Base defense (armor) is a level-scaled core stat, separate from affixes.
-      if (typeof item.baseDefense === 'number') gear.defense += item.baseDefense;
+      if (typeof item.baseDefense === 'number') {
+        gear.defense += item.baseDefense * effectiveRankMultiplier(item.craftRank ?? DEFAULT_RANK_ID, currentRank);
+      }
       // Crafted gear carries its rolled attributes on the instance (set
       // server-side at craft time). These are the authoritative stat source.
       if (item.attributes && item.attributes.length) {

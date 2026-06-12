@@ -58,6 +58,35 @@ export const RANK_MAP: Record<string, AdventureRank> = Object.fromEntries(
 /** The default rank used when none can be derived. */
 export const DEFAULT_RANK_ID: AdventureRankId = 'grade_1_3';
 
+// ---------------------------------------------------------------------------
+// Power & economy scaling (see docs/ADVENTURE_RANKS_DESIGN.md)
+// ---------------------------------------------------------------------------
+
+/** Per-rank power/economy multiplier step. THE single tuning knob: each rank up
+ *  multiplies by this. M(rank) = RANK_STEP ** rankIndex. */
+export const RANK_STEP = 1.2;
+
+/** 0-based position of a rank in ADVENTURE_RANKS (grade_1_3 = 0 … college = 4). */
+export function rankIndex(rankId: string): number {
+  const i = ADVENTURE_RANKS.findIndex((r) => r.id === rankId);
+  return i === -1 ? 0 : i;
+}
+
+/** The scaling multiplier M for a rank: RANK_STEP ** rankIndex(rank). */
+export function rankMultiplier(rankId: string): number {
+  return RANK_STEP ** rankIndex(rankId);
+}
+
+/**
+ * The multiplier for GEAR / POTIONS, which use the LOWER of the item's craft
+ * rank and the player's current rank: M(min(craftRank, currentRank)). A
+ * low-rank item stays weak when carried up; a high-rank item gives no edge when
+ * used at a lower rank.
+ */
+export function effectiveRankMultiplier(craftRankId: string, currentRankId: string): number {
+  return RANK_STEP ** Math.min(rankIndex(craftRankId), rankIndex(currentRankId));
+}
+
 /** Coerce an arbitrary value to a valid rank id, falling back to the default. */
 export function normaliseRankId(raw: unknown): AdventureRankId {
   return typeof raw === 'string' && raw in RANK_MAP ? (raw as AdventureRankId) : DEFAULT_RANK_ID;

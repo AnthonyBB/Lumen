@@ -6,6 +6,10 @@ import { addLeaveButton } from '../ui/leaveButton'
 import {
   MATERIALS, ladderFor, MAX_TIER, CATALYSTS, type Material,
 } from '../data/materials'
+import { RankStore } from '../systems/RankStore'
+import { rankMultiplier, nextRankId, RANK_NAMES } from '../data/adventureRanks'
+import { InventoryStore, type ClientInventoryItem } from '../systems/InventoryStore'
+import { RECIPES } from '../data/recipes'
 
 /** Per-building UI flavour. `tierNote` describes what the base-material tier sets. */
 const BUILDING_UI: Record<CraftBuilding, {
@@ -64,7 +68,7 @@ export class CraftScene extends Phaser.Scene {
   private parentScene = 'WorldScene'
 
   private materials: Record<string, number> = {}
-  private state: 'select' | 'quiz' | 'result' = 'select'
+  private state: 'select' | 'upgrade' | 'quiz' | 'result' = 'select'
 
   private selectedRecipe!: Recipe
   private selectedTier = 1
@@ -100,7 +104,7 @@ export class CraftScene extends Phaser.Scene {
 
     const onMaterials = (data: { materials?: Record<string, number> }) => {
       this.materials = data?.materials ?? {}
-      if (this.state === 'select') this.render()
+      if (this.state === 'select' || this.state === 'upgrade') this.render()
     }
     const onStarted = (data: { sessionId: string; firstQuestion: CraftQuestion }) => {
       this.sessionId = data.sessionId
@@ -141,11 +145,15 @@ export class CraftScene extends Phaser.Scene {
     this.socket?.on('craft:session_started', onStarted)
     this.socket?.on('craft:answer_result', onAnswer)
     this.socket?.on('error', onError)
+    // Re-render the cost preview if the player's rank changes while the menu is
+    // open (the cost scales with rank).
+    const unsubRank = RankStore.onUpdate(() => { if (this.state === 'select') this.render() })
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.socket?.off('materials:data', onMaterials)
       this.socket?.off('craft:session_started', onStarted)
       this.socket?.off('craft:answer_result', onAnswer)
       this.socket?.off('error', onError)
+      unsubRank()
     })
 
     // ESC always leaves, even mid-quiz — abandoning a craft is free because
@@ -184,14 +192,101 @@ export class CraftScene extends Phaser.Scene {
   private render() {
     this.content.removeAll(true)
     if (this.state === 'select') this.renderSelect()
+    else if (this.state === 'upgrade') this.renderUpgrade()
     else if (this.state === 'quiz') this.renderQuiz()
     else this.renderResult()
+  }
+
+  // ── Upgrade gear (raise an item's adventure rank) ───────────────────────────
+
+  /** Owned gear (bag + equipped) that could be rank-upgraded. Potions excluded —
+   *  they're re-brewed fresh, never upgraded. */
+  private eligibleUpgradeItems(): ClientInventoryItem[] {
+    const inv = InventoryStore.get()
+    if (!inv) return []
+    const equipped = Object.values(inv.equipment).filter((i): i is ClientInventoryItem => !!i)
+    return [...inv.items, ...equipped].filter((i) => !!i.equipSlot && !i.potion)
+  }
+
+  /** Cost + affordability to raise an item one rank, or null if already maxed. */
+  private upgradeCostFor(item: ClientInventoryItem):
+    { materialId: string; qty: number; owned: number; affordable: boolean; next: string } | null {
+    const cur = item.craftRank ?? 'grade_1_3'
+    const next = nextRankId(cur)
+    if (!next) return null
+    const recipe = RECIPES.find((r) => r.id === item.recipeId)
+    const baseCost = recipe?.materialCost ?? 3
+    const tier = Math.max(1, Math.min(MAX_TIER, item.craftTier ?? 1))
+    const materialId = ladderFor(this.building)[tier]   // gear → metal ladder
+    const qty = Math.max(1, Math.ceil(baseCost * (rankMultiplier(next) - rankMultiplier(cur))))
+    const owned = this.materials[materialId] ?? 0
+    return { materialId, qty, owned, affordable: owned >= qty, next }
+  }
+
+  private renderUpgrade() {
+    const cx = GAME_WIDTH / 2
+    this.content.add(this.label(cx, 78, 'Upgrade gear to your current rank', '16px', '#d7ccc8').setOrigin(0.5))
+
+    // Back to the craft view.
+    this.makeTextButton(80, 78, '← Craft', () => { this.state = 'select'; this.render() })
+
+    const items = this.eligibleUpgradeItems()
+    if (items.length === 0) {
+      this.content.add(this.label(cx, 200, 'No upgradeable weapons or armor in your bag.', '14px', '#a1887f').setOrigin(0.5))
+      return
+    }
+
+    const rowH = 52, rowW = 560
+    let y = 120
+    for (const item of items.slice(0, 8)) {
+      const cost = this.upgradeCostFor(item)
+      this.content.add(this.card(cx - rowW / 2, y, rowW, rowH - 6, false))
+      this.content.add(this.label(cx - rowW / 2 + 26, y + (rowH - 6) / 2, item.icon, '22px', '#ffffff').setOrigin(0.5))
+      this.content.add(this.label(cx - rowW / 2 + 52, y + 8, item.name, '13px', '#ffffff', true).setWordWrapWidth(260))
+      const curName = RANK_NAMES[item.craftRank ?? 'grade_1_3'] ?? 'Grade 1-3'
+      if (!cost) {
+        this.content.add(this.label(cx - rowW / 2 + 52, y + 28, `${curName} · max rank`, '11px', '#8d6e63'))
+        continue
+      }
+      const matName = MATERIALS[cost.materialId]?.name ?? cost.materialId
+      this.content.add(this.label(cx - rowW / 2 + 52, y + 28,
+        `${curName} → ${RANK_NAMES[cost.next]}   ·   ${cost.qty} ${matName} (${cost.owned} owned)`,
+        '11px', cost.affordable ? '#cfd8dc' : '#ef9a9a'))
+      // Upgrade button (only when affordable).
+      if (cost.affordable) {
+        this.makeTextButton(cx + rowW / 2 - 60, y + (rowH - 6) / 2, '⬆ Upgrade', () => this.startUpgrade(item.id))
+      } else {
+        this.content.add(this.label(cx + rowW / 2 - 60, y + (rowH - 6) / 2, 'Need mats', '11px', '#8d6e63').setOrigin(0.5))
+      }
+      y += rowH
+    }
+  }
+
+  private startUpgrade(itemId: string) {
+    this.feedback.setText('')
+    this.socket?.emit('item:upgrade', { itemId })
+  }
+
+  /** A small pill text button (label centred on x,y). */
+  private makeTextButton(x: number, y: number, text: string, onClick: () => void) {
+    const t = this.label(x, y, text, '13px', '#ffd54f', true).setOrigin(0.5)
+    t.setInteractive({ useHandCursor: true })
+    t.on('pointerover', () => t.setColor('#ffffff'))
+    t.on('pointerout', () => t.setColor('#ffd54f'))
+    t.on('pointerdown', onClick)
+    this.content.add(t)
   }
 
   private renderSelect() {
     const cx = GAME_WIDTH / 2
 
     this.content.add(this.label(cx, 78, BUILDING_UI[this.building].prompt, '16px', '#d7ccc8').setOrigin(0.5))
+
+    // Forge/Armory also let you UPGRADE an existing item's rank (potions don't
+    // upgrade, so the Alchemy lab has no upgrade entry).
+    if (this.building !== 'alchemy') {
+      this.makeTextButton(GAME_WIDTH - 90, 78, '⬆ Upgrade Gear', () => { this.state = 'upgrade'; this.render() })
+    }
 
     // Recipe cards row.
     const n = this.recipes.length
@@ -215,7 +310,10 @@ export class CraftScene extends Phaser.Scene {
     // Base-material tier picker — only tiers the player owns enough of selectable.
     const ui = BUILDING_UI[this.building]
     const ladder = ladderFor(this.building)
-    const cost = this.selectedRecipe.materialCost
+    // Crafting cost scales with the player's current rank (matches the server's
+    // ceil(materialCost * M(currentRank)) — keeps the preview + affordability
+    // gate honest so the player isn't offered a tier the server will reject).
+    const cost = Math.ceil(this.selectedRecipe.materialCost * rankMultiplier(RankStore.get()))
     let y = 250
     this.content.add(this.label(cx, y, `${ui.material === 'reagent' ? 'Reagent' : 'Metal'} tier  (costs ${cost} ${ui.material} — ${ui.tierNote})`, '14px', '#d7ccc8').setOrigin(0.5))
     y += 30

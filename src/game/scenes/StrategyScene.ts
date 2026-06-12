@@ -116,8 +116,16 @@ export class StrategyScene extends Phaser.Scene {
   // Tooltip overlay
   private tooltipContainer!: Phaser.GameObjects.Container
 
+  /** Scene to resume when this overlay closes (the strategy-hall interior, or
+   *  WorldScene when opened directly). */
+  private parentScene = 'WorldScene'
+
   constructor() {
     super({ key: 'StrategyScene' })
+  }
+
+  init(data: { parentScene?: string }) {
+    this.parentScene = data?.parentScene ?? 'WorldScene'
   }
 
   create() {
@@ -1316,6 +1324,6 @@ export class StrategyScene extends Phaser.Scene {
 
   private closeScene() {
     this.scene.stop('StrategyScene')
-    this.scene.resume('WorldScene')
+    this.scene.resume(this.parentScene)
   }
 }

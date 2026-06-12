@@ -14,14 +14,32 @@ export class Building extends Phaser.GameObjects.Container {
     super(scene, x, y)
     scene.add.existing(this)
 
+    // Each building gets a shell + a function tint so it reads as its purpose at
+    // a glance (the frontage is further dressed with a function emblem in
+    // WorldScene.decorateBuilding). We only have a handful of house shells, so a
+    // few are reused but tinted + dressed differently.
     const textureMap: Record<string, string> = {
       'Learning Center': 'building_learning',
       'Combat Training': 'building_combat',
       'Market':          'building_market',
       'Combat Strategy': 'building_strategy',
       'Tavern':          'building_tavern',
+      'The Forge':       'building_combat',   // sturdy stone shell, warm-tinted
+      'The Armory':      'building_strategy',  // steel-tinted
+      'Alchemy Lab':     'building_learning',  // the arcane purple house
     }
     const textureKey = textureMap[label] ?? 'building_learning'
+
+    // Subtle multiply-tint per function (0xffffff = untinted). Kept gentle so the
+    // pixel art stays readable rather than washed out.
+    const tintMap: Record<string, number> = {
+      'The Forge':       0xffb38a, // warm forge-glow orange
+      'The Armory':      0xacc4e0, // cool steel blue
+      'Alchemy Lab':     0xb8f0c4, // alchemical green
+      'Market':          0xffe6b0, // warm trade-gold
+      'Combat Training': 0xe8c4a0, // weathered tan
+    }
+    const tint = tintMap[label]
 
     // Worn-dirt apron under the footprint so the building sits ON the ground
     // (grounds the building without a drop shadow).
@@ -35,6 +53,7 @@ export class Building extends Phaser.GameObjects.Container {
     // Building image
     const img = scene.add.image(0, 0, textureKey)
     img.setDisplaySize(width, height)
+    if (tint !== undefined) img.setTint(tint)
     this.add(img)
 
     // Sign label

@@ -3,9 +3,11 @@ import Phaser from 'phaser'
 import { io, Socket } from 'socket.io-client'
 import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
+import LevelUpCelebration from '../components/LevelUpCelebration'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
+import { RankStore } from '../game/systems/RankStore'
 import { API_BASE } from '../config'
 
 interface GamePageProps {
@@ -20,6 +22,9 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   const [playersOnline, setPlayersOnline] = useState<number | null>(null)
   const [rankId, setRankId] = useState<string | null>(null)
   const [ranks, setRanks] = useState<AdventureRank[]>([])
+  // The level to celebrate (null = no celebration showing). Keyed remount on
+  // change lets back-to-back level-ups each replay the animation.
+  const [celebrateLevel, setCelebrateLevel] = useState<number | null>(null)
 
   /** Change the player's adventure rank — the grade band their questions are
    *  drawn from. Any rank is allowed (not age-gated). */
@@ -47,6 +52,13 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       setRanks(d.ranks ?? [])
     })
 
+    // Flashy level-up celebration — fires whenever the server confirms a level
+    // gain (combat XP is the only source). Works regardless of the active Phaser
+    // scene since this overlay lives in React, above the canvas.
+    s.on('player:xp_updated', (d: { newLevel?: number; leveledUp?: boolean }) => {
+      if (d?.leveledUp && typeof d.newLevel === 'number') setCelebrateLevel(d.newLevel)
+    })
+
     s.on('connect', () => {
       // (Re)join on every connect — including reconnects after a server
       // restart. Without this the server has no player record for the socket
@@ -61,6 +73,9 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       // Bind the stats store too so Character / Equipment screens receive
       // server-pushed `stats:update` snapshots (attributes + derived stats).
       StatsStore.init(s)
+      // Bind the rank store so the Phaser scenes (crafting cost preview, combat
+      // scaling) see the player's current adventure rank.
+      RankStore.init(s)
     })
 
     // The server rejects sockets with invalid/expired tokens. Without this,
@@ -108,6 +123,15 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
 
   return (
     <div className="flex flex-col flex-1 min-h-screen pt-16 bg-lumen-dark">
+      {/* Flashy level-up celebration (keyed so consecutive level-ups replay it) */}
+      {celebrateLevel !== null && (
+        <LevelUpCelebration
+          key={celebrateLevel}
+          level={celebrateLevel}
+          onDone={() => setCelebrateLevel(null)}
+        />
+      )}
+
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
         <div

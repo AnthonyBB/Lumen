@@ -74,25 +74,66 @@ type PathState = 'idle' | 'walking' | 'encounter_pause' | 'complete'
 
 const WALK_SPEED = 180  // world-px per second
 
-// Winding waypoints as fractions of world size. Kept close together with a
-// gentle left/right sway (fx ≈ 0.44–0.56) so each right-angle leg stays short —
-// the trail reads as a continuously winding path rather than long straight
-// "corridor" legs. Still exactly 3 encounters, so the campaign is unchanged.
-const WP_DEFS: { fx: number; fy: number; type: PathNode['type'] }[] = [
-  { fx: 0.50, fy: 0.95, type: 'start'     },
-  { fx: 0.44, fy: 0.88, type: 'walk'      },
-  { fx: 0.55, fy: 0.81, type: 'walk'      },
-  { fx: 0.45, fy: 0.74, type: 'encounter' },
-  { fx: 0.56, fy: 0.66, type: 'walk'      },
-  { fx: 0.45, fy: 0.59, type: 'walk'      },
-  { fx: 0.55, fy: 0.51, type: 'encounter' },
-  { fx: 0.45, fy: 0.43, type: 'walk'      },
-  { fx: 0.55, fy: 0.35, type: 'walk'      },
-  { fx: 0.46, fy: 0.27, type: 'walk'      },
-  { fx: 0.55, fy: 0.18, type: 'encounter' },
-  { fx: 0.49, fy: 0.10, type: 'walk'      },
-  { fx: 0.50, fy: 0.04, type: 'end'       },
-]
+type WPDef = { fx: number; fy: number; type: PathNode['type'] }
+
+// Each campaign has its OWN hand-authored, fixed layout (never randomised). The
+// legs are AXIS-ALIGNED — every waypoint shares an x or a y with the one before
+// it — so the route is a sequence of long straight runs joined by a few
+// deliberate right-angle turns, instead of a tiny zig-zag every few steps. The
+// shapes differ per biome (some climb the right, some the left, some sweep wide,
+// one wanders sideways) so no two campaigns feel the same, and each always has
+// exactly 3 encounters. Coordinates are world fractions; `S` start, `W` walk
+// (a turn/throughpoint), `E` encounter, `X` end.
+const _T = { S: 'start', W: 'walk', E: 'encounter', X: 'end' } as const
+type _Code = keyof typeof _T
+const P = (rows: [number, number, _Code][]): WPDef[] =>
+  rows.map(([fx, fy, c]) => ({ fx, fy, type: _T[c] }))
+
+const CAMPAIGN_PATHS: Record<string, WPDef[]> = {
+  // Rightward staircase, climbing to the top-right.
+  'Desert': P([
+    [0.18, 0.88, 'S'], [0.18, 0.58, 'E'], [0.58, 0.58, 'W'],
+    [0.58, 0.32, 'E'], [0.84, 0.32, 'W'], [0.84, 0.12, 'E'], [0.55, 0.12, 'X'],
+  ]),
+  // Mirror of the desert — climbs the LEFT side to the top-left.
+  'Pine Forest': P([
+    [0.82, 0.88, 'S'], [0.82, 0.58, 'E'], [0.42, 0.58, 'W'],
+    [0.42, 0.32, 'E'], [0.16, 0.32, 'W'], [0.16, 0.12, 'E'], [0.45, 0.12, 'X'],
+  ]),
+  // Up the centre with a big bulge out to the right, then back across.
+  'Deciduous Forest': P([
+    [0.50, 0.90, 'S'], [0.50, 0.64, 'E'], [0.80, 0.64, 'W'], [0.80, 0.38, 'W'],
+    [0.50, 0.38, 'E'], [0.22, 0.38, 'W'], [0.22, 0.14, 'E'], [0.52, 0.14, 'X'],
+  ]),
+  // Starts with a long horizontal run, then snakes upward.
+  'Swamp': P([
+    [0.16, 0.84, 'S'], [0.70, 0.84, 'W'], [0.70, 0.60, 'E'], [0.30, 0.60, 'W'],
+    [0.30, 0.36, 'E'], [0.80, 0.36, 'W'], [0.80, 0.14, 'E'], [0.46, 0.14, 'X'],
+  ]),
+  // Long single climb up the right, then a sweep across the top.
+  'Snow': P([
+    [0.28, 0.86, 'S'], [0.74, 0.86, 'W'], [0.74, 0.50, 'E'], [0.40, 0.50, 'W'],
+    [0.40, 0.26, 'E'], [0.74, 0.26, 'W'], [0.74, 0.10, 'E'], [0.42, 0.10, 'X'],
+  ]),
+  // Gentle: only a few wide, lazy turns.
+  'Grassland': P([
+    [0.32, 0.88, 'S'], [0.32, 0.58, 'E'], [0.68, 0.58, 'W'],
+    [0.68, 0.24, 'E'], [0.42, 0.24, 'W'], [0.42, 0.12, 'E'], [0.64, 0.12, 'X'],
+  ]),
+  // Full-width sweeps from edge to edge.
+  'Tropical Rainforest': P([
+    [0.14, 0.86, 'S'], [0.86, 0.86, 'W'], [0.86, 0.62, 'E'], [0.14, 0.62, 'W'],
+    [0.14, 0.40, 'E'], [0.86, 0.40, 'W'], [0.86, 0.18, 'E'], [0.45, 0.18, 'X'],
+  ]),
+  // Wanders sideways and even downward — deliberately NOT a straight climb.
+  'Ocean': P([
+    [0.20, 0.40, 'S'], [0.20, 0.74, 'W'], [0.56, 0.74, 'E'], [0.56, 0.46, 'W'],
+    [0.84, 0.46, 'E'], [0.84, 0.78, 'W'], [0.50, 0.78, 'E'], [0.22, 0.78, 'X'],
+  ]),
+}
+
+// Fallback for any biome without a bespoke layout.
+const DEFAULT_PATH: WPDef[] = CAMPAIGN_PATHS['Grassland']
 
 // ── BiomeScene ─────────────────────────────────────────────────────────────
 
@@ -190,10 +231,12 @@ export class BiomeScene extends Phaser.Scene {
     // archetype POOL tier (beginner/easy → easy pool, medium → medium, hard/
     // expert → hard). Falls back to empty if a biome lacks that pool.
     const pool = MOBS_BY_BIOME[biome]?.[cfg.pool] ?? []
-    const totalEncounters = WP_DEFS.filter(wp => wp.type === 'encounter').length
+    // This campaign's own fixed layout (falls back to a default if unmapped).
+    const wpDefs = CAMPAIGN_PATHS[biome] ?? DEFAULT_PATH
+    const totalEncounters = wpDefs.filter(wp => wp.type === 'encounter').length
     let encounterNo = 0
 
-    this.pathNodes = WP_DEFS.map(wp => {
+    this.pathNodes = wpDefs.map(wp => {
       const node: PathNode = {
         x: Math.round(wp.fx * WORLD_W),
         y: Math.round(wp.fy * WORLD_H),
@@ -273,9 +316,11 @@ export class BiomeScene extends Phaser.Scene {
     return out
   }
 
-  // Path grid: 48px cells (16px tile × 3); a 3-cell-wide road is ~144px across,
-  // comfortably wider than the 2× player sprite.
-  private static readonly PATH_CELL = 48
+  // Path grid: 32px cells (16px tile × 2). A 3-cell-wide road is ~96px across —
+  // a readable trail roughly 1.5× the player sprite, not a wide plaza. (PATH_HALF
+  // must stay ≥1: a 1-cell road has no interior body cell, so the road autotiler
+  // can't pick a clean grass-on-both-edges frame.)
+  private static readonly PATH_CELL = 32
   private static readonly PATH_HALF = 1
 
   private drawPath() {
@@ -607,7 +652,7 @@ export class BiomeScene extends Phaser.Scene {
     bg.fillStyle(0x000000, 0.9).fillRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)
     bg.lineStyle(2, 0xffd700, 1).strokeRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)
 
-    this.add.text(cx, cy - H / 2 + 40, '🏆  Biome Cleared!', {
+    this.add.text(cx, cy - H / 2 + 40, '🏆  Campaign Cleared!', {
       fontSize: '30px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 

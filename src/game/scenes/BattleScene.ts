@@ -21,6 +21,8 @@ import type { Skill } from '../data/skills'
 import { SKILL_MAP } from '../data/skillTrees'
 import { StatsStore } from '../systems/StatsStore'
 import { InventoryStore, type ClientInventoryItem } from '../systems/InventoryStore'
+import { RankStore } from '../systems/RankStore'
+import { rankMultiplier, effectiveRankMultiplier } from '../data/adventureRanks'
 import type { CombatSkill, SkillClass } from '../data/skillTrees'
 import { TD_MONSTERS } from '../data/tileFrames'
 import { DIFFICULTIES, type Difficulty } from '../data/mobs'
@@ -92,25 +94,38 @@ const STAT_ABBR: Record<string, string> = { attack: 'atk', defense: 'def', speed
  * DoT/pierce/stun/slow/buff/etc. The damageMin/Max + powerLabel surface the
  * primary visible magnitude on the button.
  */
-function toBattleSkill(cs: CombatSkill): Skill {
-  const has = (t: string) => cs.effects.some(e => e.type === t)
+/** Effect types whose `value` is a flat HP-economy magnitude that scales with
+ *  adventure rank (spell power = M(currentRank)). Percentage effects (team_buff,
+ *  lifesteal, execute %) and CC magnitudes (pierce/slow/stun/sleep) are NOT
+ *  scaled — see docs/ADVENTURE_RANKS_DESIGN.md §1. */
+const SCALED_EFFECT_TYPES = new Set(['damage', 'aoe', 'heal', 'dot', 'bleed', 'poison', 'shield', 'hot'])
+
+function toBattleSkill(cs: CombatSkill, spellMult = 1): Skill {
+  // Scale the flat damage/heal magnitudes by the player's current rank into a
+  // COPY — never mutate the shared SKILL_MAP definitions.
+  const effects = spellMult === 1 ? cs.effects : cs.effects.map(e =>
+    SCALED_EFFECT_TYPES.has(e.type) ? { ...e, value: Math.max(1, Math.round(e.value * spellMult)) } : e)
+  const has = (t: string) => effects.some(e => e.type === t)
   // A skill is "self/heal" (fires immediately, no enemy target) when it has NO
   // effect that needs an enemy target: no direct damage, no single-target CC.
-  const directDmg = cs.effects.find(e => e.type === 'damage')
-  const hasSingleTargetCC = cs.effects.some(e =>
+  const directDmg = effects.find(e => e.type === 'damage')
+  // An `aoe`-type damage effect (or any effect explicitly flagged aoe) makes the
+  // WHOLE skill an area blast: it fires on every enemy with no target select.
+  const hasAoe = effects.some(e => e.type === 'aoe' || e.aoe)
+  const hasSingleTargetCC = effects.some(e =>
     (e.type === 'pierce' || e.type === 'stun' || e.type === 'slow' || e.type === 'sleep' ||
      e.type === 'bleed' || e.type === 'poison' || e.type === 'dot' || e.type === 'execute') && !e.aoe)
-  const aoeEffect = cs.effects.find(e =>
-    e.type === 'aoe' || ((e.type === 'pierce' || e.type === 'stun' || e.type === 'slow' || e.type === 'sleep') && e.aoe))
 
   let targeting: 'single' | 'aoe' | 'self'
-  if (directDmg || hasSingleTargetCC) targeting = 'single'
-  else if (aoeEffect) targeting = 'aoe'
+  // AoE wins over an accompanying CC rider (e.g. Frost Nova = aoe damage + slow):
+  // the blast hits everyone, and its riders ride along to every target.
+  if (hasAoe && !directDmg) targeting = 'aoe'
+  else if (directDmg || hasSingleTargetCC) targeting = 'single'
   else targeting = 'self'   // pure heal / buff / shield
 
   // Primary magnitude shown on the button.
-  const dmgVal = cs.effects.find(e => e.type === 'damage' || e.type === 'aoe')?.value ?? 0
-  const healVal = cs.effects.find(e => e.type === 'heal')?.value ?? 0
+  const dmgVal = effects.find(e => e.type === 'damage' || e.type === 'aoe')?.value ?? 0
+  const healVal = effects.find(e => e.type === 'heal')?.value ?? 0
   const base = dmgVal || healVal || 10
   const isHeal = targeting === 'self' && healVal > 0
 
@@ -118,19 +133,19 @@ function toBattleSkill(cs: CombatSkill): Skill {
   const parts: string[] = []
   if (dmgVal) parts.push(`${dmgVal} dmg`)
   else if (healVal) parts.push(`Heal ${healVal}`)
-  const dot = cs.effects.find(e => e.type === 'dot' || e.type === 'bleed' || e.type === 'poison')
+  const dot = effects.find(e => e.type === 'dot' || e.type === 'bleed' || e.type === 'poison')
   if (dot) parts.push(`+${dot.value}/rd`)
-  const pierce = cs.effects.find(e => e.type === 'pierce')
+  const pierce = effects.find(e => e.type === 'pierce')
   if (pierce) parts.push(`Def -${pierce.value}`)
-  const slow = cs.effects.find(e => e.type === 'slow')
+  const slow = effects.find(e => e.type === 'slow')
   if (slow) parts.push(`Slow -${slow.value}`)
   if (has('stun')) parts.push('Stun')
   if (has('sleep')) parts.push('Sleep')
-  const buff = cs.effects.find(e => e.type === 'team_buff')
+  const buff = effects.find(e => e.type === 'team_buff')
   if (buff && parts.length === 0) parts.push(`+${buff.value}% ${STAT_ABBR[buff.stat ?? 'attack']}`)
-  const shield = cs.effects.find(e => e.type === 'shield')
+  const shield = effects.find(e => e.type === 'shield')
   if (shield && parts.length === 0) parts.push(`Shield ${shield.value}`)
-  const hot = cs.effects.find(e => e.type === 'hot')
+  const hot = effects.find(e => e.type === 'hot')
   if (hot && parts.length === 0) parts.push(`Regen ${hot.value}/rd`)
 
   return {
@@ -144,7 +159,9 @@ function toBattleSkill(cs: CombatSkill): Skill {
     color: CLASS_COLORS[cs.class] ?? 0x8a6a40,
     mpCost: cs.mpCost,
     targeting,
-    effects: cs.effects,
+    // On an AoE skill, flag every effect aoe so the engine applies the damage AND
+    // its riders (slow/DoT/etc.) to each enemy hit — not just the primary target.
+    effects: targeting === 'aoe' ? effects.map(e => ({ ...e, aoe: true })) : effects,
     powerLabel: parts.join('  ·  '),
   }
 }
@@ -234,6 +251,11 @@ export class BattleScene extends Phaser.Scene {
   private charPanel: Phaser.GameObjects.Container | null = null
   private xpGained = 0
   private silverGained = 0
+  /** The player's current adventure rank, and its economy/power multiplier
+   *  M(currentRank). Spells, mob strength, and rewards scale by this; gear/
+   *  potions use M(min(craftRank, currentRank)). See adventureRanks.ts. */
+  private currentRank: string | null = null
+  private rankMult = 1
 
   /** Skills shown in the bar: basic Attack + server-confirmed purchases only. */
   private battleSkills: Skill[] = [BASIC_ATTACK]
@@ -287,6 +309,11 @@ export class BattleScene extends Phaser.Scene {
     this.playerMaxMana = Math.round(derived.find(r => r.key === 'mana')?.total ?? 0)
     this.manaRegen     = derived.find(r => r.key === 'manaRegen')?.total ?? 0
     this.playerMana    = this.playerMaxMana
+
+    // Adventure-rank scaling factor. Mobs, spells, and rewards scale by
+    // M(currentRank); the weapon's basic attack uses M(min(craftRank, current)).
+    this.currentRank = RankStore.get()
+    this.rankMult = rankMultiplier(this.currentRank)
 
     // The basic Attack's damage range comes from the equipped weapon (level-
     // scaled, with per-weapon variance), falling back to the bare-fists default.
@@ -373,9 +400,16 @@ export class BattleScene extends Phaser.Scene {
     // Deterministic frame per mob: BiomeScene-chosen frame if provided,
     // otherwise picked from the difficulty tier pool, seeded by mob index.
     const pool = TD_MONSTERS[DIFFICULTIES[this.battleData.difficulty].pool]
+    // Mob strength scales with the player's current rank (M(currentRank)) so a
+    // higher-rank player faces proportionally tougher enemies — this is the
+    // anti-farming keystone: coasting on low-rank gear at a high rank leaves you
+    // out-scaled (see docs/ADVENTURE_RANKS_DESIGN.md §1).
+    const scaledMaxHp = (hp: number) => Math.max(1, Math.round(hp * this.rankMult))
     this.mobs = this.battleData.mobs.map((def, i) => ({
       ...def,
-      hp: def.maxHp,
+      maxHp: scaledMaxHp(def.maxHp),
+      attack: Math.max(1, Math.round(def.attack * this.rankMult)),
+      hp: scaledMaxHp(def.maxHp),
       alive: true,
       px: positions[i]?.x ?? GAME_WIDTH / 2,
       py: positions[i]?.y ?? 160,
@@ -607,14 +641,24 @@ export class BattleScene extends Phaser.Scene {
       .map(id => SKILL_MAP[id])
       .filter((s): s is CombatSkill => !!s)
       .sort((a, b) => a.tier - b.tier)
-    this.battleSkills = [this.basicAttackSkill, ...owned.map(toBattleSkill)]
+    // Spell magnitudes scale with the player's current rank (M(currentRank)).
+    this.battleSkills = [this.basicAttackSkill, ...owned.map(s => toBattleSkill(s, this.rankMult))]
   }
 
   /** Basic Attack with the equipped weapon's level-scaled damage range (or the
    *  bare default when no weapon is equipped). */
   private makeBasicAttack(): Skill {
-    const bd = InventoryStore.get()?.equipment?.mainHand?.baseDamage
-    return bd ? { ...BASIC_ATTACK, damageMin: bd.min, damageMax: bd.max } : BASIC_ATTACK
+    const weapon = InventoryStore.get()?.equipment?.mainHand
+    const bd = weapon?.baseDamage
+    if (!bd) return BASIC_ATTACK
+    // Weapon power scales by the LOWER of its craft rank and the player's current
+    // rank — a low-rank weapon stays weak when carried up to a higher rank.
+    const m = effectiveRankMultiplier(weapon?.craftRank, this.currentRank)
+    return {
+      ...BASIC_ATTACK,
+      damageMin: Math.max(1, Math.round(bd.min * m)),
+      damageMax: Math.max(1, Math.round(bd.max * m)),
+    }
   }
 
   // ── Skill panel ───────────────────────────────────────────────────────────
@@ -883,8 +927,10 @@ export class BattleScene extends Phaser.Scene {
   private killMob(mob: ActiveMob) {
     if (mob.alive && mob.hp <= 0) {
       mob.alive = false
-      this.xpGained += xpForMob(mob.level)
-      this.silverGained += silverForMob(mob.level, this.battleData.difficulty)
+      // Rewards scale with the player's current rank (M(currentRank)) to match
+      // the steeper mobs and craft costs at that rank.
+      this.xpGained += Math.round(xpForMob(mob.level) * this.rankMult)
+      this.silverGained += Math.round(silverForMob(mob.level, this.battleData.difficulty) * this.rankMult)
     }
   }
 

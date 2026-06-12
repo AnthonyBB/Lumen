@@ -241,6 +241,8 @@ export function getGeneratedStarterItems(): InventoryItem[] {
       xpRequired: rolled.xpRequired,
       baseDamage: rolled.baseDamage,
       baseDefense: rolled.baseDefense,
+      // Starter gear is forged at the lowest rank — no power bonus when carried up.
+      craftRank: 'grade_1_3',
     };
   });
 }

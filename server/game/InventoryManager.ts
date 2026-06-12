@@ -234,6 +234,36 @@ export class InventoryManager {
     return true;
   }
 
+  /**
+   * Find an owned item by instance id, searching the bag AND equipped slots.
+   * Returns the live item reference (or null) — used by the upgrade flow to
+   * read/mutate an item in place. Server-side only.
+   */
+  findItem(playerId: string, itemId: string): InventoryItem | null {
+    const inv = this.inventories.get(playerId);
+    if (!inv) return null;
+    const bagItem = inv.items.find((i) => i.id === itemId);
+    if (bagItem) return bagItem;
+    for (const slot of Object.keys(inv.equipment) as EquipmentSlotKey[]) {
+      const it = inv.equipment[slot];
+      if (it && it.id === itemId) return it;
+    }
+    return null;
+  }
+
+  /**
+   * Set the craft rank on an owned item (the rank-upgrade flow). Searches the
+   * bag and equipped slots, mutates in place, persists, and returns true on
+   * success. Server-authoritative — the client never sets craftRank.
+   */
+  setItemCraftRank(playerId: string, itemId: string, craftRank: string): boolean {
+    const item = this.findItem(playerId, itemId);
+    if (!item) return false;
+    item.craftRank = craftRank;
+    this.persistInventory(playerId);
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Equipment
   // -------------------------------------------------------------------------

@@ -380,6 +380,15 @@ export interface InventoryItem {
   baseDamage?: { min: number; max: number };
   /** Armor: level-scaled base defense (adds to the Defense stat). */
   baseDefense?: number;
+  /** Adventure rank this gear/potion was crafted at (e.g. 'grade_4_6'). Its
+   *  power scales by M(min(craftRank, currentRank)). Missing → treated as the
+   *  lowest rank. See game/data/adventureRanks.ts. */
+  craftRank?: string;
+  /** Crafted gear: the recipe id and material tier it was forged from. Used by
+   *  the rank-upgrade flow to price the upgrade (recipe base cost × rank delta,
+   *  spent in the item's material tier). Absent on starter/legacy gear. */
+  recipeId?: string;
+  craftTier?: number;
   /** Absolute position (0-based) when stored in a chest, so the chest can hold
    *  items at specific tab/slot positions rather than packed from the start.
    *  Unset for bag items. */

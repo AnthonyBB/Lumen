@@ -52,6 +52,13 @@ export interface ClientInventoryItem {
   baseDamage?: { min: number; max: number };
   /** Armor: level-scaled base defense (adds to the Defense stat). */
   baseDefense?: number;
+  /** Adventure rank this gear/potion was crafted at (scales its power; missing
+   *  → lowest rank). See game/data/adventureRanks.ts. */
+  craftRank?: string;
+  /** Crafted gear: recipe id + material tier it was forged from (drives the
+   *  rank-upgrade cost preview). Absent on starter/legacy gear. */
+  recipeId?: string;
+  craftTier?: number;
   /** Brewed potion effect (absent on non-potions). */
   potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
   /** Absolute 0-based position when stored in a chest (unset for bag items). */

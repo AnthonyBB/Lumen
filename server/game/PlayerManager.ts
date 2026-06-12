@@ -827,6 +827,30 @@ export class PlayerManager {
     return true;
   }
 
+  // ── Recruit Tokens — spent to recruit characters beyond the free team (§2) ──
+  getRecruitTokens(socketId: string): number {
+    return this.players.get(socketId)?.recruitTokens ?? 0;
+  }
+
+  /** Add Recruit Tokens (server-side callers only). Persists. */
+  addRecruitTokens(socketId: string, amount: number): void {
+    if (amount <= 0) return;
+    const player = this.players.get(socketId);
+    if (!player) return;
+    player.recruitTokens += Math.floor(amount);
+    this.persistProgress(socketId);
+  }
+
+  /** Spend Recruit Tokens. Returns false (unchanged) if the player can't afford it. */
+  spendRecruitTokens(socketId: string, amount: number): boolean {
+    if (amount <= 0) return true;
+    const player = this.players.get(socketId);
+    if (!player || player.recruitTokens < amount) return false;
+    player.recruitTokens -= amount;
+    this.persistProgress(socketId);
+    return true;
+  }
+
   /** The player's adventure rank id (defaults if unknown). */
   getAdventureRank(socketId: string): AdventureRankId {
     return normaliseRankId(this.players.get(socketId)?.adventureRank);

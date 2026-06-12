@@ -21,6 +21,10 @@ export interface RosterData {
   activeCharacterId: string
   party: string[]
   freeSlots: number
+  recruitTokens: number
+  /** Recruit-Token cost of the NEXT character (0 while free slots remain). */
+  recruitCost: number
+  maxRoster: number
 }
 
 const MAX_PARTY = 4
@@ -42,7 +46,10 @@ export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate,
   const [recruiting, setRecruiting] = useState(false)
   const [name, setName] = useState('')
   const [cls, setCls] = useState<string>(SKILL_CLASSES[3]) // 'sword' — a friendly default
-  const canRecruit = roster.freeSlots > 0
+  const atMaxRoster = roster.characters.length >= roster.maxRoster
+  const recruitCost = roster.recruitCost
+  const canAfford = recruitCost === 0 || roster.recruitTokens >= recruitCost
+  const canRecruit = !atMaxRoster && canAfford
   const partyFull = roster.party.length >= MAX_PARTY
 
   const toggleParty = (id: string) => {
@@ -76,7 +83,7 @@ export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate,
           <div>
             <h2 className="font-display text-xl text-lumen-gold">Your Roster</h2>
             <p className="text-xs text-gray-400">
-              Campaign party: <span className="text-lumen-gold">{roster.party.length}/{MAX_PARTY}</span> · ★ marks party members
+              Campaign party: <span className="text-lumen-gold">{roster.party.length}/{MAX_PARTY}</span> · ★ marks party members · 🎟️ <span className="text-lumen-gold">{roster.recruitTokens}</span> tokens
             </p>
           </div>
           <button
@@ -152,11 +159,13 @@ export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate,
               disabled={!canRecruit}
               className="w-full rounded-xl border border-lumen-gold/40 px-4 py-2.5 font-display text-lumen-gold hover:bg-lumen-gold/15 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {canRecruit
-                ? `＋ Recruit a character (${roster.freeSlots} free ${
-                    roster.freeSlots === 1 ? 'slot' : 'slots'
-                  })`
-                : 'Starting team full — recruitment coming soon'}
+              {atMaxRoster
+                ? 'Roster full'
+                : recruitCost === 0
+                ? `＋ Recruit a character (${roster.freeSlots} free ${roster.freeSlots === 1 ? 'slot' : 'slots'})`
+                : canAfford
+                ? `＋ Recruit a character (🎟️ ${recruitCost})`
+                : `Need 🎟️ ${recruitCost} to recruit (you have ${roster.recruitTokens}) — clear campaigns to earn more`}
             </button>
           ) : (
             <div className="space-y-3">
@@ -181,10 +190,10 @@ export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate,
               <div className="flex gap-2">
                 <button
                   onClick={submit}
-                  disabled={name.trim().length < 2}
+                  disabled={name.trim().length < 2 || !canRecruit}
                   className="flex-1 rounded-lg bg-lumen-gold/90 px-4 py-2 font-display font-bold text-lumen-dark hover:bg-lumen-gold disabled:opacity-40"
                 >
-                  Recruit
+                  {recruitCost > 0 ? `Recruit (🎟️ ${recruitCost})` : 'Recruit'}
                 </button>
                 <button
                   onClick={() => setRecruiting(false)}

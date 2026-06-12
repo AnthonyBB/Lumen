@@ -88,8 +88,14 @@ const SKILL_PRICE_BY_TIER: Record<1 | 2 | 3 | 4 | 5, number> = {
 };
 
 /** Free starting team size — the first team of 4 is frictionless; beyond that
- *  needs recruitment (Recruit Tokens, a later stage). See CHARACTERS_DESIGN.md §2. */
+ *  costs Recruit Tokens. See CHARACTERS_DESIGN.md §2. */
 const FREE_ROSTER_SIZE = 4;
+/** Generous hard cap on roster size (bounds abuse). */
+const MAX_ROSTER = 50;
+/** Recruit-Token cost of the NEXT character given the current roster size: free
+ *  up to FREE_ROSTER_SIZE, then escalating 1, 2, 3, … (triangular). */
+const recruitCostFor = (ownedCount: number): number =>
+  ownedCount < FREE_ROSTER_SIZE ? 0 : ownedCount - FREE_ROSTER_SIZE + 1;
 
 /** strategyId → strategy. */
 const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
@@ -273,6 +279,9 @@ export function registerHandlers(
     activeCharacterId: playerManager.getActiveCharacter(socket.id)?.id ?? '',
     party: playerManager.getParty(socket.id),
     freeSlots: Math.max(0, FREE_ROSTER_SIZE - playerManager.getCharacters(socket.id).length),
+    recruitTokens: playerManager.getRecruitTokens(socket.id),
+    recruitCost: recruitCostFor(playerManager.getCharacters(socket.id).length),
+    maxRoster: MAX_ROSTER,
   });
   const pushRoster = (): void => { socket.emit('roster:data', buildRoster()); };
 
@@ -321,20 +330,29 @@ export function registerHandlers(
       socket.emit('error', { message: 'Unknown class.' });
       return;
     }
-    if (playerManager.getCharacters(socket.id).length >= FREE_ROSTER_SIZE) {
+    const owned = playerManager.getCharacters(socket.id).length;
+    if (owned >= MAX_ROSTER) {
+      socket.emit('error', { message: 'Your roster is full.' });
+      return;
+    }
+    // The first FREE_ROSTER_SIZE are free; beyond that costs Recruit Tokens.
+    const cost = recruitCostFor(owned);
+    if (cost > 0 && !playerManager.spendRecruitTokens(socket.id, cost)) {
       socket.emit('error', {
-        message: 'Your starting team is full — recruiting more characters is coming soon!',
+        message: `Recruiting costs ${cost} Recruit Token${cost !== 1 ? 's' : ''} — clear campaigns to earn more!`,
       });
       return;
     }
     const res = playerManager.createCharacter(socket.id, payload.name, payload.class);
     if ('error' in res) {
+      // Refund the tokens if creation failed for a bad name, etc.
+      if (cost > 0) playerManager.addRecruitTokens(socket.id, cost);
       socket.emit('error', { message: res.error });
       return;
     }
     playerManager.persistProgress(socket.id);
     pushRoster();
-    console.log(`[roster] ${player.username} recruited ${res.character.name} (${res.character.class})`);
+    console.log(`[roster] ${player.username} recruited ${res.character.name} (${res.character.class})${cost > 0 ? ` for ${cost} token(s)` : ''}`);
   });
 
   // ── stats:get — Character / Equipment screens request the stat breakdown ──
@@ -619,14 +637,20 @@ export function registerHandlers(
         }
         if (skillAward > 0) playerManager.addShards(socket.id, 'skill', skillAward);
         if (combatAward > 0) playerManager.addShards(socket.id, 'combat', combatAward);
+
+        // Recruit Tokens — every campaign clear grants 1 (the steady source for
+        // recruiting characters beyond the free team; see CHARACTERS_DESIGN.md §2).
+        const tokenAward = 1;
+        playerManager.addRecruitTokens(socket.id, tokenAward);
+        items.push({ name: `Recruit Token ×${tokenAward}`, icon: '🎟️', rarity: 'rare' });
+
         playerManager.recordCampaignCompletion(socket.id);
 
         if (skillAward > 0) items.push({ name: `Skill Shard ×${skillAward}`, icon: '🔷', rarity: 'rare' });
         if (combatAward > 0) items.push({ name: `Combat Shard ×${combatAward}`, icon: '🔶', rarity: 'epic' });
-        if (skillAward > 0 || combatAward > 0) {
-          pushCurrency(); // refresh the HUD shard counters
-          console.log(`[shards] ${player.username} campaign reward: +${skillAward} skill, +${combatAward} combat${firstEver ? ' (first clear bonus)' : ''}`);
-        }
+        pushCurrency(); // refresh the HUD currency counters
+        pushRoster(); // refresh the roster panel's token balance
+        console.log(`[campaign] ${player.username} cleared a campaign: +${tokenAward} token, +${skillAward} skill, +${combatAward} combat${firstEver ? ' (first clear bonus)' : ''}`);
       }
 
       socket.emit('combat:loot', { campaignComplete, items, richVein, catalystRarity });

@@ -32,6 +32,7 @@ export type AttributeType =
   | 'damage_bonus'
   | 'healing_bonus'
   | 'mp_regen'
+  | 'hp_regen'
   | 'fire_damage' | 'ice_damage' | 'lightning_damage' | 'holy_damage' | 'nature_damage'
   | 'crit_chance'
   | 'dot_bonus'
@@ -43,7 +44,7 @@ export type AttributeType =
  *  truth for the market's attribute filter (client UI + server validation). */
 export const ATTRIBUTE_TYPES: AttributeType[] = [
   'constitution', 'intelligence', 'dexterity', 'strength', 'spirit',
-  'damage_bonus', 'healing_bonus', 'mp_regen',
+  'damage_bonus', 'healing_bonus', 'mp_regen', 'hp_regen',
   'fire_damage', 'ice_damage', 'lightning_damage', 'holy_damage', 'nature_damage',
   'crit_chance', 'dot_bonus', 'aoe_bonus', 'gold_find', 'debuff_resist',
 ]
@@ -191,6 +192,7 @@ const ATTR_PREFIX: Record<AttributeType, string[]> = {
   damage_bonus:     ['Vicious', 'Brutal', 'Fierce', 'Savage'],
   healing_bonus:    ['Soothing', 'Mending', 'Gentle', 'Caring'],
   mp_regen:         ['Channeling', 'Flowing', 'Mystic', 'Focused'],
+  hp_regen:         ['Hardy', 'Vital', 'Mending', 'Stalwart'],
   fire_damage:      ['Blazing', 'Molten', 'Fiery', 'Smoldering'],
   ice_damage:       ['Frosted', 'Glacial', 'Frozen', 'Icy'],
   lightning_damage: ['Sparking', 'Thundering', 'Charged', 'Stormy'],
@@ -213,6 +215,7 @@ const ATTR_SUFFIX: Record<AttributeType, string[]> = {
   damage_bonus:     ['of Hard Hits', 'of the Warrior', 'of Striking'],
   healing_bonus:    ['of Mending', 'of Healing Light', 'of Kind Care'],
   mp_regen:         ['of Flowing Mana', 'of the Wellspring', 'of Steady Focus'],
+  hp_regen:         ['of Recovery', 'of Vitality', 'of Mending'],
   fire_damage:      ['of the Phoenix', 'of Burning Skies', 'of Bright Embers'],
   ice_damage:       ['of the Glacier', 'of Soft Snowfall', "of Winter's Bite"],
   lightning_damage: ['of Rolling Thunder', 'of Dancing Sparks', 'of the Tempest'],
@@ -282,7 +285,7 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
   ],
   hammer: [
     ['strength', 3], ['constitution', 3], ['damage_bonus', 2], ['debuff_resist', 1],
-    ['aoe_bonus', 1],
+    ['aoe_bonus', 1], ['hp_regen', 2],
   ],
   monk: [
     ['dexterity', 3], ['spirit', 2], ['constitution', 1], ['crit_chance', 2],
@@ -290,7 +293,7 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
   ],
   paladin: [
     ['strength', 2], ['constitution', 2], ['spirit', 2], ['holy_damage', 2],
-    ['healing_bonus', 1], ['debuff_resist', 1], ['damage_bonus', 1],
+    ['healing_bonus', 1], ['debuff_resist', 1], ['damage_bonus', 1], ['hp_regen', 1],
   ],
   assassin: [
     ['dexterity', 3], ['crit_chance', 3], ['damage_bonus', 2], ['dot_bonus', 1],
@@ -312,7 +315,7 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
 
 const GENERIC_ATTR_POOL: WeightedAttr[] = [
   ['constitution', 2], ['strength', 1], ['dexterity', 1], ['intelligence', 1],
-  ['spirit', 1], ['gold_find', 1], ['debuff_resist', 1],
+  ['spirit', 1], ['gold_find', 1], ['debuff_resist', 1], ['hp_regen', 1],
 ]
 
 /** Base value range (at common rarity) per attribute type. */
@@ -321,6 +324,7 @@ const ATTR_BASE: Record<AttributeType, [number, number]> = {
   strength: [1, 3], spirit: [1, 3],
   damage_bonus: [2, 4], healing_bonus: [2, 4],
   mp_regen: [1, 2],
+  hp_regen: [1, 3],
   fire_damage: [2, 5], ice_damage: [2, 5], lightning_damage: [2, 5],
   holy_damage: [2, 5], nature_damage: [2, 5],
   crit_chance: [1, 2],
@@ -341,6 +345,7 @@ const ATTR_POWER_WEIGHT: Record<AttributeType, number> = {
   constitution: 2, intelligence: 2, dexterity: 2, strength: 2, spirit: 2,
   damage_bonus: 1.5, healing_bonus: 1.5,
   mp_regen: 4,
+  hp_regen: 4,
   fire_damage: 1.6, ice_damage: 1.6, lightning_damage: 1.6,
   holy_damage: 1.6, nature_damage: 1.6,
   crit_chance: 6,

@@ -19,6 +19,7 @@ import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { BASIC_ATTACK } from '../data/skills'
 import type { Skill } from '../data/skills'
 import { SKILL_MAP } from '../data/skillTrees'
+import { StatsStore } from '../systems/StatsStore'
 import type { CombatSkill, SkillClass } from '../data/skillTrees'
 import { TD_MONSTERS } from '../data/tileFrames'
 import { DIFFICULTIES, type Difficulty } from '../data/mobs'
@@ -152,6 +153,9 @@ export class BattleScene extends Phaser.Scene {
   private selectedSkill: Skill | null = null
   private playerHp = 100
   private playerMaxHp = 100
+  private playerMana = 0
+  private playerMaxMana = 0
+  private manaRegen = 0
   private playerSpeed = DEFAULT_PLAYER_SPEED
   private playerDefense = 0   // equipment-derived defense will feed this later
   private xpGained = 0
@@ -164,6 +168,9 @@ export class BattleScene extends Phaser.Scene {
   // ── HUD refs ─────────────────────────────────────────────────────────────
   private playerHpGfx!: Phaser.GameObjects.Graphics
   private playerHpText!: Phaser.GameObjects.Text
+  private playerMpGfx!: Phaser.GameObjects.Graphics
+  private playerMpText!: Phaser.GameObjects.Text
+  private playerBars = { barX: 0, barW: 0, hpY: 0, mpY: 0 }
   private logText!: Phaser.GameObjects.Text
   private skillButtons: Phaser.GameObjects.Container[] = []
   private skillBtnGfx: Phaser.GameObjects.Graphics[] = []
@@ -189,6 +196,13 @@ export class BattleScene extends Phaser.Scene {
     // derived speed stat into registry key 'speed' so battles pick it up here.
     this.playerSpeed   = (this.registry.get('speed') as number) ?? DEFAULT_PLAYER_SPEED
     this.playerDefense = (this.registry.get('defense') as number) ?? 0
+
+    // Mana (max + regen) come from the server-pushed derived stats. Mana starts
+    // full each battle for now; carrying it between fights is a follow-up.
+    const derived = StatsStore.get()?.derived ?? []
+    this.playerMaxMana = Math.round(derived.find(r => r.key === 'mana')?.total ?? 0)
+    this.manaRegen     = derived.find(r => r.key === 'manaRegen')?.total ?? 0
+    this.playerMana    = this.playerMaxMana
 
     this.loadOwnedSkills()
     this.buildMobs()
@@ -580,7 +594,8 @@ export class BattleScene extends Phaser.Scene {
     const name = this.add.text(0, 8, skill.name, {
       fontSize: '11px', fontFamily: 'Arial', color: '#dddddd', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5)
-    const desc = this.add.text(0, 22, `${skill.damageMin}–${skill.damageMax} ${skill.isHeal ? 'HP' : 'dmg'}`, {
+    const mp = skill.mpCost > 0 ? `  ·  ${skill.mpCost} MP` : ''
+    const desc = this.add.text(0, 22, `${skill.damageMin}–${skill.damageMax} ${skill.isHeal ? 'HP' : 'dmg'}${mp}`, {
       fontSize: '9px', fontFamily: 'Arial',
       color: Phaser.Display.Color.IntegerToColor(skill.color).lighten(20).rgba,
     }).setOrigin(0.5, 0.5)
@@ -607,6 +622,12 @@ export class BattleScene extends Phaser.Scene {
     draw: (fill: number, accent: number) => void,
     fillActive: number,
   ) {
+    // Mana gate — spells cost MP (the basic Attack is free).
+    if (skill.mpCost > this.playerMana) {
+      this.setLog(`Not enough mana for ${skill.name} (need ${skill.mpCost} MP).`, '#ff8888')
+      return
+    }
+
     // Reset all button backgrounds to idle (re-build is handled via resetSkillButtons on next turn)
     this.skillBtnGfx.forEach(bg => bg.clear())
     // Highlight selected button
@@ -654,8 +675,9 @@ export class BattleScene extends Phaser.Scene {
     const mob    = this.mobs[mobIdx]
     const dmg    = Phaser.Math.Between(skill.damageMin, skill.damageMax)
 
-    this.selectedSkill = null
-    this.resetSkillButtons()
+    // Spend mana; KEEP the skill selected so the next turn resumes targeting
+    // with it (sticky) — no need to re-pick the skill every attack.
+    this.spendMana(skill.mpCost)
 
     // Flash mob
     this.cameras.main.shake(180, 0.006)
@@ -693,6 +715,7 @@ export class BattleScene extends Phaser.Scene {
 
   private castHeal(skill: Skill) {
     const amount = Phaser.Math.Between(skill.damageMin, skill.damageMax)
+    this.spendMana(skill.mpCost)
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + amount)
     this.refreshPlayerPanel()
     this.cameras.main.flash(300, 0, 1, 0.3)
@@ -732,13 +755,40 @@ export class BattleScene extends Phaser.Scene {
       delay += 600
     })
 
-    // After all mobs attacked: back to player turn
+    // After all mobs attacked: regen mana, then back to player turn.
     this.time.delayedCall(delay + 400, () => {
       if (this.phase !== 'enemy_turn') return   // already ended
       if (this.playerHp <= 0) return            // defeat already triggered
-      this.phase = 'player_turn'
-      this.setLog('Your turn — choose a skill!')
+      if (this.manaRegen > 0 && this.playerMana < this.playerMaxMana) {
+        this.playerMana = Math.min(this.playerMaxMana, this.playerMana + this.manaRegen)
+        this.refreshPlayerPanel()
+      }
+      this.resumePlayerTurn()
     })
+  }
+
+  /** Start the player's turn. If a damage skill is still selected and still
+   *  affordable, resume targeting with it (sticky) so the player can just click
+   *  an enemy; otherwise prompt for a skill. */
+  private resumePlayerTurn() {
+    const s = this.selectedSkill
+    if (s && !s.isHeal && s.mpCost <= this.playerMana && this.mobs.some(m => m.alive)) {
+      this.phase = 'target_select'
+      this.setLog(`${s.icon}  ${s.name} ready — click an enemy!`, '#ffdd88')
+      this.highlightAliveMobs(true)
+    } else {
+      this.selectedSkill = null
+      this.phase = 'player_turn'
+      this.resetSkillButtons()
+      this.setLog('Your turn — choose a skill!')
+    }
+  }
+
+  /** Deduct mana (clamped ≥ 0) and refresh the bar. */
+  private spendMana(cost: number) {
+    if (cost <= 0) return
+    this.playerMana = Math.max(0, this.playerMana - cost)
+    this.refreshPlayerPanel()
   }
 
   // ── Button state helpers ──────────────────────────────────────────────────
@@ -755,43 +805,81 @@ export class BattleScene extends Phaser.Scene {
   // ── Player panel ──────────────────────────────────────────────────────────
 
   private buildPlayerPanel() {
-    const panelH = GAME_HEIGHT - PLAYER_PANEL_Y
-
-    // Title
-    this.add.text(12, PLAYER_PANEL_Y + 10, 'YOUR CHARACTER', {
+    const top = PLAYER_PANEL_Y
+    this.add.graphics().setDepth(4)
+      .lineStyle(1, 0x2a2a44, 1).lineBetween(0, top, GAME_WIDTH, top)
+    this.add.text(16, top + 6, 'YOUR PARTY', {
       fontSize: '10px', fontFamily: 'Arial', color: '#666666', fontStyle: 'bold', letterSpacing: 2,
     }).setOrigin(0, 0).setDepth(5)
 
-    // HP label
-    this.add.text(12, PLAYER_PANEL_Y + 26, 'HP', {
-      fontSize: '13px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
-    }).setOrigin(0, 0).setDepth(5)
+    // Four party slots across the bottom (only slot 0 — you — is filled today).
+    const gap = 16
+    const slotW = (GAME_WIDTH - gap * 5) / 4
+    const cardY = top + 22
+    const cardH = GAME_HEIGHT - cardY - 10
 
-    this.playerHpGfx  = this.add.graphics().setDepth(5)
-    this.playerHpText = this.add.text(GAME_WIDTH / 2, PLAYER_PANEL_Y + 58, '', {
-      fontSize: '13px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5).setDepth(6)
+    for (let i = 0; i < 4; i++) {
+      const cardX = gap + i * (slotW + gap)
+      const cx = cardX + slotW / 2
+      const filled = i === 0
 
-    // Skill tip
-    this.add.text(GAME_WIDTH / 2, PLAYER_PANEL_Y + panelH - 10, 'Choose a skill above, then click an enemy', {
-      fontSize: '11px', fontFamily: 'Arial', color: '#444455',
-    }).setOrigin(0.5, 1).setDepth(5)
+      const bg = this.add.graphics().setDepth(4)
+      bg.fillStyle(filled ? 0x161636 : 0x0e0e1c, filled ? 0.95 : 0.5)
+      bg.fillRoundedRect(cardX, cardY, slotW, cardH, 10)
+      bg.lineStyle(1, filled ? 0x4a4a7a : 0x222238, 1)
+      bg.strokeRoundedRect(cardX, cardY, slotW, cardH, 10)
+
+      if (!filled) {
+        this.add.text(cx, cardY + cardH / 2, 'Empty', {
+          fontSize: '13px', fontFamily: 'Arial', color: '#33334d', fontStyle: 'italic',
+        }).setOrigin(0.5, 0.5).setDepth(5)
+        continue
+      }
+
+      // Character sprite + name.
+      const hero = this.add.sprite(cx, cardY + 44, 'character_idle', 12).setScale(1.8).setDepth(5)
+      if (this.anims.exists('idle_down')) hero.play('idle_down')
+      this.add.text(cx, cardY + 92, 'You', {
+        fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5).setDepth(5)
+
+      // HP + MP bar geometry for this slot.
+      const barX = cardX + 14
+      const barW = slotW - 28
+      const hpY = cardY + 110
+      const mpY = cardY + 134
+      this.playerBars = { barX, barW, hpY, mpY }
+
+      this.playerHpGfx  = this.add.graphics().setDepth(5)
+      this.playerHpText = this.add.text(cx, hpY + 8, '', {
+        fontSize: '10px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5).setDepth(6)
+      this.playerMpGfx  = this.add.graphics().setDepth(5)
+      this.playerMpText = this.add.text(cx, mpY + 7, '', {
+        fontSize: '10px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5).setDepth(6)
+    }
 
     this.refreshPlayerPanel()
   }
 
   private refreshPlayerPanel() {
+    const { barX, barW, hpY, mpY } = this.playerBars
+
+    // HP bar.
     this.playerHpGfx.clear()
-    const pct  = Math.max(0, this.playerHp / this.playerMaxHp)
-    const bx   = 36, by = PLAYER_PANEL_Y + 28, bw = GAME_WIDTH - 48, bh = 22
-    this.playerHpGfx.fillStyle(0x222233, 1)
-    this.playerHpGfx.fillRoundedRect(bx, by, bw, bh, 5)
-    const col = pct > 0.5 ? 0x44cc44 : pct > 0.25 ? 0xffcc00 : 0xff4444
-    this.playerHpGfx.fillStyle(col, 1)
-    this.playerHpGfx.fillRoundedRect(bx, by, Math.round(bw * pct), bh, 5)
-    this.playerHpGfx.lineStyle(1, 0x000000, 0.4)
-    this.playerHpGfx.strokeRoundedRect(bx, by, bw, bh, 5)
+    const hpPct = Math.max(0, Math.min(1, this.playerHp / this.playerMaxHp))
+    this.playerHpGfx.fillStyle(0x222233, 1).fillRoundedRect(barX, hpY, barW, 16, 4)
+    const hpCol = hpPct > 0.5 ? 0x44cc44 : hpPct > 0.25 ? 0xffcc00 : 0xff4444
+    this.playerHpGfx.fillStyle(hpCol, 1).fillRoundedRect(barX, hpY, Math.round(barW * hpPct), 16, 4)
     this.playerHpText.setText(`${this.playerHp} / ${this.playerMaxHp}  HP`)
+
+    // MP bar.
+    this.playerMpGfx.clear()
+    const mpPct = this.playerMaxMana > 0 ? Math.max(0, Math.min(1, this.playerMana / this.playerMaxMana)) : 0
+    this.playerMpGfx.fillStyle(0x222233, 1).fillRoundedRect(barX, mpY, barW, 14, 4)
+    this.playerMpGfx.fillStyle(0x3a78d8, 1).fillRoundedRect(barX, mpY, Math.round(barW * mpPct), 14, 4)
+    this.playerMpText.setText(`${Math.floor(this.playerMana)} / ${this.playerMaxMana}  MP`)
   }
 
   // ── Floating damage labels ─────────────────────────────────────────────────

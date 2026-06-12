@@ -441,10 +441,11 @@ export class TavernScene extends Phaser.Scene {
         continue
       }
 
-      const sprite = this.add.sprite(p.position.x, p.position.y, 'character_idle').setDepth(19)
+      const sprite = this.add.sprite(p.position.x, p.position.y, 'character_idle')
+        .setScale(1.8).setDepth(19)   // match the local player's scale
       if (this.anims.exists('idle_down')) sprite.play('idle_down')
 
-      const label = this.add.text(p.position.x, p.position.y - 34, p.username, {
+      const label = this.add.text(p.position.x, p.position.y - 50, p.username, {
         fontSize: '11px', fontFamily: 'Arial', color: '#aaddff',
         backgroundColor: '#00000088', padding: { x: 4, y: 1 },
       }).setOrigin(0.5, 1).setDepth(19)
@@ -658,7 +659,7 @@ export class TavernScene extends Phaser.Scene {
       const dy = rp.ty - rp.sprite.y
       rp.sprite.x = Phaser.Math.Linear(rp.sprite.x, rp.tx, 0.2)
       rp.sprite.y = Phaser.Math.Linear(rp.sprite.y, rp.ty, 0.2)
-      rp.label.setPosition(rp.sprite.x, rp.sprite.y - 34)
+      rp.label.setPosition(rp.sprite.x, rp.sprite.y - 50)
 
       const moving = Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5
       if (moving) {

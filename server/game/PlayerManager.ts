@@ -611,7 +611,7 @@ export class PlayerManager {
   computeStats(
     socketId: string,
     equipment: EquipmentSlots,
-  ): { payload: StatsUpdatePayload; maxHp: number; maxMana: number; manaRegen: number } | null {
+  ): { payload: StatsUpdatePayload; maxHp: number; maxMana: number; manaRegen: number; healthRegen: number } | null {
     const player = this.players.get(socketId);
     if (!player) return null;
 
@@ -621,7 +621,7 @@ export class PlayerManager {
     const gear = {
       hp: 0, attack: 0, defense: 0,
       damage_bonus: 0, magic_damage: 0, healing_bonus: 0, crit_chance: 0,
-      mp_regen: 0,
+      mp_regen: 0, hp_regen: 0,
     };
 
     for (const item of Object.values(equipment)) {
@@ -640,6 +640,8 @@ export class PlayerManager {
             gear.crit_chance += a.value;
           } else if (t === 'mp_regen') {
             gear.mp_regen += a.value;
+          } else if (t === 'hp_regen') {
+            gear.hp_regen += a.value;
           } else if (
             t === 'fire_damage' || t === 'ice_damage' || t === 'lightning_damage' ||
             t === 'holy_damage' || t === 'nature_damage'
@@ -733,11 +735,16 @@ export class PlayerManager {
       derivedRow('manaRegen', 'Mana Regen',
         2 + bSPI * 0.5,
         2 + SPI * 0.5 + gear.mp_regen),
+      // Health Regen / battle = 3 + CON + gear hp_regen — scales off Constitution
+      derivedRow('healthRegen', 'Health Regen',
+        3 + bCON * 1,
+        3 + CON * 1 + gear.hp_regen),
     ];
 
     const maxHp = 50 + CON * 10 + gear.hp;
     const maxMana = Math.round(20 + SPI * 8);
     const manaRegen = round1(2 + SPI * 0.5 + gear.mp_regen);
+    const healthRegen = round1(3 + CON * 1 + gear.hp_regen);
 
     return {
       payload: {
@@ -749,6 +756,7 @@ export class PlayerManager {
       maxHp,
       maxMana,
       manaRegen,
+      healthRegen,
     };
   }
 

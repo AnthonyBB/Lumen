@@ -11,7 +11,7 @@ const ALLOWED = new Set([
   'constitution', 'intelligence', 'dexterity', 'strength', 'spirit',
   'damage_bonus', 'healing_bonus', 'mp_regen',
   'fire_damage', 'ice_damage', 'lightning_damage', 'holy_damage', 'nature_damage',
-  'crit_chance', 'dot_bonus', 'aoe_bonus', 'gold_find', 'debuff_resist',
+  'crit_chance', 'dot_bonus', 'aoe_bonus', 'gold_find', 'debuff_resist', 'hp_regen',
 ])
 
 const CLASSES = [

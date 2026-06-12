@@ -31,6 +31,7 @@ import {
 } from '../data/tileFrames'
 import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
 import { EQUIPMENT_MAP } from '../data/equipmentGen'
+import { StatsStore } from '../systems/StatsStore'
 
 // ── World dimensions ────────────────────────────────────────────────────────
 
@@ -103,6 +104,7 @@ export class BiomeScene extends Phaser.Scene {
   private pathState: PathState = 'idle'
   private playerHp = 100
   private playerMaxHp = 100
+  private healthRegen = 0   // HP restored between battles (scales off Constitution)
   private encountersCleared = 0
   private totalXpGained = 0
   private maxEnemyLevel = 1   // highest enemy level faced — scales the campaign reward
@@ -136,6 +138,7 @@ export class BiomeScene extends Phaser.Scene {
       (this.registry.get('hp') as number) ?? this.playerMaxHp,
       this.playerMaxHp,
     )
+    this.healthRegen = StatsStore.get()?.derived.find(r => r.key === 'healthRegen')?.total ?? 0
 
     // World bounds & camera
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H)
@@ -512,6 +515,10 @@ export class BiomeScene extends Phaser.Scene {
     if (!result.victory) { this.showDefeatOverlay(); return }
 
     this.playerHp       = result.playerHp
+    // Health regen between battles — recover some HP before the next encounter.
+    if (this.healthRegen > 0) {
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.healthRegen))
+    }
     this.totalXpGained += result.xpGained
     this.encountersCleared++
 

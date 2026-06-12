@@ -100,7 +100,7 @@ const STAT_ABBR: Record<string, string> = { attack: 'atk', defense: 'def', speed
  *  scaled — see docs/ADVENTURE_RANKS_DESIGN.md §1. */
 const SCALED_EFFECT_TYPES = new Set(['damage', 'aoe', 'heal', 'dot', 'bleed', 'poison', 'shield', 'hot'])
 
-function toBattleSkill(cs: CombatSkill, spellMult = 1): Skill {
+export function toBattleSkill(cs: CombatSkill, spellMult = 1): Skill {
   // Scale the flat damage/heal magnitudes by the player's current rank into a
   // COPY — never mutate the shared SKILL_MAP definitions.
   const effects = spellMult === 1 ? cs.effects : cs.effects.map(e =>

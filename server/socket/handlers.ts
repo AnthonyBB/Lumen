@@ -878,6 +878,61 @@ export function registerHandlers(
     });
   });
 
+  // ── campaign:report — MANUAL party combat per-encounter rewards ────────────
+  //
+  // Live combat is hand-played client-side (PartyManualBattleScene). On a win
+  // the client reports the encounter; the server grants the PER-CHARACTER XP to
+  // every party member plus silver + per-encounter materials. Like all live
+  // combat the outcome is client-reported, so rewards are derived only from the
+  // (capped) difficulty/level/mob-count — never from client-supplied amounts.
+  // The CAMPAIGN-COMPLETION bonus (shards/tokens/campaign materials) still flows
+  // through player:award_xp(campaignComplete=true) from BiomeScene's victory
+  // screen, so this handler only ever grants per-encounter rewards.
+  socket.on('campaign:report', (payload: {
+    difficulty?: unknown; level?: unknown; mobCount?: unknown; victory?: unknown;
+  }) => {
+    const player = requireJoinedPlayer('You must join before fighting.');
+    if (!player) return;
+    if (payload?.victory !== true) return; // losses grant nothing
+
+    const diff: Difficulty | null =
+      typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
+        ? (payload.difficulty as Difficulty) : null;
+    if (!diff) { socket.emit('error', { message: 'Unknown campaign difficulty.' }); return; }
+
+    const level = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
+    const mobCount = isSafeNumber(payload?.mobCount, 1, 12) ? Math.floor(payload.mobCount as number) : 1;
+    const currentRank = playerManager.getAdventureRank(socket.id);
+
+    // Per-character XP — every ally in the party levels individually (mirrors the
+    // autonomous resolver's encounter XP, capped).
+    const encounterXp = Math.min(500, mobCount * (10 + level * 2));
+    const activeId = playerManager.getActiveCharacter(socket.id)?.id;
+    const levelUps: { id: string; newLevel: number }[] = [];
+    for (const id of playerManager.getParty(socket.id)) {
+      const res = playerManager.addXpToCharacter(socket.id, id, encounterXp);
+      if (!res) continue;
+      if (res.leveledUp) levelUps.push({ id, newLevel: res.newLevel });
+      if (id === activeId) {
+        socket.emit('player:xp_updated', {
+          newXp: res.newXp, newLevel: res.newLevel, leveledUp: res.leveledUp, xpAwarded: encounterXp,
+        });
+      }
+    }
+
+    // Account-wide: silver + per-encounter materials (campaignComplete=false — the
+    // campaign bonus is granted separately by player:award_xp on campaign clear).
+    const silver = Math.min(5000, mobCount * Math.round(level * 1.5));
+    if (silver > 0) playerManager.addSilver(socket.id, silver);
+    const rankMult = rankMultiplier(currentRank);
+    const { drops } = rollMaterials(level, diff, false, rankMult);
+    if (drops.length) playerManager.grantMaterials(socket.id, drops);
+
+    playerManager.persistProgress(socket.id);
+    pushStats(); pushCurrency(); pushInventoryUpdate(); pushRoster();
+    socket.emit('campaign:report_result', { levelUps });
+  });
+
   // ── learning:start ───────────────────────────────────────────────────────
   //
   // Starts a 5-question quiz for a single curriculum topic.  Server-authoritative

@@ -9,6 +9,7 @@ import { ChestScene } from './scenes/ChestScene'
 import { BiomeScene } from './scenes/BiomeScene'
 import { BattleScene } from './scenes/BattleScene'
 import { PartyBattleScene } from './scenes/PartyBattleScene'
+import { PartyManualBattleScene } from './scenes/PartyManualBattleScene'
 import { StrategyScene } from './scenes/StrategyScene'
 import { SkillShopScene } from './scenes/SkillShopScene'
 import { MarketScene } from './scenes/MarketScene'
@@ -31,7 +32,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
       debug: false,
     },
   },
-  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene, ChestScene, BiomeScene, BattleScene, PartyBattleScene, StrategyScene, SkillShopScene, MarketScene, TavernScene, CraftScene, CraftBuildingScene],
+  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene, ChestScene, BiomeScene, BattleScene, PartyBattleScene, PartyManualBattleScene, StrategyScene, SkillShopScene, MarketScene, TavernScene, CraftScene, CraftBuildingScene],
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

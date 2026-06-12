@@ -14,7 +14,8 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import type { BattleSceneData, BattleResult, MobDef } from './BattleScene'
+import type { BattleResult, MobDef } from './BattleScene'
+import type { ClientCombatant, PartyManualData } from './PartyManualBattleScene'
 import {
   RL_WATER, RL_WATER2, RL_GRASS, RL_GRASS2, RL_GRASS_PEBBLES, RL_GRASS_LUSH,
   RL_DIRT, RL_DIRT2, RL_SNOW, RL_SNOW2, RL_SAND, RL_SAND2,
@@ -542,35 +543,51 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private launchBattle(node: PathNode) {
-    // LIVE combat is the interactive, hand-played battle (the rich look + manual
-    // skill/target control) — playing it teaches you the tactics you then bake
-    // into your characters' strategies for autonomous idle combat. (Idle uses the
-    // server resolver; see server/game/combat/idle.ts.)
+    // LIVE combat is the interactive, hand-played PARTY battle (the rich look +
+    // manual skill/target control of all 4 characters) — playing it teaches you
+    // the tactics you then bake into your characters' strategies for autonomous
+    // idle combat. (Idle uses the server resolver; see server/game/combat/idle.ts.)
+    //
+    // The client only has the ACTIVE character's stats, so we ask the server for
+    // the whole party's combat data (party:combat_data) before launching.
     const encNodes = this.pathNodes.filter(n => n.type === 'encounter')
     const encIdx   = encNodes.findIndex(n => n === node)
+    const mobs     = node.mobs ?? []
+    for (const m of mobs) this.maxEnemyLevel = Math.max(this.maxEnemyLevel, m.level)
+    const level = mobs.reduce((mx, m) => Math.max(mx, m.level), 1)
 
-    const data: BattleSceneData = {
-      biome:           this.biomeData.biome,
-      difficulty:      this.biomeData.difficulty,
-      mobs:            node.mobs ?? [],
-      encounterIndex:  encIdx,
-      totalEncounters: encNodes.length,
-      playerHp:        this.playerHp,
-      playerMaxHp:     this.playerMaxHp,
+    const launch = (allies: ClientCombatant[]) => {
+      const data: PartyManualData = {
+        allies,
+        mobs,
+        difficulty:       this.biomeData.difficulty,
+        level,
+        campaignComplete: encIdx === encNodes.length - 1,
+      }
+      this.scene.launch('PartyManualBattleScene', data)
+      this.scene.pause()
     }
-    for (const m of node.mobs ?? []) this.maxEnemyLevel = Math.max(this.maxEnemyLevel, m.level)
 
-    this.scene.launch('BattleScene', data)
-    this.scene.pause()
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    if (socket) {
+      socket.once('party:combat_data', (d: { allies?: ClientCombatant[] }) => launch(d?.allies ?? []))
+      socket.emit('party:combat_data')
+    } else {
+      launch([])
+    }
   }
 
   public onBattleResult(result: BattleResult) {
     if (!result.victory) { this.showDefeatOverlay(); return }
 
-    this.playerHp       = result.playerHp
-    // Health regen between battles — recover some HP before the next encounter.
-    if (this.healthRegen > 0) {
-      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.healthRegen))
+    // playerHp < 0 is the party-combat sentinel: each ally tracks its own HP and
+    // resets per encounter, so the BiomeScene's single HP bar is left unchanged.
+    if (result.playerHp >= 0) {
+      this.playerHp = result.playerHp
+      // Health regen between battles — recover some HP before the next encounter.
+      if (this.healthRegen > 0) {
+        this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.healthRegen))
+      }
     }
     this.totalXpGained += result.xpGained
     this.encountersCleared++

@@ -191,7 +191,7 @@ export class CraftScene extends Phaser.Scene {
 
     // Recipe cards row.
     const n = this.recipes.length
-    const cardW = 120, gap = 16
+    const cardW = 144, gap = 16
     const totalW = n * cardW + (n - 1) * gap
     let x = cx - totalW / 2
     for (const r of this.recipes) {
@@ -199,8 +199,11 @@ export class CraftScene extends Phaser.Scene {
       const card = this.card(x, 104, cardW, 110, selected)
       this.content.add(card)
       this.content.add(this.label(x + cardW / 2, 132, r.icon, '34px', '#ffffff').setOrigin(0.5))
-      this.content.add(this.label(x + cardW / 2, 170, r.name, '15px', '#ffffff', true).setOrigin(0.5))
-      this.content.add(this.label(x + cardW / 2, 192, r.topicHint, '11px', '#a1887f').setOrigin(0.5))
+      // Name wraps inside the card so long names ("Rejuvenation Potion") don't bleed.
+      this.content.add(this.label(x + cardW / 2, 166, r.name, '14px', '#ffffff', true)
+        .setOrigin(0.5).setAlign('center').setWordWrapWidth(cardW - 12))
+      this.content.add(this.label(x + cardW / 2, 199, r.topicHint, '11px', '#a1887f')
+        .setOrigin(0.5).setWordWrapWidth(cardW - 8))
       this.hit(x, 104, cardW, 110, () => { this.selectedRecipe = r; this.render() })
       x += cardW + gap
     }
@@ -212,7 +215,7 @@ export class CraftScene extends Phaser.Scene {
     let y = 250
     this.content.add(this.label(cx, y, `${ui.material === 'reagent' ? 'Reagent' : 'Metal'} tier  (costs ${cost} ${ui.material} — ${ui.tierNote})`, '14px', '#d7ccc8').setOrigin(0.5))
     y += 30
-    const tileW = 86, tgap = 8
+    const tileW = 104, tgap = 8
     const totalTW = MAX_TIER * tileW + (MAX_TIER - 1) * tgap
     let tx = cx - totalTW / 2
     let bestAffordable = 0
@@ -223,8 +226,10 @@ export class CraftScene extends Phaser.Scene {
       if (affordable) bestAffordable = t
       const selected = t === this.selectedTier
       this.content.add(this.card(tx, y, tileW, 58, selected, !affordable))
-      this.content.add(this.label(tx + tileW / 2, y + 16, `${mat.name} ${ROMAN[t]}`, '11px', affordable ? '#ffffff' : '#6d5b4f', true).setOrigin(0.5))
-      this.content.add(this.label(tx + tileW / 2, y + 38, `${owned} ${ui.material}`, '11px', affordable ? '#cfd8dc' : '#6d5b4f').setOrigin(0.5))
+      // Material name wraps inside the tile; tier + owned count on the line below.
+      this.content.add(this.label(tx + tileW / 2, y + 15, mat.name, '11px', affordable ? '#ffffff' : '#6d5b4f', true)
+        .setOrigin(0.5).setAlign('center').setWordWrapWidth(tileW - 10))
+      this.content.add(this.label(tx + tileW / 2, y + 40, `${ROMAN[t]} · ${owned} owned`, '10px', affordable ? '#cfd8dc' : '#6d5b4f').setOrigin(0.5))
       if (affordable) this.hit(tx, y, tileW, 58, () => { this.selectedTier = t; this.render() })
       tx += tileW + tgap
     }

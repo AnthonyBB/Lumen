@@ -9,6 +9,7 @@
 
 import type {
   Player,
+  Character,
   PublicPlayer,
   Subject,
   AttributeKey,
@@ -17,6 +18,7 @@ import type {
   EquipmentSlots,
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
+import { randomUUID } from 'crypto';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
 import {
@@ -117,6 +119,69 @@ function normaliseAttributePoints(
   return out;
 }
 
+/** Default class for a migrated / starter character until acquisition assigns
+ *  one (skill class-locking is not yet enforced — see docs/CHARACTERS_DESIGN.md). */
+const DEFAULT_CHARACTER_CLASS = 'sword';
+
+/** Level-derived max HP (legacy single-character formula). */
+function maxHpForLevel(level: number): number {
+  return 100 + (Math.max(1, level) - 1) * 20;
+}
+
+/** Build a fresh level-1 character. */
+function newCharacter(name: string, cls: string = DEFAULT_CHARACTER_CLASS): Character {
+  return {
+    id: randomUUID(),
+    name,
+    class: cls,
+    level: 1,
+    xp: 0,
+    hp: 100,
+    maxHp: 100,
+    unlockedSkills: [],
+    strategyLoadout: [],
+    skillShards: 0,
+    attributePoints: defaultAttributePoints(),
+  };
+}
+
+/** Sanitise a persisted character record (clamp numbers, fill gaps, recompute
+ *  level/HP from XP so the authoritative curve always wins). */
+function normaliseCharacter(raw: Partial<Character> | undefined, fallbackName: string): Character {
+  const xp = Math.max(0, Math.floor(raw?.xp ?? 0));
+  const level = levelForXp(xp);
+  return {
+    id: typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    name: typeof raw?.name === 'string' && raw.name ? raw.name : fallbackName,
+    class: typeof raw?.class === 'string' && raw.class ? raw.class : DEFAULT_CHARACTER_CLASS,
+    level,
+    xp,
+    maxHp: maxHpForLevel(level),
+    hp: maxHpForLevel(level),
+    unlockedSkills: Array.isArray(raw?.unlockedSkills) ? [...raw!.unlockedSkills] : [],
+    strategyLoadout: Array.isArray(raw?.strategyLoadout) ? [...raw!.strategyLoadout] : [],
+    skillShards: Math.max(0, Math.floor(raw?.skillShards ?? 0)),
+    attributePoints: normaliseAttributePoints(raw?.attributePoints),
+  };
+}
+
+/** Migrate a legacy single-character progress doc (flat xp/level/skills/… on the
+ *  account) into a one-element roster. See docs/CHARACTERS_DESIGN.md §1. */
+function migrateFlatToCharacter(doc: {
+  xp?: number; unlockedSkills?: string[]; strategyLoadout?: string[];
+  skillShards?: number; attributePoints?: Record<string, number>;
+}, name: string): Character {
+  return normaliseCharacter({
+    name,
+    class: DEFAULT_CHARACTER_CLASS,
+    xp: doc.xp,
+    unlockedSkills: doc.unlockedSkills,
+    strategyLoadout: doc.strategyLoadout,
+    skillShards: doc.skillShards,
+    attributePoints: doc.attributePoints as Record<AttributeKey, number> | undefined,
+  }, name);
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -128,6 +193,25 @@ const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
 
 /** Pass count at which a topic counts as COMPLETE. */
 export const TOPIC_PASSES_TO_COMPLETE = 3;
+
+/** Shape returned by loadProgress / consumed by applyProgress — an account's
+ *  roster plus its account-wide state. */
+export interface LoadedProgress {
+  characters: Character[];
+  activeCharacterId: string;
+  subjectGrades: Record<Subject, number>;
+  adventureRank: AdventureRankId;
+  /** True when a rank was already persisted (so join should NOT overwrite it
+   *  with an age-derived default). */
+  rankPersisted: boolean;
+  topicPasses: Record<string, number>;
+  unlockedStrategies: string[];
+  combatShards: number;
+  silver: number;
+  materials: Record<string, number>;
+  campaignsCompleted: number;
+  recruitTokens: number;
+}
 
 /** Skill shards granted for completing any quiz (effort reward, every test). */
 export const QUIZ_COMPLETE_SKILL_SHARDS = 1;
@@ -174,24 +258,24 @@ export class PlayerManager {
       return { player: null, error: 'That username is already taken.' };
     }
 
+    const starter = newCharacter(trimmed);
     const player: Player = {
       id: socketId,
       username: trimmed,
-      ...INITIAL_STATS,
+      zone: INITIAL_STATS.zone,
       position: { ...INITIAL_STATS.position },
       lastMessageAt: 0,
+      characters: [starter],
+      activeCharacterId: starter.id,
       subjectGrades: defaultSubjectGrades(),
       adventureRank: DEFAULT_RANK_ID,
       topicPasses: {},
-      unlockedSkills: [],
       unlockedStrategies: [],
-      strategyLoadout: [],
-      skillShards: 0,
       combatShards: 0,
       silver: 0,
       materials: {},
       campaignsCompleted: 0,
-      attributePoints: defaultAttributePoints(),
+      recruitTokens: 0,
     };
 
     this.players.set(socketId, player);
@@ -228,6 +312,41 @@ export class PlayerManager {
   }
 
   // -------------------------------------------------------------------------
+  // Active character (the roster member current operations target)
+  // -------------------------------------------------------------------------
+
+  /** The active character of an account (falls back to the first if the active
+   *  id is stale; guarantees a character since the roster is never empty). */
+  private active(player: Player): Character {
+    return player.characters.find((c) => c.id === player.activeCharacterId)
+      ?? player.characters[0];
+  }
+
+  /** The active character for a socket, or undefined if the player is unknown. */
+  private activeOf(socketId: string): Character | undefined {
+    const player = this.players.get(socketId);
+    return player ? this.active(player) : undefined;
+  }
+
+  /** All characters in an account's roster. */
+  getCharacters(socketId: string): Character[] {
+    return this.players.get(socketId)?.characters ?? [];
+  }
+
+  /** The active character (public read). */
+  getActiveCharacter(socketId: string): Character | undefined {
+    return this.activeOf(socketId);
+  }
+
+  /** Switch which character is active. Returns false if the id isn't owned. */
+  setActiveCharacter(socketId: string, characterId: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player || !player.characters.some((c) => c.id === characterId)) return false;
+    player.activeCharacterId = characterId;
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
   // Mutations (server-authoritative)
   // -------------------------------------------------------------------------
 
@@ -244,25 +363,25 @@ export class PlayerManager {
 
   /** Apply XP gain, calculating level-ups server-side. */
   addXp(socketId: string, amount: number): { newXp: number; newLevel: number; leveledUp: boolean } {
-    const player = this.players.get(socketId);
-    if (!player) return { newXp: 0, newLevel: 1, leveledUp: false };
+    const ch = this.activeOf(socketId);
+    if (!ch) return { newXp: 0, newLevel: 1, leveledUp: false };
 
-    player.xp += amount;
+    ch.xp += amount;
 
-    const oldLevel = player.level;
+    const oldLevel = ch.level;
     // Progressive curve — each level costs more XP than the last (see xpForLevel).
-    player.level = levelForXp(player.xp);
+    ch.level = levelForXp(ch.xp);
 
-    if (player.level > oldLevel) {
+    if (ch.level > oldLevel) {
       // Restore full HP on level-up and increase max HP
-      player.maxHp = 100 + (player.level - 1) * 20;
-      player.hp = player.maxHp;
+      ch.maxHp = maxHpForLevel(ch.level);
+      ch.hp = ch.maxHp;
     }
 
     return {
-      newXp: player.xp,
-      newLevel: player.level,
-      leveledUp: player.level > oldLevel,
+      newXp: ch.xp,
+      newLevel: ch.level,
+      leveledUp: ch.level > oldLevel,
     };
   }
 
@@ -274,56 +393,47 @@ export class PlayerManager {
    * Load saved XP and level from MongoDB for a given userId (= username).
    * Returns default values if no record exists yet.
    */
-  async loadProgress(userId: string): Promise<{
-    xp: number;
-    level: number;
-    subjectGrades: Record<Subject, number>;
-    adventureRank: AdventureRankId;
-    /** True when a rank was already persisted (so the join handler should NOT
-     *  overwrite it with an age-derived default). */
-    rankPersisted: boolean;
-    topicPasses: Record<string, number>;
-    unlockedSkills: string[];
-    unlockedStrategies: string[];
-    strategyLoadout: string[];
-    skillShards: number;
-    combatShards: number;
-    silver: number;
-    materials: Record<string, number>;
-    campaignsCompleted: number;
-    attributePoints: Record<AttributeKey, number>;
-  }> {
+  async loadProgress(userId: string): Promise<LoadedProgress> {
     try {
       const doc = await PlayerProgress.findOne({ userId }).lean();
       if (doc) {
+        // Roster: use the stored characters if present, else MIGRATE the legacy
+        // flat fields into a single-character roster (see docs §1).
+        const stored = (doc as { characters?: Partial<Character>[] }).characters;
+        const characters: Character[] =
+          Array.isArray(stored) && stored.length > 0
+            ? stored.map((c) => normaliseCharacter(c, userId))
+            : [migrateFlatToCharacter(doc, userId)];
+        const storedActive = (doc as { activeCharacterId?: string }).activeCharacterId;
+        const activeCharacterId =
+          typeof storedActive === 'string' && characters.some((c) => c.id === storedActive)
+            ? storedActive
+            : characters[0].id;
         return {
-          xp: doc.xp,
-          level: doc.level,
+          characters,
+          activeCharacterId,
           subjectGrades: normaliseSubjectGrades(doc.subjectGrades),
           adventureRank: normaliseRankId(doc.adventureRank),
           rankPersisted: typeof doc.adventureRank === 'string',
           topicPasses: doc.topicPasses ?? {},
-          unlockedSkills: doc.unlockedSkills ?? [],
           unlockedStrategies: doc.unlockedStrategies ?? [],
-          strategyLoadout: doc.strategyLoadout ?? [],
-          skillShards: Math.max(0, doc.skillShards ?? 0),
           combatShards: Math.max(0, doc.combatShards ?? 0),
           silver: Math.max(0, doc.silver ?? 0),
           materials: { ...((doc.materials as Record<string, number>) ?? {}) },
           campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
-          attributePoints: normaliseAttributePoints(doc.attributePoints),
+          recruitTokens: Math.max(0, (doc as { recruitTokens?: number }).recruitTokens ?? 0),
         };
       }
     } catch (err) {
       console.error('[PlayerManager] loadProgress error:', err);
     }
+    const starter = newCharacter(userId);
     return {
-      xp: 0, level: 1,
-      subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false, topicPasses: {},
-      unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
-      skillShards: 0, combatShards: 0, silver: 0, materials: {},
-      campaignsCompleted: 0,
-      attributePoints: defaultAttributePoints(),
+      characters: [starter],
+      activeCharacterId: starter.id,
+      subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false,
+      topicPasses: {}, unlockedStrategies: [], combatShards: 0, silver: 0, materials: {},
+      campaignsCompleted: 0, recruitTokens: 0,
     };
   }
 
@@ -331,50 +441,35 @@ export class PlayerManager {
    * Apply previously-loaded progress to a player who has already been
    * registered with addPlayer().
    */
-  applyProgress(
-    socketId: string,
-    progress: {
-      xp: number;
-      level: number;
-      subjectGrades?: Record<Subject, number>;
-      adventureRank?: string;
-      topicPasses?: Record<string, number>;
-      unlockedSkills?: string[];
-      unlockedStrategies?: string[];
-      strategyLoadout?: string[];
-      skillShards?: number;
-      combatShards?: number;
-      silver?: number;
-      materials?: Record<string, number>;
-      campaignsCompleted?: number;
-      attributePoints?: Record<AttributeKey, number>;
-    },
-  ): void {
+  applyProgress(socketId: string, progress: LoadedProgress): void {
     const player = this.players.get(socketId);
     if (!player) return;
-    player.xp = Math.max(0, progress.xp);
-    // Derive level from XP so the (new, steeper) curve is always authoritative.
-    player.level = levelForXp(player.xp);
-    player.maxHp = 100 + (player.level - 1) * 20;
-    player.hp = player.maxHp;
-    player.attributePoints = this.clampAllocatedToCap(
-      normaliseAttributePoints(progress.attributePoints),
-      player.level,
-    );
+
+    // Account-wide state.
     player.subjectGrades = normaliseSubjectGrades(progress.subjectGrades);
     player.adventureRank = normaliseRankId(progress.adventureRank);
     player.topicPasses = { ...(progress.topicPasses ?? {}) };
-    player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
     player.unlockedStrategies = [...(progress.unlockedStrategies ?? [])];
-    // Defensive: only keep loadout entries the player actually owns.
-    player.strategyLoadout = (progress.strategyLoadout ?? []).filter((id) =>
-      player.unlockedStrategies.includes(id),
-    );
-    player.skillShards = Math.max(0, Math.floor(progress.skillShards ?? 0));
     player.combatShards = Math.max(0, Math.floor(progress.combatShards ?? 0));
     player.silver = Math.max(0, Math.floor(progress.silver ?? 0));
     player.materials = { ...(progress.materials ?? {}) };
     player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
+    player.recruitTokens = Math.max(0, Math.floor(progress.recruitTokens ?? 0));
+
+    // Roster — finalise each character: clamp its allocation to its level cap and
+    // keep only strategy-loadout entries that are in the account's catalog.
+    player.characters = (progress.characters.length > 0
+      ? progress.characters
+      : [newCharacter(player.username)]
+    ).map((c) => ({
+      ...c,
+      attributePoints: this.clampAllocatedToCap(c.attributePoints, c.level),
+      strategyLoadout: c.strategyLoadout.filter((id) => player.unlockedStrategies.includes(id)),
+    }));
+    player.activeCharacterId =
+      player.characters.some((c) => c.id === progress.activeCharacterId)
+        ? progress.activeCharacterId
+        : player.characters[0].id;
   }
 
   // -------------------------------------------------------------------------
@@ -433,23 +528,27 @@ export class PlayerManager {
     const player = this.players.get(socketId);
     if (!player) return;
 
+    const activeChar = this.active(player);
     PlayerProgress.findOneAndUpdate(
       { userId: player.username },
       {
-        xp: player.xp,
-        level: player.level,
+        // Roster (the new source of truth for per-character state).
+        characters: player.characters,
+        activeCharacterId: player.activeCharacterId,
+        // Account-wide.
         subjectGrades: player.subjectGrades,
         adventureRank: player.adventureRank,
         topicPasses: player.topicPasses,
-        unlockedSkills: player.unlockedSkills,
         unlockedStrategies: player.unlockedStrategies,
-        strategyLoadout: player.strategyLoadout,
-        skillShards: player.skillShards,
         combatShards: player.combatShards,
         silver: player.silver,
         materials: player.materials,
         campaignsCompleted: player.campaignsCompleted,
-        attributePoints: player.attributePoints,
+        recruitTokens: player.recruitTokens,
+        // Legacy mirror of the active character's level/xp — kept so older code
+        // paths / dashboards reading the flat fields still see sane values.
+        xp: activeChar.xp,
+        level: activeChar.level,
       },
       { upsert: true, new: true },
     ).catch((err) => {
@@ -475,8 +574,9 @@ export class PlayerManager {
     return player.campaignsCompleted;
   }
 
+  /** Skill Shards belong to the ACTIVE character; Combat Shards to the account. */
   getSkillShards(socketId: string): number {
-    return this.players.get(socketId)?.skillShards ?? 0;
+    return this.activeOf(socketId)?.skillShards ?? 0;
   }
 
   getCombatShards(socketId: string): number {
@@ -488,7 +588,7 @@ export class PlayerManager {
     if (amount <= 0) return;
     const player = this.players.get(socketId);
     if (!player) return;
-    if (kind === 'skill') player.skillShards += amount;
+    if (kind === 'skill') this.active(player).skillShards += amount;
     else player.combatShards += amount;
     this.persistProgress(socketId);
   }
@@ -501,9 +601,10 @@ export class PlayerManager {
     if (amount <= 0) return false;
     const player = this.players.get(socketId);
     if (!player) return false;
-    const balance = kind === 'skill' ? player.skillShards : player.combatShards;
+    const ch = this.active(player);
+    const balance = kind === 'skill' ? ch.skillShards : player.combatShards;
     if (balance < amount) return false;
-    if (kind === 'skill') player.skillShards -= amount;
+    if (kind === 'skill') ch.skillShards -= amount;
     else player.combatShards -= amount;
     this.persistProgress(socketId);
     return true;
@@ -613,11 +714,21 @@ export class PlayerManager {
     return player.subjectGrades[subject];
   }
 
-  /** Add a purchased skill id to the player's unlocks (idempotent). */
+  /** Add a purchased skill id to the ACTIVE character's unlocks (idempotent). */
   unlockSkill(socketId: string, skillId: string): void {
-    const player = this.players.get(socketId);
-    if (!player) return;
-    if (!player.unlockedSkills.includes(skillId)) player.unlockedSkills.push(skillId);
+    const ch = this.activeOf(socketId);
+    if (!ch) return;
+    if (!ch.unlockedSkills.includes(skillId)) ch.unlockedSkills.push(skillId);
+  }
+
+  /** The active character's purchased skill ids. */
+  getUnlockedSkills(socketId: string): string[] {
+    return this.activeOf(socketId)?.unlockedSkills ?? [];
+  }
+
+  /** Whether the active character owns a given skill. */
+  hasSkill(socketId: string, skillId: string): boolean {
+    return this.activeOf(socketId)?.unlockedSkills.includes(skillId) ?? false;
   }
 
   /** Add purchased strategy ids to the player's unlocks (idempotent). */
@@ -629,11 +740,17 @@ export class PlayerManager {
     }
   }
 
-  /** Replace the player's ordered strategy loadout (caller validates ids). */
+  /** Replace the ACTIVE character's ordered strategy loadout (caller validates
+   *  ids against the account catalog). */
   setStrategyLoadout(socketId: string, strategyIds: string[]): void {
-    const player = this.players.get(socketId);
-    if (!player) return;
-    player.strategyLoadout = [...strategyIds];
+    const ch = this.activeOf(socketId);
+    if (!ch) return;
+    ch.strategyLoadout = [...strategyIds];
+  }
+
+  /** The active character's strategy loadout. */
+  getStrategyLoadout(socketId: string): string[] {
+    return this.activeOf(socketId)?.strategyLoadout ?? [];
   }
 
   /** Record the timestamp of the last chat message for rate-limiting. */
@@ -646,23 +763,22 @@ export class PlayerManager {
   // Character attributes / allocation
   // -------------------------------------------------------------------------
 
-  /** Total allocation points the player has earned (level * POINTS_PER_LEVEL). */
+  /** Total allocation points the active character has earned (level * POINTS_PER_LEVEL). */
   getTotalPoints(socketId: string): number {
-    const player = this.players.get(socketId);
-    if (!player) return 0;
-    return player.level * POINTS_PER_LEVEL;
+    const ch = this.activeOf(socketId);
+    return ch ? ch.level * POINTS_PER_LEVEL : 0;
   }
 
-  /** Sum of all points the player has spent across attributes. */
-  private getSpentPoints(player: Player): number {
-    return ATTRIBUTE_KEYS.reduce((s, k) => s + (player.attributePoints[k] ?? 0), 0);
+  /** Sum of all points a character has spent across attributes. */
+  private getSpentPoints(ch: Character): number {
+    return ATTRIBUTE_KEYS.reduce((s, k) => s + (ch.attributePoints[k] ?? 0), 0);
   }
 
-  /** Points the player has earned but not yet allocated (never negative). */
+  /** Points the active character has earned but not yet allocated (never negative). */
   getUnspentPoints(socketId: string): number {
-    const player = this.players.get(socketId);
-    if (!player) return 0;
-    return Math.max(0, player.level * POINTS_PER_LEVEL - this.getSpentPoints(player));
+    const ch = this.activeOf(socketId);
+    if (!ch) return 0;
+    return Math.max(0, ch.level * POINTS_PER_LEVEL - this.getSpentPoints(ch));
   }
 
   /**
@@ -696,17 +812,17 @@ export class PlayerManager {
    * Persistence and stat recompute are the caller's responsibility.
    */
   allocatePoint(socketId: string, attribute: AttributeKey): boolean {
-    const player = this.players.get(socketId);
-    if (!player) return false;
+    const ch = this.activeOf(socketId);
+    if (!ch) return false;
     if (!ATTRIBUTE_KEYS.includes(attribute)) return false;
     if (this.getUnspentPoints(socketId) <= 0) return false;
-    player.attributePoints[attribute] = (player.attributePoints[attribute] ?? 0) + 1;
+    ch.attributePoints[attribute] = (ch.attributePoints[attribute] ?? 0) + 1;
     return true;
   }
 
-  /** A player's BASE attribute value = ATTRIBUTE_BASE + allocated points. */
-  private baseAttribute(player: Player, attr: AttributeKey): number {
-    return ATTRIBUTE_BASE + (player.attributePoints[attr] ?? 0);
+  /** A character's BASE attribute value = ATTRIBUTE_BASE + allocated points. */
+  private baseAttribute(ch: Character, attr: AttributeKey): number {
+    return ATTRIBUTE_BASE + (ch.attributePoints[attr] ?? 0);
   }
 
   /**
@@ -725,6 +841,8 @@ export class PlayerManager {
   ): { payload: StatsUpdatePayload; maxHp: number; maxMana: number; manaRegen: number; healthRegen: number } | null {
     const player = this.players.get(socketId);
     if (!player) return null;
+    // Attributes/level come from the ACTIVE character; rank is account-wide.
+    const ch = this.active(player);
 
     // ── Gear contributions ──────────────────────────────────────────────────
     const attrGear: Record<AttributeKey, number> = defaultAttributePoints();
@@ -783,24 +901,24 @@ export class PlayerManager {
 
     // ── Attributes (base from allocation + gear) ────────────────────────────
     const attributes: StatRow[] = ATTRIBUTE_KEYS.map((k) => {
-      const base = this.baseAttribute(player, k);
+      const base = this.baseAttribute(ch, k);
       const g = attrGear[k];
       return { key: k, label: ATTRIBUTE_LABELS[k], base, gear: g, total: base + g };
     });
 
     // TOTAL attribute values (base + gear) drive the derived formulas.
-    const tot = (k: AttributeKey) => this.baseAttribute(player, k) + attrGear[k];
+    const tot = (k: AttributeKey) => this.baseAttribute(ch, k) + attrGear[k];
     const STR = tot('strength');
     const CON = tot('constitution');
     const DEX = tot('dexterity');
     const INT = tot('intelligence');
     const SPI = tot('spirit');
     // Base-only attribute values (gear excluded) for the "base" derived column.
-    const bSTR = this.baseAttribute(player, 'strength');
-    const bCON = this.baseAttribute(player, 'constitution');
-    const bDEX = this.baseAttribute(player, 'dexterity');
-    const bINT = this.baseAttribute(player, 'intelligence');
-    const bSPI = this.baseAttribute(player, 'spirit');
+    const bSTR = this.baseAttribute(ch, 'strength');
+    const bCON = this.baseAttribute(ch, 'constitution');
+    const bDEX = this.baseAttribute(ch, 'dexterity');
+    const bINT = this.baseAttribute(ch, 'intelligence');
+    const bSPI = this.baseAttribute(ch, 'spirit');
 
     /** Build a derived row; total uses gear-inclusive attrs + gear direct bonus. */
     const derivedRow = (
@@ -872,7 +990,7 @@ export class PlayerManager {
         attributes,
         derived,
         unspentPoints: this.getUnspentPoints(socketId),
-        level: player.level,
+        level: ch.level,
       },
       maxHp,
       maxMana,
@@ -894,8 +1012,9 @@ export class PlayerManager {
     if (!player) return null;
     const result = this.computeStats(socketId, equipment);
     if (!result) return null;
-    player.maxHp = result.maxHp;
-    if (player.hp > player.maxHp) player.hp = player.maxHp;
+    const ch = this.active(player);
+    ch.maxHp = result.maxHp;
+    if (ch.hp > ch.maxHp) ch.hp = ch.maxHp;
     return result.payload;
   }
 
@@ -905,12 +1024,13 @@ export class PlayerManager {
 
   /** Convert internal player to the safe public representation. */
   toPublic(player: Player): PublicPlayer {
+    const ch = this.active(player);
     return {
       id: player.id,
       username: player.username,
-      level: player.level,
-      hp: player.hp,
-      maxHp: player.maxHp,
+      level: ch.level,
+      hp: ch.hp,
+      maxHp: ch.maxHp,
       zone: player.zone,
       position: { ...player.position },
     };

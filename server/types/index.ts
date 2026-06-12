@@ -14,45 +14,70 @@ export interface PlayerPosition {
 }
 
 /** Full player record stored on the server (never sent entirely to clients). */
-export interface Player {
-  id: string;           // socket ID
-  username: string;
+/**
+ * A single playable character in an account's roster (see
+ * docs/CHARACTERS_DESIGN.md §1). Per-character state: level/xp/hp, its class,
+ * its purchased skills, its Skill-Shard balance, its attribute allocation, and
+ * its own strategy loadout. The account (Player) owns the shared bag, materials,
+ * silver, Combat Shards, strategy *catalog*, learning progress, and rank.
+ */
+export interface Character {
+  id: string;            // stable uuid (persisted)
+  /** Display name for this character (distinct from the account username). */
+  name: string;
+  /** Class id (a skill class, e.g. 'sword', 'cleric'). Not yet
+   *  restriction-enforced — skill class-locking lands with rankable skills. */
+  class: string;
   level: number;
   xp: number;
   hp: number;
   maxHp: number;
+  /** Skill ids this character has purchased (persisted). */
+  unlockedSkills: string[];
+  /** This character's ordered strategy loadout (persisted, owned-strategy ids
+   *  only; first entry is checked first in combat). Built from the account-wide
+   *  strategy catalog (Player.unlockedStrategies). */
+  strategyLoadout: string[];
+  /** This character's Skill Shard balance (persisted) — earned from its own
+   *  battles, spent on its own skills. */
+  skillShards: number;
+  /** Points allocated per attribute for this character (persisted).
+   *  Total earned = level*3; a base attribute = 5 + attributePoints[attr]. */
+  attributePoints: Record<AttributeKey, number>;
+}
+
+export interface Player {
+  id: string;           // socket ID
+  username: string;     // account name
   zone: string;
   position: PlayerPosition;
   lastMessageAt: number; // unix ms — used for chat rate-limiting
-  /** Current grade per subject (persisted), 1..12, or 13 (MASTERED_GRADE) when
-   *  all 12 grades of a subject are complete. Subjects progress independently. */
+  /** The account's roster of characters. Always has at least one. */
+  characters: Character[];
+  /** Which character is currently active (drives the town avatar, the
+   *  Character/Equipment screens, and solo combat until party combat lands). */
+  activeCharacterId: string;
+  /** Current grade per subject (persisted, ACCOUNT-wide), 1..12, or 13
+   *  (MASTERED_GRADE) when all 12 grades of a subject are complete. */
   subjectGrades: Record<Subject, number>;
-  /** Adventure rank id (persisted) — gates which curriculum grade band the
-   *  player is served questions from. See game/data/adventureRanks.ts. */
+  /** Adventure rank id (persisted, ACCOUNT-wide) — gates which curriculum grade
+   *  band the player is served questions from. See game/data/adventureRanks.ts. */
   adventureRank: string;
-  /** topicId → number of quiz passes (persisted), 0..3. A topic is COMPLETE at 3. */
+  /** topicId → number of quiz passes (persisted, ACCOUNT-wide), 0..3. */
   topicPasses: Record<string, number>;
-  /** Skill ids purchased with Skill Shards (persisted). */
-  unlockedSkills: string[];
-  /** Combat strategy ids purchased with Combat Shards (persisted). */
+  /** Combat strategy ids unlocked with Combat Shards (persisted, ACCOUNT-wide
+   *  catalog). Each character configures its own loadout from this catalog. */
   unlockedStrategies: string[];
-  /** Ordered strategy loadout arranged at the Teacher (persisted, max 10,
-   *  owned ids only — first entry is checked first in combat). */
-  strategyLoadout: string[];
-  /** Skill Shard balance (persisted) — a tracked currency, NOT a bag item. */
-  skillShards: number;
-  /** Combat Shard balance (persisted) — a tracked currency, NOT a bag item. */
+  /** Combat Shard balance (persisted, ACCOUNT-wide) — buys strategy unlocks. */
   combatShards: number;
-  /** Silver balance (persisted) — money for buying/selling items at the Market. */
+  /** Silver balance (persisted, ACCOUNT-wide). */
   silver: number;
-  /** Crafting material counts (persisted): material id → quantity. */
+  /** Crafting material counts (persisted, ACCOUNT-wide shared bag stash). */
   materials: Record<string, number>;
-  /** How many campaigns this player has completed (persisted). Drives the
-   *  one-time first-campaign shard bonus. */
+  /** How many campaigns this account has completed (persisted). */
   campaignsCompleted: number;
-  /** Points the player has allocated per character attribute (persisted).
-   *  Total earned points = level*3; a base attribute = 5 + attributePoints[attr]. */
-  attributePoints: Record<AttributeKey, number>;
+  /** Recruit Tokens (persisted, ACCOUNT-wide) — spent to recruit new characters. */
+  recruitTokens: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
  */
 
 import mongoose, { Schema, Document } from 'mongoose'
-import type { Subject } from '../../types/index.js'
+import type { Subject, Character } from '../../types/index.js'
 
 export interface IPlayerProgress extends Document {
   userId: string
@@ -39,6 +39,13 @@ export interface IPlayerProgress extends Document {
   /** Allocated points per character attribute (strength/constitution/... ).
    *  Total earned = level*3; base attribute = 5 + allocated. */
   attributePoints: Record<string, number>
+  /** Multi-character roster (see docs/CHARACTERS_DESIGN.md §1). Per-character
+   *  state; legacy flat fields above are kept for migration/rollback. */
+  characters: Character[]
+  /** Which roster character is active. */
+  activeCharacterId: string
+  /** Recruit Tokens — spent to recruit new characters. */
+  recruitTokens: number
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -111,6 +118,23 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     attributePoints: {
       type: Schema.Types.Mixed,
       default: () => ({}),
+    },
+    // ── Multi-character roster (see docs/CHARACTERS_DESIGN.md §1) ──────────────
+    // Per-character state lives here; legacy flat fields above are retained for
+    // backward-compat / migration. Accounts saved before the roster existed are
+    // migrated into a single character on load.
+    characters: {
+      type: Schema.Types.Mixed,
+      default: () => [],
+    },
+    activeCharacterId: {
+      type: String,
+      default: '',
+    },
+    recruitTokens: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
   },
   { timestamps: true },

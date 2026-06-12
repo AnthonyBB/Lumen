@@ -721,11 +721,11 @@ export function registerHandlers(
     pushCurrency();
 
     // Let the HUD refresh XP / level after the quiz wraps up.
-    const player = playerManager.getPlayer(socket.id);
-    if (player) {
+    const activeChar = playerManager.getActiveCharacter(socket.id);
+    if (activeChar) {
       socket.emit('player:xp_updated', {
-        newXp: player.xp,
-        newLevel: player.level,
+        newXp: activeChar.xp,
+        newLevel: activeChar.level,
         leveledUp: false,
         xpAwarded: 0,
       });
@@ -953,11 +953,12 @@ export function registerHandlers(
     let label: string;
 
     if (bagItem.equipSlot) {
-      // XP gate — enforced server-side; player.xp is server-authoritative.
+      // XP gate — enforced server-side against the ACTIVE character's XP.
       const need = bagItem.xpRequired ?? 0;
-      if (player.xp < need) {
+      const charXp = playerManager.getActiveCharacter(socket.id)?.xp ?? 0;
+      if (charXp < need) {
         socket.emit('error', {
-          message: `You need ${need} XP to equip ${bagItem.name} (you have ${player.xp}). Keep adventuring!`,
+          message: `You need ${need} XP to equip ${bagItem.name} (you have ${charXp}). Keep adventuring!`,
         });
         return;
       }
@@ -1022,13 +1023,14 @@ export function registerHandlers(
 
   // ── Shop helpers ─────────────────────────────────────────────────────────
 
-  /** Build the unlock/balance snapshot sent to shop UIs. */
+  /** Build the unlock/balance snapshot sent to shop UIs. Skills + the strategy
+   *  loadout are per the ACTIVE character; strategy catalog + learning are account-wide. */
   const buildUnlocksPayload = (player: Player): ShopUnlocksPayload => ({
-    unlockedSkills: [...player.unlockedSkills],
+    unlockedSkills: playerManager.getUnlockedSkills(socket.id),
     unlockedStrategies: [...player.unlockedStrategies],
     skillShards: playerManager.getSkillShards(socket.id),
     combatShards: playerManager.getCombatShards(socket.id),
-    strategyLoadout: [...player.strategyLoadout],
+    strategyLoadout: playerManager.getStrategyLoadout(socket.id),
     subjectGrades: { ...player.subjectGrades },
     topicPasses: { ...player.topicPasses },
   });
@@ -1067,12 +1069,13 @@ export function registerHandlers(
       return;
     }
 
-    if (player.unlockedSkills.includes(skill.id)) {
+    if (playerManager.hasSkill(socket.id, skill.id)) {
       socket.emit('error', { message: 'You already know that skill.' });
       return;
     }
 
-    const missingPrereq = skill.requires.find((req) => !player.unlockedSkills.includes(req));
+    const ownedSkills = playerManager.getUnlockedSkills(socket.id);
+    const missingPrereq = skill.requires.find((req) => !ownedSkills.includes(req));
     if (missingPrereq) {
       const prereq = SKILL_MAP.get(missingPrereq);
       socket.emit('error', {

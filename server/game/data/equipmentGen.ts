@@ -63,16 +63,6 @@ export interface ItemAttribute {
 // Static part lists
 // ------------------------------------------------------------
 
-const CLASSES: SkillClass[] = [
-  'fire_mage', 'ice_mage', 'lightning_mage',
-  'sword', 'spear', 'axe', 'hammer',
-  'monk', 'paladin', 'assassin', 'cleric', 'shaman', 'bard',
-]
-
-const SLOTS: EquipSlot[] = [
-  'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
-]
-
 const CLASS_LABEL: Record<SkillClass, string> = {
   fire_mage: 'Fire Mage', ice_mage: 'Ice Mage', lightning_mage: 'Lightning Mage',
   sword: 'Swordfighter', spear: 'Spearmaster', axe: 'Axe Warrior', hammer: 'Hammer Guard',

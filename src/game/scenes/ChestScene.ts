@@ -12,6 +12,7 @@ import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import type { ClientInventoryItem } from '../systems/InventoryStore'
+import { EQUIPMENT_MAP } from '../data/equipmentGen'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -112,6 +113,14 @@ export class ChestScene extends Phaser.Scene {
   private dragItem:  ClientInventoryItem | null = null
   private dragFrom:  Slot | null = null
   private dragGfx:   Phaser.GameObjects.Container | null = null
+  // Double-click detection (click the same item twice quickly to transfer it).
+  private lastClickItemId: string | null = null
+  private lastClickAt = 0
+  // Press position — a press with no movement is a click (shows item stats);
+  // moving past the threshold turns it into a drag.
+  private dragStartX = 0
+  private dragStartY = 0
+  private detailPanel: Phaser.GameObjects.Container | null = null
 
   // Hover highlight (single reused graphics object)
   private hoverGfx!: Phaser.GameObjects.Graphics
@@ -139,6 +148,7 @@ export class ChestScene extends Phaser.Scene {
     this.dragging       = false
     this.dragItem       = null
     this.dragFrom       = null
+    this.detailPanel    = null
     this.dragGfx        = null
 
     // Build fixed slot grids
@@ -196,6 +206,7 @@ export class ChestScene extends Phaser.Scene {
   /** Leave the chest and return to town (next to the chest). */
   private closeScene() {
     this.cleanupDrag()
+    this.hideItemDetails()
     this.scene.start('WorldScene',
       this.returnX !== undefined ? { spawnX: this.returnX, spawnY: this.returnY } : undefined)
   }
@@ -512,20 +523,44 @@ export class ChestScene extends Phaser.Scene {
       if (tabIdx !== this.activeTab) {
         this.activeTab = tabIdx
         this.highlightSlot(null)
+        this.hideItemDetails()
         this.rebuildItemLayer()
       }
       return
     }
 
     const hit = this.hitTest(ptr.x, ptr.y)
-    if (!hit?.item) return    // clicked an empty slot — nothing to drag
+    if (!hit?.item) { this.lastClickItemId = null; this.hideItemDetails(); return }  // empty slot
 
-    this.dragging  = true
-    this.dragFrom  = hit.slot
-    this.dragItem  = hit.item
+    // Double-click the same item → send it to the other panel (no drag needed).
+    const now = this.time.now
+    if (this.lastClickItemId === hit.item.id && now - this.lastClickAt < 350) {
+      this.lastClickItemId = null
+      this.lastClickAt = 0
+      this.quickTransfer(hit.slot, hit.item)
+      return
+    }
+    this.lastClickItemId = hit.item.id
+    this.lastClickAt = now
+
+    // Arm a press: record the item + press position. The ghost only appears and
+    // the item only lifts once the pointer moves past the threshold (onMove →
+    // beginDrag). A press released with no movement is a click (onUp → stats).
+    this.dragFrom   = hit.slot
+    this.dragItem   = hit.item
+    this.dragStartX = ptr.x
+    this.dragStartY = ptr.y
+  }
+
+  /** Promote an armed press into a real drag once the pointer has moved. */
+  private beginDrag(ptr: Phaser.Input.Pointer) {
+    const item = this.dragItem
+    if (!item) return
+    this.dragging = true
+    this.hideItemDetails()
 
     // Ghost — drawn centred on the cursor, depth 50 (above everything)
-    const col = RARITY_COLOR[hit.item.rarity] ?? RARITY_COLOR.common
+    const col = RARITY_COLOR[item.rarity] ?? RARITY_COLOR.common
     const hex = col.toString(16).padStart(6, '0')
     const ghost = this.add.container(ptr.x, ptr.y).setDepth(50)
     const gfx = this.add.graphics()
@@ -534,23 +569,30 @@ export class ChestScene extends Phaser.Scene {
     gfx.lineStyle(2, col, 1)
     gfx.strokeRoundedRect(-SLOT_W / 2, -SLOT_H / 2, SLOT_W, SLOT_H, 8)
     ghost.add(gfx)
-    ghost.add(this.add.text(0, -8, hit.item.icon, { fontSize: '24px' }).setOrigin(0.5, 0.5))
-    const nameStr = hit.item.name.length > 10 ? hit.item.name.slice(0, 9) + '…' : hit.item.name
+    ghost.add(this.add.text(0, -8, item.icon, { fontSize: '24px' }).setOrigin(0.5, 0.5))
+    const nameStr = item.name.length > 10 ? item.name.slice(0, 9) + '…' : item.name
     ghost.add(this.add.text(0, SLOT_H / 2 - 10, nameStr, {
       fontSize: '9px', fontFamily: 'Arial, sans-serif', color: `#${hex}`, fontStyle: 'bold',
     }).setOrigin(0.5, 0.5))
     this.dragGfx = ghost
 
-    // Immediately redraw the item layer without the source slot so it visually
-    // disappears from its origin the moment dragging begins.
+    // Redraw without the source slot so the item visually lifts off its origin.
     this.rebuildItemLayer()
   }
 
   private onMove(ptr: Phaser.Input.Pointer) {
     if (!this.dragging) {
-      // Hover highlight when not dragging
-      const hit = this.hitTest(ptr.x, ptr.y)
-      this.highlightSlot(hit?.item ? hit.slot : null)
+      // An armed press that moves past the threshold becomes a real drag.
+      if (this.dragItem &&
+          Phaser.Math.Distance.Between(this.dragStartX, this.dragStartY, ptr.x, ptr.y) > 6) {
+        this.beginDrag(ptr)
+        return
+      }
+      // Hover highlight only when idle (not armed/dragging).
+      if (!this.dragItem) {
+        const hit = this.hitTest(ptr.x, ptr.y)
+        this.highlightSlot(hit?.item ? hit.slot : null)
+      }
       return
     }
 
@@ -568,39 +610,46 @@ export class ChestScene extends Phaser.Scene {
   }
 
   private onUp(ptr: Phaser.Input.Pointer) {
-    if (!this.dragging) return
+    const from = this.dragFrom
+    const item = this.dragItem
+    const wasDragging = this.dragging
 
-    const dragFrom = this.dragFrom
-    const dragItem = this.dragItem
-
-    // Always clean up ghost first
-    this.cleanupDrag()
+    // Tear down the drag/armed state.
+    if (wasDragging) {
+      this.cleanupDrag()
+      // Redraw from the current server state — the dragged item snaps back to
+      // its source slot until (and unless) the server confirms the transfer.
+      this.rebuildItemLayer()
+    }
     this.dragFrom = null
     this.dragItem = null
+    this.dragging = false
 
-    // Redraw from the current server state — the dragged item snaps back to
-    // its source slot until (and unless) the server confirms the transfer.
-    this.rebuildItemLayer()
+    if (!from || !item) return
 
-    if (!dragFrom || !dragItem) return
+    // Released without ever moving → a click: show the item's full stats.
+    if (!wasDragging) {
+      this.showItemDetails(item, ptr.x, ptr.y)
+      return
+    }
 
     const hit = this.hitTest(ptr.x, ptr.y)
 
-    if (hit && hit.slot.panel !== dragFrom.panel) {
+    if (hit && hit.slot.panel !== from.panel) {
       // Cross-panel transfer — a request only.  The server validates chest
       // ownership, item ownership and capacity, then pushes 'chest:updated'.
       if (!this.chestId || !this.socket?.connected) {
         this.showFeedback('Not connected to the server.')
         return
       }
-      if (dragFrom.panel === 'inventory') {
+      if (from.panel === 'inventory') {
         // Into the chest: place at the dropped slot (or the first free slot on
         // that same tab if it's occupied / that tab is full).
         const toSlot = this.pickChestSlot(this.chestAbsIndex(hit.slot.index))
         if (toSlot === null) { this.showFeedback('The chest is full.'); return }
         this.socket.emit('chest:transfer', {
           chestId:   this.chestId,
-          itemId:    dragItem.id,
+          itemId:    item.id,
           direction: 'to_chest',
           toSlot,
         })
@@ -608,7 +657,7 @@ export class ChestScene extends Phaser.Scene {
         // Out of the chest into the bag (packed — no target slot needed).
         this.socket.emit('chest:transfer', {
           chestId:   this.chestId,
-          itemId:    dragItem.id,
+          itemId:    item.id,
           direction: 'from_chest',
         })
       }
@@ -628,6 +677,90 @@ export class ChestScene extends Phaser.Scene {
       if (!this.chestItems[i]) return i
     }
     return null
+  }
+
+  /** Double-click transfer: chest item → bag, or bag item → the first free chest
+   *  slot on the current tab. Same server-validated path as a cross-panel drag. */
+  private quickTransfer(slot: Slot, item: ClientInventoryItem) {
+    this.hideItemDetails()
+    if (!this.chestId || !this.socket?.connected) {
+      this.showFeedback('Not connected to the server.')
+      return
+    }
+    if (slot.panel === 'chest') {
+      this.socket.emit('chest:transfer', {
+        chestId: this.chestId, itemId: item.id, direction: 'from_chest',
+      })
+    } else {
+      const toSlot = this.pickChestSlot(this.activeTab * MAX_SLOTS)
+      if (toSlot === null) { this.showFeedback('The chest is full.'); return }
+      this.socket.emit('chest:transfer', {
+        chestId: this.chestId, itemId: item.id, direction: 'to_chest', toSlot,
+      })
+    }
+  }
+
+  // ── Item detail panel (single click) ───────────────────────────────────────
+
+  private hideItemDetails() {
+    this.detailPanel?.destroy()
+    this.detailPanel = null
+  }
+
+  private attrLabel(type: string): string {
+    return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+  }
+
+  /** Floating panel near (x, y) showing the item's full stats. */
+  private showItemDetails(item: ClientInventoryItem, x: number, y: number) {
+    this.hideItemDetails()
+
+    const gen = EQUIPMENT_MAP[item.itemType]
+    const rarCol = RARITY_COLOR[item.rarity] ?? RARITY_COLOR.common
+    const rarHex = rarCol.toString(16).padStart(6, '0')
+    const rarName = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
+    const slot = gen?.slot ?? ''
+
+    let bonuses: string
+    if (gen && gen.attributes.length) {
+      bonuses = gen.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`).join('\n')
+    } else {
+      const raw = Object.entries(item.stats ?? {})
+        .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)
+      bonuses = raw.length ? raw.map(([k, v]) => `+${v} ${this.attrLabel(k)}`).join('\n') : 'No bonuses'
+    }
+
+    const padX = 12, padY = 10, gap = 4
+    const name = this.add.text(0, 0, `${item.icon}  ${item.name}`, {
+      fontSize: '14px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      wordWrap: { width: 280 },
+    }).setOrigin(0, 0)
+    const sub = this.add.text(0, 0, `${rarName}${slot ? '  ·  ' + slot : ''}`, {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: `#${rarHex}`,
+    }).setOrigin(0, 0)
+    const stats = this.add.text(0, 0, bonuses, {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#9bd0ff', lineSpacing: 3,
+    }).setOrigin(0, 0)
+
+    const w = Math.min(Math.max(name.width, sub.width, stats.width) + padX * 2, 320)
+    const h = name.height + sub.height + stats.height + gap * 2 + padY * 2
+    // Anchor near the cursor, clamped on-screen.
+    let px = x + 14
+    let py = y + 14
+    if (px + w > GAME_WIDTH - 8) px = x - w - 14
+    if (py + h > GAME_HEIGHT - 8) py = GAME_HEIGHT - 8 - h
+    px = Math.max(8, px)
+    py = Math.max(8, py)
+
+    name.setPosition(px + padX, py + padY)
+    sub.setPosition(px + padX, py + padY + name.height + gap)
+    stats.setPosition(px + padX, py + padY + name.height + sub.height + gap * 2)
+
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0a0a1e, 0.98).fillRoundedRect(px, py, w, h, 8)
+    bg.lineStyle(1.5, rarCol, 0.9).strokeRoundedRect(px, py, w, h, 8)
+
+    this.detailPanel = this.add.container(0, 0).setDepth(60).add([bg, name, sub, stats])
   }
 
   // ── Drag cleanup ───────────────────────────────────────────────────────────

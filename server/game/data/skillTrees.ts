@@ -14,6 +14,13 @@ export type SkillClass =
   | 'sword' | 'spear' | 'axe' | 'hammer'
   | 'monk' | 'paladin' | 'assassin' | 'cleric' | 'shaman' | 'bard'
 
+/** All selectable character classes (the skill classes). */
+export const SKILL_CLASSES: SkillClass[] = [
+  'fire_mage', 'ice_mage', 'lightning_mage',
+  'sword', 'spear', 'axe', 'hammer',
+  'monk', 'paladin', 'assassin', 'cleric', 'shaman', 'bard',
+]
+
 export type EffectType =
   // damage delivery
   | 'damage'      // single-target direct damage

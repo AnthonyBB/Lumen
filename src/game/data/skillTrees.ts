@@ -2,6 +2,12 @@
 // skillTrees.ts — 13-class combat skill tree definitions
 // ============================================================
 
+export const SKILL_CLASSES = [
+  'fire_mage', 'ice_mage', 'lightning_mage',
+  'sword', 'spear', 'axe', 'hammer',
+  'monk', 'paladin', 'assassin', 'cleric', 'shaman', 'bard',
+] as const
+
 export type SkillClass =
   | 'fire_mage' | 'ice_mage' | 'lightning_mage'
   | 'sword' | 'spear' | 'axe' | 'hammer'

@@ -65,7 +65,7 @@ import {
   GRADE_COMPLETE_COMBAT_SHARDS,
 } from '../game/PlayerManager.js';
 import { QUIZ_PASS_THRESHOLD } from '../game/LearningSessionManager.js';
-import { SKILL_TREES, type CombatSkill } from '../game/data/skillTrees.js';
+import { SKILL_TREES, SKILL_CLASSES, type CombatSkill, type SkillClass } from '../game/data/skillTrees.js';
 import { STRATEGIES, type CombatStrategy } from '../game/data/combatStrategies.js';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +81,10 @@ const SKILL_MAP: ReadonlyMap<string, CombatSkill> = new Map(
 const SKILL_PRICE_BY_TIER: Record<1 | 2 | 3 | 4 | 5, number> = {
   1: 1, 2: 2, 3: 3, 4: 5, 5: 8,
 };
+
+/** Free starting team size — the first team of 4 is frictionless; beyond that
+ *  needs recruitment (Recruit Tokens, a later stage). See CHARACTERS_DESIGN.md §2. */
+const FREE_ROSTER_SIZE = 4;
 
 /** strategyId → strategy. */
 const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
@@ -248,6 +252,72 @@ export function registerHandlers(
     if (!requireJoinedPlayer('You must join before setting your rank.')) return;
     playerManager.setAdventureRank(socket.id, payload.rankId);
     pushAdventureRank();
+  });
+
+  // ── Roster (multi-character) ──────────────────────────────────────────────
+  //
+  // The account owns a roster of characters; one is active (drives the
+  // Character/Equipment screens, solo combat, and the town avatar). Switching
+  // active re-pushes the per-character views. Creating is FREE up to the
+  // starting team of FREE_ROSTER_SIZE; beyond that needs recruitment (Recruit
+  // Tokens — a later stage). See docs/CHARACTERS_DESIGN.md §2.
+  const buildRoster = () => ({
+    characters: playerManager.getCharacters(socket.id).map((c) => ({
+      id: c.id, name: c.name, class: c.class, level: c.level, xp: c.xp,
+    })),
+    activeCharacterId: playerManager.getActiveCharacter(socket.id)?.id ?? '',
+    freeSlots: Math.max(0, FREE_ROSTER_SIZE - playerManager.getCharacters(socket.id).length),
+  });
+  const pushRoster = (): void => { socket.emit('roster:data', buildRoster()); };
+
+  socket.on('roster:get', () => {
+    if (!requireJoinedPlayer('You must join before viewing your roster.')) return;
+    pushRoster();
+  });
+
+  socket.on('roster:set_active', (payload: { characterId?: unknown }) => {
+    if (typeof payload?.characterId !== 'string') {
+      socket.emit('error', { message: 'Invalid character id.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    if (!playerManager.setActiveCharacter(socket.id, payload.characterId)) {
+      socket.emit('error', { message: 'That character is not in your roster.' });
+      return;
+    }
+    playerManager.persistProgress(socket.id);
+    // Refresh everything that is per-character for the newly active character.
+    pushRoster();
+    pushStats();
+    pushInventoryUpdate();
+    pushCurrency(); // Skill Shards are per-character
+  });
+
+  socket.on('roster:create', (payload: { name?: unknown; class?: unknown }) => {
+    if (typeof payload?.name !== 'string' || typeof payload?.class !== 'string') {
+      socket.emit('error', { message: 'Invalid character payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before recruiting.');
+    if (!player) return;
+    if (!SKILL_CLASSES.includes(payload.class as SkillClass)) {
+      socket.emit('error', { message: 'Unknown class.' });
+      return;
+    }
+    if (playerManager.getCharacters(socket.id).length >= FREE_ROSTER_SIZE) {
+      socket.emit('error', {
+        message: 'Your starting team is full — recruiting more characters is coming soon!',
+      });
+      return;
+    }
+    const res = playerManager.createCharacter(socket.id, payload.name, payload.class);
+    if ('error' in res) {
+      socket.emit('error', { message: res.error });
+      return;
+    }
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+    console.log(`[roster] ${player.username} recruited ${res.character.name} (${res.character.class})`);
   });
 
   // ── stats:get — Character / Equipment screens request the stat breakdown ──

@@ -4,6 +4,7 @@ import { io, Socket } from 'socket.io-client'
 import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
 import LevelUpCelebration from '../components/LevelUpCelebration'
+import RosterPanel, { type RosterData } from '../components/RosterPanel'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
@@ -25,6 +26,13 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   // The level to celebrate (null = no celebration showing). Keyed remount on
   // change lets back-to-back level-ups each replay the animation.
   const [celebrateLevel, setCelebrateLevel] = useState<number | null>(null)
+  const [roster, setRoster] = useState<RosterData | null>(null)
+  const [rosterOpen, setRosterOpen] = useState(false)
+
+  const emit = (event: string, payload?: unknown) => {
+    const sock = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    sock?.emit(event, payload)
+  }
 
   /** Change the player's adventure rank — the grade band their questions are
    *  drawn from. Any rank is allowed (not age-gated). */
@@ -59,6 +67,8 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       if (d?.leveledUp && typeof d.newLevel === 'number') setCelebrateLevel(d.newLevel)
     })
 
+    s.on('roster:data', (d: RosterData) => setRoster(d))
+
     s.on('connect', () => {
       // (Re)join on every connect — including reconnects after a server
       // restart. Without this the server has no player record for the socket
@@ -67,6 +77,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       s.emit('player:join', { username: user?.username ?? '' })
       s.emit('players:get_online')
       s.emit('adventureRank:get')
+      s.emit('roster:get')
       // Bind the inventory store to this (possibly new) socket so the HUD
       // shard counters receive inventory:data / inventory:updated pushes.
       InventoryStore.init(s)
@@ -132,6 +143,16 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
         />
       )}
 
+      {/* Roster panel (view/select/recruit characters) */}
+      {rosterOpen && roster && (
+        <RosterPanel
+          roster={roster}
+          onSetActive={(id) => emit('roster:set_active', { characterId: id })}
+          onCreate={(name, cls) => emit('roster:create', { name, class: cls })}
+          onClose={() => setRosterOpen(false)}
+        />
+      )}
+
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
         <div
@@ -143,12 +164,22 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       {/* HUD */}
       <div className="px-4 pb-6 max-w-[1280px] mx-auto w-full">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Player</p>
-            <p className="font-display text-lg text-lumen-gold">
-              {user?.username ?? '— awaiting login —'}
+          <button
+            onClick={() => roster && setRosterOpen(true)}
+            disabled={!roster}
+            className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
+          >
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">
+              Roster{roster ? ` · ${roster.characters.length}` : ''}
             </p>
-          </div>
+            <p className="font-display text-lg text-lumen-gold truncate">
+              {(() => {
+                const active = roster?.characters.find((c) => c.id === roster.activeCharacterId)
+                return active ? active.name : user?.username ?? '— awaiting login —'
+              })()}
+            </p>
+            {roster && <p className="text-[10px] text-gray-500 mt-0.5">Tap to manage characters</p>}
+          </button>
           <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
             <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Players Online</p>
             <p className="font-display text-lg text-lumen-gold">

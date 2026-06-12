@@ -346,6 +346,27 @@ export class PlayerManager {
     return true;
   }
 
+  /**
+   * Add a new character to the roster (caller validates the class + any
+   * acquisition cost/cap). Returns the created character, or an error for a bad
+   * name. Does NOT change the active character.
+   */
+  createCharacter(socketId: string, name: string, cls: string):
+    { character: Character } | { error: string } {
+    const player = this.players.get(socketId);
+    if (!player) return { error: 'You must join before recruiting.' };
+    const trimmed = name.trim();
+    if (trimmed.length < 2 || trimmed.length > 20) {
+      return { error: 'Character name must be 2–20 characters.' };
+    }
+    if (!/^[a-zA-Z0-9 _-]+$/.test(trimmed)) {
+      return { error: 'Name may only contain letters, numbers, spaces, _ and -.' };
+    }
+    const character = newCharacter(trimmed, cls);
+    player.characters.push(character);
+    return { character };
+  }
+
   // -------------------------------------------------------------------------
   // Mutations (server-authoritative)
   // -------------------------------------------------------------------------

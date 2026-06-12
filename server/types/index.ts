@@ -32,8 +32,10 @@ export interface Character {
   xp: number;
   hp: number;
   maxHp: number;
-  /** Skill ids this character has purchased (persisted). */
-  unlockedSkills: string[];
+  /** skillId → rank (1..MAX_SKILL_RANK) this character has purchased (persisted).
+   *  Absent key = not owned. Ranks are bought with Skill Shards and gated by the
+   *  character's level (see docs/CHARACTERS_DESIGN.md §4). */
+  skillRanks: Record<string, number>;
   /** This character's ordered strategy loadout (persisted, owned-strategy ids
    *  only; first entry is checked first in combat). Built from the account-wide
    *  strategy catalog (Player.unlockedStrategies). */
@@ -323,7 +325,11 @@ export interface LearningCompletePayload {
 
 /** Sent in response to `shop:get_unlocks` and after successful purchases. */
 export interface ShopUnlocksPayload {
+  /** Owned skill ids (rank ≥ 1) — derived from skillRanks for older clients. */
   unlockedSkills: string[];
+  /** skillId → current rank (1..MAX_SKILL_RANK). The authoritative per-character
+   *  skill state (see docs/CHARACTERS_DESIGN.md §4). */
+  skillRanks: Record<string, number>;
   unlockedStrategies: string[];
   skillShards: number;
   combatShards: number;

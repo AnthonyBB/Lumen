@@ -63,6 +63,9 @@ import {
   QUIZ_COMPLETE_SKILL_SHARDS,
   GRADE_COMPLETE_SKILL_SHARDS,
   GRADE_COMPLETE_COMBAT_SHARDS,
+  MAX_SKILL_RANK,
+  skillRankLevelGate,
+  skillRankCost,
 } from '../game/PlayerManager.js';
 import { QUIZ_PASS_THRESHOLD } from '../game/LearningSessionManager.js';
 import { SKILL_TREES, SKILL_CLASSES, type CombatSkill, type SkillClass } from '../game/data/skillTrees.js';
@@ -1102,6 +1105,7 @@ export function registerHandlers(
    *  loadout are per the ACTIVE character; strategy catalog + learning are account-wide. */
   const buildUnlocksPayload = (player: Player): ShopUnlocksPayload => ({
     unlockedSkills: playerManager.getUnlockedSkills(socket.id),
+    skillRanks: playerManager.getSkillRanks(socket.id),
     unlockedStrategies: [...player.unlockedStrategies],
     skillShards: playerManager.getSkillShards(socket.id),
     combatShards: playerManager.getCombatShards(socket.id),
@@ -1144,30 +1148,46 @@ export function registerHandlers(
       return;
     }
 
-    if (playerManager.hasSkill(socket.id, skill.id)) {
-      socket.emit('error', { message: 'You already know that skill.' });
+    // Buying advances the skill by ONE rank (rank 0 = unowned → 1 = first
+    // unlock). Ranks are gated by the active character's level and cost more per
+    // rank (see docs/CHARACTERS_DESIGN.md §4).
+    const currentRank = playerManager.getSkillRank(socket.id, skill.id);
+    const nextRank = currentRank + 1;
+    if (nextRank > MAX_SKILL_RANK) {
+      socket.emit('error', { message: `${skill.name} is already at max rank (${MAX_SKILL_RANK}).` });
       return;
     }
 
-    const ownedSkills = playerManager.getUnlockedSkills(socket.id);
-    const missingPrereq = skill.requires.find((req) => !ownedSkills.includes(req));
-    if (missingPrereq) {
-      const prereq = SKILL_MAP.get(missingPrereq);
+    // Prerequisites are only required to FIRST unlock a skill (rank 0 → 1).
+    if (currentRank === 0) {
+      const ownedSkills = playerManager.getUnlockedSkills(socket.id);
+      const missingPrereq = skill.requires.find((req) => !ownedSkills.includes(req));
+      if (missingPrereq) {
+        const prereq = SKILL_MAP.get(missingPrereq);
+        socket.emit('error', { message: `You must learn ${prereq?.name ?? missingPrereq} first.` });
+        return;
+      }
+    }
+
+    // Level gate for this rank.
+    const charLevel = playerManager.getActiveCharacter(socket.id)?.level ?? 1;
+    const reqLevel = skillRankLevelGate(nextRank);
+    if (charLevel < reqLevel) {
       socket.emit('error', {
-        message: `You must learn ${prereq?.name ?? missingPrereq} first.`,
+        message: `${skill.name} rank ${nextRank} needs character level ${reqLevel} (you are ${charLevel}).`,
       });
       return;
     }
 
-    const price = SKILL_PRICE_BY_TIER[skill.tier];
+    const price = skillRankCost(SKILL_PRICE_BY_TIER[skill.tier], nextRank);
     if (!playerManager.spendShards(socket.id, 'skill', price)) {
       socket.emit('error', {
-        message: `Not enough Skill Shards — ${skill.name} costs ${price} 🔷. Answer more questions to earn shards!`,
+        message: `Not enough Skill Shards — rank ${nextRank} of ${skill.name} costs ${price} 🔷. Earn more by answering questions!`,
       });
       return;
     }
 
-    playerManager.unlockSkill(socket.id, skill.id);
+    playerManager.setSkillRank(socket.id, skill.id, nextRank);
     playerManager.persistProgress(socket.id);
 
     socket.emit('shop:skill_purchased', {
@@ -1176,7 +1196,7 @@ export function registerHandlers(
     });
     pushCurrency();
 
-    console.log(`[shop] ${player.username} bought skill ${skill.id} for ${price} skill shard(s)`);
+    console.log(`[shop] ${player.username} bought ${skill.id} rank ${nextRank} for ${price} skill shard(s)`);
   });
 
   // ── shop:buy_strategy ────────────────────────────────────────────────────

@@ -79,6 +79,22 @@ export const POINTS_PER_LEVEL = 3;
 /** Hard level cap. */
 export const LEVEL_CAP = 50;
 
+// ── Skill ranks (see docs/CHARACTERS_DESIGN.md §4) ──────────────────────────
+/** Highest rank a skill can reach. */
+export const MAX_SKILL_RANK = 5;
+/** Per-rank effect bonus: each rank above 1 adds this to flat magnitudes
+ *  (rank 5 = 1.8× base). Applied client-side in combat. */
+export const SKILL_RANK_BONUS = 0.2;
+/** Character level required to buy a given rank: 1/4/7/10/13 for ranks 1..5. */
+export function skillRankLevelGate(rank: number): number {
+  return 1 + (Math.max(1, rank) - 1) * 3;
+}
+/** Skill-Shard cost to buy `rank` of a skill at the given tier price:
+ *  tierPrice × rank (so higher ranks cost progressively more). */
+export function skillRankCost(tierPrice: number, rank: number): number {
+  return Math.max(1, tierPrice) * Math.max(1, rank);
+}
+
 /**
  * Total XP required to REACH a given level (level 1 = 0 XP). The per-level cost
  * rises linearly — cost(L→L+1) = 250 + 150*(L-1) — so the curve gets steadily
@@ -138,16 +154,38 @@ function newCharacter(name: string, cls: string = DEFAULT_CHARACTER_CLASS): Char
     xp: 0,
     hp: 100,
     maxHp: 100,
-    unlockedSkills: [],
+    skillRanks: {},
     strategyLoadout: [],
     skillShards: 0,
     attributePoints: defaultAttributePoints(),
   };
 }
 
+/** Sanitise a persisted skill-ranks map (clamp ranks to 1..MAX_SKILL_RANK), and
+ *  migrate a legacy `unlockedSkills` id array (every owned skill → rank 1). */
+function normaliseSkillRanks(
+  rawRanks: Record<string, unknown> | undefined,
+  legacyUnlocked: string[] | undefined,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (rawRanks && typeof rawRanks === 'object') {
+    for (const [id, r] of Object.entries(rawRanks)) {
+      const rank = Math.floor(Number(r));
+      if (Number.isFinite(rank) && rank >= 1) out[id] = Math.min(MAX_SKILL_RANK, rank);
+    }
+  }
+  if (Array.isArray(legacyUnlocked)) {
+    for (const id of legacyUnlocked) if (typeof id === 'string' && !(id in out)) out[id] = 1;
+  }
+  return out;
+}
+
 /** Sanitise a persisted character record (clamp numbers, fill gaps, recompute
  *  level/HP from XP so the authoritative curve always wins). */
-function normaliseCharacter(raw: Partial<Character> | undefined, fallbackName: string): Character {
+function normaliseCharacter(
+  raw: (Partial<Character> & { unlockedSkills?: string[] }) | undefined,
+  fallbackName: string,
+): Character {
   const xp = Math.max(0, Math.floor(raw?.xp ?? 0));
   const level = levelForXp(xp);
   return {
@@ -158,7 +196,10 @@ function normaliseCharacter(raw: Partial<Character> | undefined, fallbackName: s
     xp,
     maxHp: maxHpForLevel(level),
     hp: maxHpForLevel(level),
-    unlockedSkills: Array.isArray(raw?.unlockedSkills) ? [...raw!.unlockedSkills] : [],
+    skillRanks: normaliseSkillRanks(
+      raw?.skillRanks as Record<string, unknown> | undefined,
+      raw?.unlockedSkills,
+    ),
     strategyLoadout: Array.isArray(raw?.strategyLoadout) ? [...raw!.strategyLoadout] : [],
     skillShards: Math.max(0, Math.floor(raw?.skillShards ?? 0)),
     attributePoints: normaliseAttributePoints(raw?.attributePoints),
@@ -735,21 +776,32 @@ export class PlayerManager {
     return player.subjectGrades[subject];
   }
 
-  /** Add a purchased skill id to the ACTIVE character's unlocks (idempotent). */
-  unlockSkill(socketId: string, skillId: string): void {
+  /** The active character's skillId → rank map. */
+  getSkillRanks(socketId: string): Record<string, number> {
+    return this.activeOf(socketId)?.skillRanks ?? {};
+  }
+
+  /** The active character's rank in a skill (0 = not owned). */
+  getSkillRank(socketId: string, skillId: string): number {
+    return this.activeOf(socketId)?.skillRanks[skillId] ?? 0;
+  }
+
+  /** Owned skill ids (rank ≥ 1) for the active character. */
+  getUnlockedSkills(socketId: string): string[] {
+    const ranks = this.activeOf(socketId)?.skillRanks ?? {};
+    return Object.keys(ranks).filter((id) => ranks[id] >= 1);
+  }
+
+  /** Whether the active character owns a given skill (rank ≥ 1). */
+  hasSkill(socketId: string, skillId: string): boolean {
+    return this.getSkillRank(socketId, skillId) >= 1;
+  }
+
+  /** Set the active character's rank in a skill (clamped to MAX_SKILL_RANK). */
+  setSkillRank(socketId: string, skillId: string, rank: number): void {
     const ch = this.activeOf(socketId);
     if (!ch) return;
-    if (!ch.unlockedSkills.includes(skillId)) ch.unlockedSkills.push(skillId);
-  }
-
-  /** The active character's purchased skill ids. */
-  getUnlockedSkills(socketId: string): string[] {
-    return this.activeOf(socketId)?.unlockedSkills ?? [];
-  }
-
-  /** Whether the active character owns a given skill. */
-  hasSkill(socketId: string, skillId: string): boolean {
-    return this.activeOf(socketId)?.unlockedSkills.includes(skillId) ?? false;
+    ch.skillRanks[skillId] = Math.max(0, Math.min(MAX_SKILL_RANK, Math.floor(rank)));
   }
 
   /** Add purchased strategy ids to the player's unlocks (idempotent). */

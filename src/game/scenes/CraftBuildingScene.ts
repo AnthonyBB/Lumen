@@ -249,6 +249,10 @@ export class CraftBuildingScene extends Phaser.Scene {
     this.player.setVelocity(0, 0)
     this.scene.pause()
     this.scene.launch('CraftScene', { building: this.building, parentScene: this.scene.key })
+    // Scenes render in scene-list order; this interior is registered AFTER
+    // CraftScene, so without this the craft UI would draw underneath the (paused
+    // but still rendering) interior and look frozen. Force it to the top.
+    this.scene.bringToTop('CraftScene')
   }
 
   private leave() {

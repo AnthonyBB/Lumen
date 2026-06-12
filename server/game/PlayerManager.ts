@@ -247,6 +247,78 @@ function sanitiseParty(ids: unknown, characters: Character[], activeId: string):
   return out.filter((id) => id);
 }
 
+/** Gear contributions folded out of a character's equipped slots. */
+export interface GearFold {
+  attrGear: Record<AttributeKey, number>;
+  gear: {
+    hp: number; attack: number; defense: number;
+    damage_bonus: number; magic_damage: number; healing_bonus: number;
+    crit_chance: number; mp_regen: number; hp_regen: number;
+  };
+}
+
+/** Fold equipped gear into attribute + derived-stat bonuses. Base defense scales
+ *  by M(min(craftRank, currentRank)); affixes are flat. Pure — shared by
+ *  computeStats (UI) and the combat resolver adapter. */
+export function foldEquipment(equipment: EquipmentSlots, currentRank: string): GearFold {
+  const attrGear: Record<AttributeKey, number> = defaultAttributePoints();
+  const gear = {
+    hp: 0, attack: 0, defense: 0,
+    damage_bonus: 0, magic_damage: 0, healing_bonus: 0, crit_chance: 0,
+    mp_regen: 0, hp_regen: 0,
+  };
+  for (const item of Object.values(equipment)) {
+    if (!item) continue;
+    if (typeof item.baseDefense === 'number') {
+      gear.defense += item.baseDefense * effectiveRankMultiplier(item.craftRank ?? DEFAULT_RANK_ID, currentRank);
+    }
+    if (item.attributes && item.attributes.length) {
+      for (const a of item.attributes) {
+        const t = a.type as AttributeType;
+        if ((ATTRIBUTE_KEYS as readonly string[]).includes(t)) {
+          attrGear[t as AttributeKey] += a.value;
+        } else if (t === 'damage_bonus') gear.damage_bonus += a.value;
+        else if (t === 'healing_bonus') gear.healing_bonus += a.value;
+        else if (t === 'crit_chance') gear.crit_chance += a.value;
+        else if (t === 'mp_regen') gear.mp_regen += a.value;
+        else if (t === 'hp_regen') gear.hp_regen += a.value;
+        else if (t === 'fire_damage' || t === 'ice_damage' || t === 'lightning_damage' ||
+                 t === 'holy_damage' || t === 'nature_damage') gear.magic_damage += a.value;
+      }
+    } else {
+      const s = item.stats ?? {};
+      if (typeof s.hp === 'number') gear.hp += s.hp;
+      if (typeof s.attack === 'number') gear.attack += s.attack;
+      if (typeof s.defense === 'number') gear.defense += s.defense;
+    }
+  }
+  return { attrGear, gear };
+}
+
+/** A character's raw derived combat stats (no UI rows). Pure — used by the combat
+ *  resolver adapter for ANY roster member, not just the active one. */
+export interface DerivedCombatStats {
+  maxHp: number; attack: number; magic: number; defense: number;
+  speed: number; healing: number; maxMana: number;
+}
+export function deriveCombatStats(
+  character: Character, equipment: EquipmentSlots, currentRank: string,
+): DerivedCombatStats {
+  const { attrGear, gear } = foldEquipment(equipment, currentRank);
+  const A = (k: AttributeKey) => ATTRIBUTE_BASE + (character.attributePoints[k] ?? 0) + attrGear[k];
+  const STR = A('strength'), CON = A('constitution'), DEX = A('dexterity');
+  const INT = A('intelligence'), SPI = A('spirit');
+  return {
+    maxHp: Math.round(50 + CON * 10 + gear.hp),
+    attack: Math.round(5 + STR * 2 + gear.attack + gear.damage_bonus),
+    magic: Math.round(5 + INT * 2 + gear.magic_damage + gear.damage_bonus),
+    defense: Math.round(STR * 2 + gear.defense),
+    speed: Math.round(10 + DEX * 2),
+    healing: Math.round(SPI * 2 + gear.healing_bonus),
+    maxMana: Math.round(20 + SPI * 8),
+  };
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -965,60 +1037,9 @@ export class PlayerManager {
     // Attributes/level come from the ACTIVE character; rank is account-wide.
     const ch = this.active(player);
 
-    // ── Gear contributions ──────────────────────────────────────────────────
-    const attrGear: Record<AttributeKey, number> = defaultAttributePoints();
-    // Direct derived-stat gear bonuses.
-    const gear = {
-      hp: 0, attack: 0, defense: 0,
-      damage_bonus: 0, magic_damage: 0, healing_bonus: 0, crit_chance: 0,
-      mp_regen: 0, hp_regen: 0,
-    };
-
-    // Gear core power (base defense) scales by the LOWER of the item's craft
-    // rank and the player's current rank — a low-rank piece stays weak when
-    // carried up; a high-rank piece gives no edge at a lower rank (anti-farming,
-    // see docs/ADVENTURE_RANKS_DESIGN.md §1).
+    // ── Gear contributions (rank-scaled base defense + affixes) ───────────────
     const currentRank = normaliseRankId(player.adventureRank);
-    for (const item of Object.values(equipment)) {
-      if (!item) continue;
-      // Base defense (armor) is a level-scaled core stat, separate from affixes.
-      if (typeof item.baseDefense === 'number') {
-        gear.defense += item.baseDefense * effectiveRankMultiplier(item.craftRank ?? DEFAULT_RANK_ID, currentRank);
-      }
-      // Crafted gear carries its rolled attributes on the instance (set
-      // server-side at craft time). These are the authoritative stat source.
-      if (item.attributes && item.attributes.length) {
-        for (const a of item.attributes) {
-          const t = a.type as AttributeType;
-          if ((ATTRIBUTE_KEYS as readonly string[]).includes(t)) {
-            attrGear[t as AttributeKey] += a.value;
-          } else if (t === 'damage_bonus') {
-            gear.damage_bonus += a.value;
-          } else if (t === 'healing_bonus') {
-            gear.healing_bonus += a.value;
-          } else if (t === 'crit_chance') {
-            gear.crit_chance += a.value;
-          } else if (t === 'mp_regen') {
-            gear.mp_regen += a.value;
-          } else if (t === 'hp_regen') {
-            gear.hp_regen += a.value;
-          } else if (
-            t === 'fire_damage' || t === 'ice_damage' || t === 'lightning_damage' ||
-            t === 'holy_damage' || t === 'nature_damage'
-          ) {
-            gear.magic_damage += a.value;
-          }
-          // Remaining types (gold_find, dot/aoe, debuff_resist) are flavour
-          // bonuses not surfaced as core stats here.
-        }
-      } else {
-        // Legacy ItemDatabase item — apply its raw stats directly.
-        const s = item.stats ?? {};
-        if (typeof s.hp === 'number') gear.hp += s.hp;
-        if (typeof s.attack === 'number') gear.attack += s.attack;
-        if (typeof s.defense === 'number') gear.defense += s.defense;
-      }
-    }
+    const { attrGear, gear } = foldEquipment(equipment, currentRank);
 
     // ── Attributes (base from allocation + gear) ────────────────────────────
     const attributes: StatRow[] = ATTRIBUTE_KEYS.map((k) => {

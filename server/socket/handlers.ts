@@ -645,6 +645,18 @@ export function registerHandlers(
     learningSessionManager.endSession(payload.sessionId);
   });
 
+  // ── materials:get ────────────────────────────────────────────────────────
+  //
+  // Returns the player's crafting-material stash (id → qty). Safe to send: the
+  // client only displays it; all spending is validated server-side at craft.
+  const pushMaterials = (): void => {
+    socket.emit('materials:data', { materials: playerManager.getMaterials(socket.id) });
+  };
+  socket.on('materials:get', () => {
+    if (!requireJoinedPlayer('You must join before viewing materials.')) return;
+    pushMaterials();
+  });
+
   // ── craft:start ──────────────────────────────────────────────────────────
   //
   // Begin a Forge weapon craft: a short Math quiz that produces a weapon.
@@ -707,7 +719,10 @@ export function registerHandlers(
     socket.emit('craft:answer_result', result);
 
     // A finished craft mutated the bag + material stash — refresh the client.
-    if (result.sessionComplete) pushInventoryUpdate();
+    if (result.sessionComplete) {
+      pushInventoryUpdate();
+      pushMaterials();
+    }
   });
 
   // ── chat:message ─────────────────────────────────────────────────────────

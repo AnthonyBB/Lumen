@@ -21,6 +21,8 @@ import type { Skill } from '../data/skills'
 import { SKILL_MAP } from '../data/skillTrees'
 import { StatsStore } from '../systems/StatsStore'
 import { InventoryStore, type ClientInventoryItem } from '../systems/InventoryStore'
+import { RankStore } from '../systems/RankStore'
+import { rankMultiplier, effectiveRankMultiplier } from '../data/adventureRanks'
 import type { CombatSkill, SkillClass } from '../data/skillTrees'
 import { TD_MONSTERS } from '../data/tileFrames'
 import { DIFFICULTIES, type Difficulty } from '../data/mobs'
@@ -84,18 +86,68 @@ const CLASS_COLORS: Record<SkillClass, number> = {
 
 const MAX_SKILLS_PER_PAGE = 6
 
+const STAT_ABBR: Record<string, string> = { attack: 'atk', defense: 'def', speed: 'spd' }
+
 /**
- * Map a purchased skill-tree skill onto the battle engine's damage/heal model.
- * The engine currently supports direct damage and heals; richer effects
- * (DoT ticks, stuns, buffs) are flattened to their primary value for now.
+ * Map a purchased skill-tree skill onto the battle engine's Skill shape.
+ * The full effect list is carried through on `effects` so the engine can apply
+ * DoT/pierce/stun/slow/buff/etc. The damageMin/Max + powerLabel surface the
+ * primary visible magnitude on the button.
  */
-function toBattleSkill(cs: CombatSkill): Skill {
-  const dmgEffect = cs.effects.find(e =>
-    e.type === 'damage' || e.type === 'aoe' || e.type === 'execute' ||
-    e.type === 'chain' || e.type === 'dot' || e.type === 'lifesteal')
-  const healEffect = cs.effects.find(e => e.type === 'heal' || e.type === 'shield')
-  const isHeal = !dmgEffect && !!healEffect
-  const base = (dmgEffect ?? healEffect)?.value ?? 10
+/** Effect types whose `value` is a flat HP-economy magnitude that scales with
+ *  adventure rank (spell power = M(currentRank)). Percentage effects (team_buff,
+ *  lifesteal, execute %) and CC magnitudes (pierce/slow/stun/sleep) are NOT
+ *  scaled — see docs/ADVENTURE_RANKS_DESIGN.md §1. */
+const SCALED_EFFECT_TYPES = new Set(['damage', 'aoe', 'heal', 'dot', 'bleed', 'poison', 'shield', 'hot'])
+
+function toBattleSkill(cs: CombatSkill, spellMult = 1): Skill {
+  // Scale the flat damage/heal magnitudes by the player's current rank into a
+  // COPY — never mutate the shared SKILL_MAP definitions.
+  const effects = spellMult === 1 ? cs.effects : cs.effects.map(e =>
+    SCALED_EFFECT_TYPES.has(e.type) ? { ...e, value: Math.max(1, Math.round(e.value * spellMult)) } : e)
+  const has = (t: string) => effects.some(e => e.type === t)
+  // A skill is "self/heal" (fires immediately, no enemy target) when it has NO
+  // effect that needs an enemy target: no direct damage, no single-target CC.
+  const directDmg = effects.find(e => e.type === 'damage')
+  // An `aoe`-type damage effect (or any effect explicitly flagged aoe) makes the
+  // WHOLE skill an area blast: it fires on every enemy with no target select.
+  const hasAoe = effects.some(e => e.type === 'aoe' || e.aoe)
+  const hasSingleTargetCC = effects.some(e =>
+    (e.type === 'pierce' || e.type === 'stun' || e.type === 'slow' || e.type === 'sleep' ||
+     e.type === 'bleed' || e.type === 'poison' || e.type === 'dot' || e.type === 'execute') && !e.aoe)
+
+  let targeting: 'single' | 'aoe' | 'self'
+  // AoE wins over an accompanying CC rider (e.g. Frost Nova = aoe damage + slow):
+  // the blast hits everyone, and its riders ride along to every target.
+  if (hasAoe && !directDmg) targeting = 'aoe'
+  else if (directDmg || hasSingleTargetCC) targeting = 'single'
+  else targeting = 'self'   // pure heal / buff / shield
+
+  // Primary magnitude shown on the button.
+  const dmgVal = effects.find(e => e.type === 'damage' || e.type === 'aoe')?.value ?? 0
+  const healVal = effects.find(e => e.type === 'heal')?.value ?? 0
+  const base = dmgVal || healVal || 10
+  const isHeal = targeting === 'self' && healVal > 0
+
+  // Build a compact power label from the most salient effect.
+  const parts: string[] = []
+  if (dmgVal) parts.push(`${dmgVal} dmg`)
+  else if (healVal) parts.push(`Heal ${healVal}`)
+  const dot = effects.find(e => e.type === 'dot' || e.type === 'bleed' || e.type === 'poison')
+  if (dot) parts.push(`+${dot.value}/rd`)
+  const pierce = effects.find(e => e.type === 'pierce')
+  if (pierce) parts.push(`Def -${pierce.value}`)
+  const slow = effects.find(e => e.type === 'slow')
+  if (slow) parts.push(`Slow -${slow.value}`)
+  if (has('stun')) parts.push('Stun')
+  if (has('sleep')) parts.push('Sleep')
+  const buff = effects.find(e => e.type === 'team_buff')
+  if (buff && parts.length === 0) parts.push(`+${buff.value}% ${STAT_ABBR[buff.stat ?? 'attack']}`)
+  const shield = effects.find(e => e.type === 'shield')
+  if (shield && parts.length === 0) parts.push(`Shield ${shield.value}`)
+  const hot = effects.find(e => e.type === 'hot')
+  if (hot && parts.length === 0) parts.push(`Regen ${hot.value}/rd`)
+
   return {
     id: cs.id,
     name: cs.name,
@@ -106,6 +158,11 @@ function toBattleSkill(cs: CombatSkill): Skill {
     isHeal,
     color: CLASS_COLORS[cs.class] ?? 0x8a6a40,
     mpCost: cs.mpCost,
+    targeting,
+    // On an AoE skill, flag every effect aoe so the engine applies the damage AND
+    // its riders (slow/DoT/etc.) to each enemy hit — not just the primary target.
+    effects: targeting === 'aoe' ? effects.map(e => ({ ...e, aoe: true })) : effects,
+    powerLabel: parts.join('  ·  '),
   }
 }
 
@@ -134,6 +191,14 @@ type BattlePhase =
   | 'victory'
   | 'defeat'
 
+/** One stacking damage-over-time instance (burn / bleed / poison). */
+interface DotInstance {
+  perTurn: number
+  rounds: number
+  label: string   // 'Burn' | 'Bleed' | 'Poison'
+  color: number
+}
+
 interface ActiveMob extends MobDef {
   hp: number
   alive: boolean
@@ -145,6 +210,14 @@ interface ActiveMob extends MobDef {
   nameText: Phaser.GameObjects.Text | null
   hpBarGfx: Phaser.GameObjects.Graphics | null
   hitZone: Phaser.GameObjects.Rectangle | null
+  // ── status effects ────────────────────────────────────────────────────────
+  dots: DotInstance[]        // active DoTs ticking at round start
+  defenseDown: number        // current defense reduction from pierce
+  defenseDownRounds: number  // rounds remaining for the pierce debuff
+  slowAmount: number         // current speed reduction from slow
+  slowRounds: number         // rounds remaining for the slow debuff
+  stunRounds: number         // attacks to skip (stun)
+  asleepRounds: number       // rounds asleep (sleep); >0 = skips action until hit
 }
 
 // ── BattleScene ────────────────────────────────────────────────────────────
@@ -161,10 +234,28 @@ export class BattleScene extends Phaser.Scene {
   private manaRegen = 0
   private playerSpeed = DEFAULT_PLAYER_SPEED
   private playerDefense = 0   // equipment-derived defense will feed this later
+  /** Round counter (increments each time the player gets a fresh turn). */
+  private roundNo = 1
+  // ── player status effects ───────────────────────────────────────────────
+  private shieldHp = 0          // absorb pool from shield skills
+  private shieldRounds = 0
+  private hotPerTurn = 0        // heal-over-time amount
+  private hotRounds = 0
+  /** Active team buffs: stat → { pct, rounds }. Applied to the player today. */
+  private buffs: Record<'attack' | 'defense' | 'speed', { pct: number; rounds: number }> = {
+    attack: { pct: 0, rounds: 0 },
+    defense: { pct: 0, rounds: 0 },
+    speed: { pct: 0, rounds: 0 },
+  }
   /** The character gear/stats inspect overlay (null when closed). */
   private charPanel: Phaser.GameObjects.Container | null = null
   private xpGained = 0
   private silverGained = 0
+  /** The player's current adventure rank, and its economy/power multiplier
+   *  M(currentRank). Spells, mob strength, and rewards scale by this; gear/
+   *  potions use M(min(craftRank, currentRank)). See adventureRanks.ts. */
+  private currentRank: string | null = null
+  private rankMult = 1
 
   /** Skills shown in the bar: basic Attack + server-confirmed purchases only. */
   private battleSkills: Skill[] = [BASIC_ATTACK]
@@ -196,6 +287,14 @@ export class BattleScene extends Phaser.Scene {
     this.skillButtons = []
     this.skillBtnGfx  = []
     this.skillPage    = 0
+    this.roundNo      = 1
+    this.shieldHp = 0; this.shieldRounds = 0
+    this.hotPerTurn = 0; this.hotRounds = 0
+    this.buffs = {
+      attack: { pct: 0, rounds: 0 },
+      defense: { pct: 0, rounds: 0 },
+      speed: { pct: 0, rounds: 0 },
+    }
   }
 
   create() {
@@ -210,6 +309,11 @@ export class BattleScene extends Phaser.Scene {
     this.playerMaxMana = Math.round(derived.find(r => r.key === 'mana')?.total ?? 0)
     this.manaRegen     = derived.find(r => r.key === 'manaRegen')?.total ?? 0
     this.playerMana    = this.playerMaxMana
+
+    // Adventure-rank scaling factor. Mobs, spells, and rewards scale by
+    // M(currentRank); the weapon's basic attack uses M(min(craftRank, current)).
+    this.currentRank = RankStore.get()
+    this.rankMult = rankMultiplier(this.currentRank)
 
     // The basic Attack's damage range comes from the equipped weapon (level-
     // scaled, with per-weapon variance), falling back to the bare-fists default.
@@ -229,8 +333,9 @@ export class BattleScene extends Phaser.Scene {
 
   /** Compare player speed vs the fastest alive mob: faster side acts first. */
   private rollInitiative() {
-    const fastestMob = Math.max(...this.mobs.filter(m => m.alive).map(m => m.speed), 0)
-    const playerFirst = this.playerSpeed >= fastestMob
+    const fastestMob = Math.max(...this.mobs.filter(m => m.alive).map(m => m.speed - m.slowAmount), 0)
+    const effSpeed = this.playerSpeed * (1 + this.buffs.speed.pct / 100)
+    const playerFirst = effSpeed >= fastestMob
 
     this.phase = 'animating'   // block input while the banner shows
     this.showInitiativeBanner(playerFirst)
@@ -295,14 +400,23 @@ export class BattleScene extends Phaser.Scene {
     // Deterministic frame per mob: BiomeScene-chosen frame if provided,
     // otherwise picked from the difficulty tier pool, seeded by mob index.
     const pool = TD_MONSTERS[DIFFICULTIES[this.battleData.difficulty].pool]
+    // Mob strength scales with the player's current rank (M(currentRank)) so a
+    // higher-rank player faces proportionally tougher enemies — this is the
+    // anti-farming keystone: coasting on low-rank gear at a high rank leaves you
+    // out-scaled (see docs/ADVENTURE_RANKS_DESIGN.md §1).
+    const scaledMaxHp = (hp: number) => Math.max(1, Math.round(hp * this.rankMult))
     this.mobs = this.battleData.mobs.map((def, i) => ({
       ...def,
-      hp: def.maxHp,
+      maxHp: scaledMaxHp(def.maxHp),
+      attack: Math.max(1, Math.round(def.attack * this.rankMult)),
+      hp: scaledMaxHp(def.maxHp),
       alive: true,
       px: positions[i]?.x ?? GAME_WIDTH / 2,
       py: positions[i]?.y ?? 160,
       monsterFrame: def.frame ?? pool[i % pool.length],
       sprite: null, shadow: null, nameText: null, hpBarGfx: null, hitZone: null,
+      dots: [], defenseDown: 0, defenseDownRounds: 0,
+      slowAmount: 0, slowRounds: 0, stunRounds: 0, asleepRounds: 0,
     }))
   }
 
@@ -423,7 +537,9 @@ export class BattleScene extends Phaser.Scene {
     // Label
     const nameText = this.add.text(
       px, py + 46,
-      alive ? `${mob.name}\nLv.${mob.level}  HP:${mob.hp}/${mob.maxHp}` : `${mob.name}\n💀 Defeated`,
+      alive
+        ? `${mob.name}\nLv.${mob.level}  HP:${mob.hp}/${mob.maxHp}${this.mobStatusLine(mob)}`
+        : `${mob.name}\n💀 Defeated`,
       {
         fontSize: '10px', fontFamily: 'Arial',
         color: alive ? '#cccccc' : '#555555',
@@ -451,6 +567,18 @@ export class BattleScene extends Phaser.Scene {
       })
       mob.hitZone = hit
     }
+  }
+
+  /** Compact one-line status summary appended under a mob's HP (or '' if none). */
+  private mobStatusLine(mob: ActiveMob): string {
+    const tags: string[] = []
+    if (mob.stunRounds > 0) tags.push('Stun')
+    if (mob.asleepRounds > 0) tags.push('Sleep')
+    const dotTotal = mob.dots.reduce((s, d) => s + d.perTurn, 0)
+    if (dotTotal > 0) tags.push(`DoT ${dotTotal}/rd`)
+    if (mob.defenseDown > 0) tags.push(`Def-${mob.defenseDown}`)
+    if (mob.slowAmount > 0) tags.push(`Slow-${mob.slowAmount}`)
+    return tags.length ? `\n${tags.join(' · ')}` : ''
   }
 
   private refreshMobCount() {
@@ -513,14 +641,24 @@ export class BattleScene extends Phaser.Scene {
       .map(id => SKILL_MAP[id])
       .filter((s): s is CombatSkill => !!s)
       .sort((a, b) => a.tier - b.tier)
-    this.battleSkills = [this.basicAttackSkill, ...owned.map(toBattleSkill)]
+    // Spell magnitudes scale with the player's current rank (M(currentRank)).
+    this.battleSkills = [this.basicAttackSkill, ...owned.map(s => toBattleSkill(s, this.rankMult))]
   }
 
   /** Basic Attack with the equipped weapon's level-scaled damage range (or the
    *  bare default when no weapon is equipped). */
   private makeBasicAttack(): Skill {
-    const bd = InventoryStore.get()?.equipment?.mainHand?.baseDamage
-    return bd ? { ...BASIC_ATTACK, damageMin: bd.min, damageMax: bd.max } : BASIC_ATTACK
+    const weapon = InventoryStore.get()?.equipment?.mainHand
+    const bd = weapon?.baseDamage
+    if (!bd) return BASIC_ATTACK
+    // Weapon power scales by the LOWER of its craft rank and the player's current
+    // rank — a low-rank weapon stays weak when carried up to a higher rank.
+    const m = effectiveRankMultiplier(weapon?.craftRank, this.currentRank)
+    return {
+      ...BASIC_ATTACK,
+      damageMin: Math.max(1, Math.round(bd.min * m)),
+      damageMax: Math.max(1, Math.round(bd.max * m)),
+    }
   }
 
   // ── Skill panel ───────────────────────────────────────────────────────────
@@ -615,7 +753,10 @@ export class BattleScene extends Phaser.Scene {
       fontSize: '11px', fontFamily: 'Arial', color: '#dddddd', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5)
     const mp = skill.mpCost > 0 ? `  ·  ${skill.mpCost} MP` : ''
-    const desc = this.add.text(0, 22, `${skill.damageMin}–${skill.damageMax} ${skill.isHeal ? 'HP' : 'dmg'}${mp}`, {
+    const power = skill.powerLabel
+      ? skill.powerLabel
+      : `${skill.damageMin}–${skill.damageMax} ${skill.isHeal ? 'HP' : 'dmg'}`
+    const desc = this.add.text(0, 22, `${power}${mp}`, {
       fontSize: '9px', fontFamily: 'Arial',
       color: Phaser.Display.Color.IntegerToColor(skill.color).lighten(20).rgba,
     }).setOrigin(0.5, 0.5)
@@ -655,10 +796,14 @@ export class BattleScene extends Phaser.Scene {
 
     this.selectedSkill = skill
 
-    if (skill.isHeal) {
-      // Heal fires immediately
+    if (skill.targeting === 'self') {
+      // Heal / buff / shield — fires immediately, no target.
       this.phase = 'animating'
-      this.castHeal(skill)
+      this.castSelf(skill)
+    } else if (skill.targeting === 'aoe') {
+      // AoE — hits every enemy immediately, like a heal (no target prompt).
+      this.phase = 'animating'
+      this.castAoe(skill)
     } else {
       this.phase = 'target_select'
       this.setLog(`${skill.icon}  ${skill.name} selected — click an enemy to attack!`, '#ffdd88')
@@ -685,84 +830,321 @@ export class BattleScene extends Phaser.Scene {
 
   // ── Combat actions ────────────────────────────────────────────────────────
 
+  /** Player attack damage after the active attack buff. */
+  private buffedDamage(base: number): number {
+    return Math.round(base * (1 + this.buffs.attack.pct / 100))
+  }
+
+  /** Effective defense of a mob (base − active pierce debuff, floored at 0). */
+  private mobDefense(mob: ActiveMob): number {
+    return Math.max(0, (mob.defense ?? 0) - mob.defenseDown)
+  }
+
+  /** Roll a stun/sleep land chance scaled by level difference.
+   *  Positive (player higher level) → more likely to land. */
+  private landChance(base: number, enemyLevel: number, perLevel: number): number {
+    const diff = (StatsStore.get()?.level ?? 1) - enemyLevel
+    return Phaser.Math.Clamp(base + diff * perLevel, 0.1, 0.95)
+  }
+
+  /**
+   * Apply one offensive skill's effects to a single mob. Returns the direct
+   * damage dealt (for lifesteal). Does NOT handle death bookkeeping — callers
+   * do that after applying to all affected mobs.
+   */
+  private applyEffectsToMob(skill: Skill, mob: ActiveMob, isAoe: boolean): number {
+    if (!mob.alive) return 0
+    const enemyLevel = mob.level
+
+    // Waking a sleeping target: any hit wakes it.
+    const dmgEffects = skill.effects.filter(e =>
+      (e.type === 'damage' && !isAoe) || (e.type === 'aoe' && isAoe))
+    let directDmg = 0
+    for (const e of dmgEffects) {
+      let v = this.buffedDamage(Phaser.Math.Between(
+        Math.round(e.value * 0.85), Math.round(e.value * 1.15)))
+      // Defense mitigation (pierce makes this smaller). Min 1 per hit.
+      v = Math.max(1, v - Math.floor(this.mobDefense(mob) * 0.5))
+      directDmg += v
+    }
+
+    // Execute: bonus vs low HP, and a chance to finish near-dead targets.
+    const exe = skill.effects.find(e => e.type === 'execute')
+    if (exe && directDmg > 0) {
+      const pct = mob.hp / mob.maxHp
+      if (pct <= 0.30) directDmg = Math.round(directDmg * (1 + exe.value / 100))
+      if (pct <= 0.15 && Math.random() < (exe.chance ?? 0)) directDmg = mob.hp   // instant kill
+    }
+
+    if (directDmg > 0) {
+      mob.hp = Math.max(0, mob.hp - directDmg)
+      if (mob.asleepRounds > 0) { mob.asleepRounds = 0 }   // damage wakes it
+      this.spawnDmgLabel(mob.px, mob.py - 20, `-${directDmg}`, skill.color)
+    }
+
+    // Pierce → lower defense.
+    for (const e of skill.effects.filter(e => e.type === 'pierce' && (!!e.aoe === isAoe || !isAoe))) {
+      if (isAoe && !e.aoe) continue
+      mob.defenseDown = Math.max(mob.defenseDown, e.value)
+      mob.defenseDownRounds = Math.max(mob.defenseDownRounds, e.duration ?? 2)
+    }
+    // Slow → lower speed.
+    for (const e of skill.effects.filter(e => e.type === 'slow' && (!!e.aoe === isAoe || !isAoe))) {
+      if (isAoe && !e.aoe) continue
+      mob.slowAmount = Math.max(mob.slowAmount, e.value)
+      mob.slowRounds = Math.max(mob.slowRounds, e.duration ?? 2)
+    }
+    // DoT / bleed / poison.
+    for (const e of skill.effects.filter(e => e.type === 'dot' || e.type === 'bleed' || e.type === 'poison')) {
+      const label = e.type === 'bleed' ? 'Bleed' : e.type === 'poison' ? 'Poison' : 'Burn'
+      const color = e.type === 'poison' ? 0x66dd44 : e.type === 'bleed' ? 0xcc2233 : 0xff7722
+      mob.dots.push({ perTurn: e.value, rounds: e.duration ?? 3, label, color })
+    }
+    // Stun (level-scaled, unless instantly killed).
+    for (const e of skill.effects.filter(e => e.type === 'stun' && (!!e.aoe === isAoe || !isAoe))) {
+      if (isAoe && !e.aoe) continue
+      if (mob.hp <= 0) break
+      const chance = this.landChance(e.chance ?? 0.9, enemyLevel, 0.06)
+      if (Math.random() < chance) {
+        mob.stunRounds = Math.max(mob.stunRounds, e.duration ?? 1)
+        this.spawnDmgLabel(mob.px, mob.py - 44, 'STUN', 0xffee66)
+      }
+    }
+    // Sleep (level-scaled; rarer than stun).
+    for (const e of skill.effects.filter(e => e.type === 'sleep' && (!!e.aoe === isAoe || !isAoe))) {
+      if (isAoe && !e.aoe) continue
+      if (mob.hp <= 0) break
+      const chance = this.landChance(e.chance ?? 0.7, enemyLevel, 0.05)
+      if (Math.random() < chance) {
+        mob.asleepRounds = e.duration ?? 99
+        this.spawnDmgLabel(mob.px, mob.py - 44, 'SLEEP', 0x99ccff)
+      }
+    }
+    return directDmg
+  }
+
+  /** Mark a mob dead and bank its XP/silver. Safe to call repeatedly. */
+  private killMob(mob: ActiveMob) {
+    if (mob.alive && mob.hp <= 0) {
+      mob.alive = false
+      // Rewards scale with the player's current rank (M(currentRank)) to match
+      // the steeper mobs and craft costs at that rank.
+      this.xpGained += Math.round(xpForMob(mob.level) * this.rankMult)
+      this.silverGained += Math.round(silverForMob(mob.level, this.battleData.difficulty) * this.rankMult)
+    }
+  }
+
+  /** Heal the player by `amount` of any incidental skill heal (caps at max). */
+  private healPlayer(amount: number) {
+    if (amount <= 0) return
+    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + amount)
+    this.refreshPlayerPanel()
+  }
+
+  /** Apply the player-facing side effects of a skill (heal / hot / shield /
+   *  team_buff). Shared by single-target, AoE and self casts. */
+  private applySupportEffects(skill: Skill) {
+    for (const e of skill.effects) {
+      if (e.type === 'heal') {
+        this.healPlayer(Phaser.Math.Between(Math.round(e.value * 0.85), Math.round(e.value * 1.15)))
+      } else if (e.type === 'hot') {
+        this.hotPerTurn = Math.max(this.hotPerTurn, e.value)
+        this.hotRounds = Math.max(this.hotRounds, e.duration ?? 3)
+      } else if (e.type === 'shield') {
+        this.shieldHp = Math.max(this.shieldHp, e.value)
+        this.shieldRounds = Math.max(this.shieldRounds, e.duration ?? 2)
+      } else if (e.type === 'team_buff') {
+        const stat = e.stat ?? 'attack'
+        this.buffs[stat] = {
+          pct: Math.max(this.buffs[stat].pct, e.value),
+          rounds: Math.max(this.buffs[stat].rounds, e.duration ?? 3),
+        }
+      }
+    }
+  }
+
   private fireSkillOnMob(mobIdx: number) {
     if (this.phase !== 'target_select' || !this.selectedSkill) return
     this.phase = 'animating'
-
     this.highlightAliveMobs(false)
 
-    const skill  = this.selectedSkill
-    const mob    = this.mobs[mobIdx]
-    const dmg    = Phaser.Math.Between(skill.damageMin, skill.damageMax)
+    const skill = this.selectedSkill
+    const mob   = this.mobs[mobIdx]
 
-    // Spend mana; KEEP the skill selected so the next turn resumes targeting
-    // with it (sticky) — no need to re-pick the skill every attack.
+    // Spend mana; KEEP the skill selected so next turn resumes targeting (sticky).
     this.spendMana(skill.mpCost)
 
-    // Flash mob
     this.cameras.main.shake(180, 0.006)
     this.cameras.main.flash(120, ...Phaser.Display.Color.IntegerToColor(skill.color).gl.slice(0, 3) as [number, number, number])
 
-    mob.hp = Math.max(0, mob.hp - dmg)
+    const dmg = this.applyEffectsToMob(skill, mob, false)
+    this.applySupportEffects(skill)
 
-    // Floating damage number
-    this.spawnDmgLabel(mob.px, mob.py - 20, `-${dmg}`, skill.color)
+    // Lifesteal heals the player for a % of damage dealt.
+    const ls = skill.effects.find(e => e.type === 'lifesteal')
+    if (ls && dmg > 0) this.healPlayer(Math.round(dmg * ls.value / 100))
 
     if (mob.hp <= 0) {
-      mob.alive = false
-      const xp = xpForMob(mob.level)
-      this.xpGained += xp
-      this.silverGained += silverForMob(mob.level, this.battleData.difficulty)
-      this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg}!  Enemy defeated! (+${xp} XP)`, '#44ff88')
+      this.killMob(mob)
+      this.setLog(`${skill.icon}  ${skill.name} struck ${mob.name} for ${dmg}!  Enemy defeated!`, '#44ff88')
     } else {
       this.setLog(`${skill.icon}  ${skill.name} hit ${mob.name} for ${dmg} damage!`, '#44ffcc')
     }
 
-    // Redraw mob
     this.renderMob(mob, mobIdx)
     this.refreshMobCount()
 
-    // After brief pause → check victory or enemy turn
     this.time.delayedCall(900, () => {
-      const anyAlive = this.mobs.some(m => m.alive)
-      if (!anyAlive) {
-        this.doVictory()
-      } else {
-        this.doEnemyTurn()
-      }
+      if (!this.mobs.some(m => m.alive)) this.doVictory()
+      else this.doEnemyTurn()
     })
   }
 
-  private castHeal(skill: Skill) {
-    const amount = Phaser.Math.Between(skill.damageMin, skill.damageMax)
+  /** AoE skill — hits every living enemy, no target selection. */
+  private castAoe(skill: Skill) {
     this.spendMana(skill.mpCost)
-    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + amount)
-    this.refreshPlayerPanel()
-    this.cameras.main.flash(300, 0, 1, 0.3)
+    this.cameras.main.shake(220, 0.008)
+    this.cameras.main.flash(160, ...Phaser.Display.Color.IntegerToColor(skill.color).gl.slice(0, 3) as [number, number, number])
 
-    this.setLog(`${skill.icon}  ${skill.name} restored ${amount} HP!`, '#44ff88')
+    let totalDmg = 0
+    this.mobs.forEach((mob, i) => {
+      if (!mob.alive) return
+      totalDmg += this.applyEffectsToMob(skill, mob, true)
+      if (mob.hp <= 0) this.killMob(mob)
+      this.renderMob(mob, i)
+    })
+    this.applySupportEffects(skill)
+
+    const ls = skill.effects.find(e => e.type === 'lifesteal')
+    if (ls && totalDmg > 0) this.healPlayer(Math.round(totalDmg * ls.value / 100))
+
+    this.refreshMobCount()
+    this.setLog(`${skill.icon}  ${skill.name} swept all enemies${totalDmg > 0 ? ` for ${totalDmg} total damage` : ''}!`, '#9be7ff')
+
+    this.time.delayedCall(900, () => {
+      if (!this.mobs.some(m => m.alive)) this.doVictory()
+      else this.doEnemyTurn()
+    })
+  }
+
+  /** Self-cast skill — heal / buff / shield / HoT only. Fires immediately. */
+  private castSelf(skill: Skill) {
+    this.spendMana(skill.mpCost)
+    this.applySupportEffects(skill)
+    this.cameras.main.flash(300, 0.2, 1, 0.4)
+
+    const bits: string[] = []
+    const heal = skill.effects.find(e => e.type === 'heal')
+    if (heal) bits.push('restored health')
+    if (skill.effects.some(e => e.type === 'hot')) bits.push('granted regeneration')
+    if (skill.effects.some(e => e.type === 'shield')) bits.push('raised a shield')
+    if (skill.effects.some(e => e.type === 'team_buff')) bits.push('empowered the party')
+    this.setLog(`${skill.icon}  ${skill.name} ${bits.join(', ') || 'took effect'}!`, '#44ff88')
+
+    // Self-cast skills are not sticky — clear the selection.
     this.selectedSkill = null
     this.resetSkillButtons()
+    this.refreshPlayerPanel()
 
     this.time.delayedCall(900, () => this.doEnemyTurn())
   }
 
+  /**
+   * Start-of-round upkeep (runs at the top of the enemy phase, i.e. once per
+   * full round): tick enemy DoTs, regen the player from HoT, and count down
+   * every status timer by one round. Returns true if a DoT just killed the last
+   * enemy (caller should jump straight to victory).
+   */
+  private runRoundUpkeep(): boolean {
+    // Player heal-over-time.
+    if (this.hotRounds > 0 && this.hotPerTurn > 0) {
+      this.healPlayer(this.hotPerTurn)
+      this.spawnDmgLabel(GAME_WIDTH / 2, PLAYER_PANEL_Y - 20, `+${this.hotPerTurn}`, 0x44ff88)
+    }
+
+    // Enemy DoTs tick.
+    this.mobs.forEach((mob, i) => {
+      if (!mob.alive || mob.dots.length === 0) return
+      let tick = 0
+      for (const d of mob.dots) tick += d.perTurn
+      const color = mob.dots[mob.dots.length - 1].color
+      mob.hp = Math.max(0, mob.hp - tick)
+      this.spawnDmgLabel(mob.px, mob.py - 30, `-${tick}`, color)
+      if (mob.hp <= 0) this.killMob(mob)
+      this.renderMob(mob, i)
+    })
+    this.refreshMobCount()
+
+    // Decrement all timers (one round elapsed).
+    this.mobs.forEach(mob => {
+      mob.dots = mob.dots.map(d => ({ ...d, rounds: d.rounds - 1 })).filter(d => d.rounds > 0)
+      if (mob.defenseDownRounds > 0 && --mob.defenseDownRounds === 0) mob.defenseDown = 0
+      if (mob.slowRounds > 0 && --mob.slowRounds === 0) mob.slowAmount = 0
+      // stun/sleep are consumed in the act loop, not here.
+    })
+    if (this.shieldRounds > 0 && --this.shieldRounds === 0) this.shieldHp = 0
+    if (this.hotRounds > 0) this.hotRounds--
+    for (const k of ['attack', 'defense', 'speed'] as const) {
+      if (this.buffs[k].rounds > 0 && --this.buffs[k].rounds === 0) this.buffs[k].pct = 0
+    }
+
+    return !this.mobs.some(m => m.alive)
+  }
+
   private doEnemyTurn() {
     this.phase = 'enemy_turn'
-    // Mobs act in descending speed order — the quickest strike first.
-    const alive = this.mobs.filter(m => m.alive).sort((a, b) => b.speed - a.speed)
+
+    // Start-of-round upkeep (DoT ticks may finish off enemies → victory).
+    if (this.runRoundUpkeep()) {
+      this.time.delayedCall(600, () => this.doVictory())
+      return
+    }
+    if (this.playerHp <= 0) { this.doDefeat(); return }
+
+    // Mobs act fastest-first, using speed reduced by any active slow.
+    const alive = this.mobs.filter(m => m.alive)
+      .sort((a, b) => (b.speed - b.slowAmount) - (a.speed - a.slowAmount))
     if (alive.length === 0) { this.doVictory(); return }
 
     let delay = 0
-
     alive.forEach(mob => {
       this.time.delayedCall(delay, () => {
-        // Damage = mob's stat-derived attack ± 15%, reduced by player defense.
+        if (!mob.alive) return
+
+        // Sleeping enemies do nothing until hit; each round a chance to wake.
+        if (mob.asleepRounds > 0) {
+          const wake = this.landChance(0.35, mob.level, -0.05)   // higher-level foes wake sooner
+          if (Math.random() < wake) {
+            mob.asleepRounds = 0
+            this.setLog(`${mob.name} wakes up!`, '#bbbbff')
+          } else {
+            this.setLog(`${mob.name} is asleep and cannot act.`, '#8899cc')
+            return
+          }
+        }
+        // Stunned enemies skip this attack.
+        if (mob.stunRounds > 0) {
+          mob.stunRounds--
+          this.setLog(`${mob.name} is stunned and cannot attack!`, '#ffee66')
+          return
+        }
+
+        // Damage = mob attack ± 15%, reduced by buffed player defense, then shield.
         const raw = Phaser.Math.Between(
           Math.floor(mob.attack * 0.85),
           Math.ceil(mob.attack * 1.15),
         )
-        const dmg = Math.max(1, raw - this.playerDefense)
+        const effDef = Math.round(this.playerDefense * (1 + this.buffs.defense.pct / 100))
+        let dmg = Math.max(1, raw - effDef)
+
+        // Shield absorbs first.
+        if (this.shieldHp > 0) {
+          const absorbed = Math.min(this.shieldHp, dmg)
+          this.shieldHp -= absorbed
+          dmg -= absorbed
+          if (absorbed > 0) this.spawnDmgLabel(GAME_WIDTH / 2, PLAYER_PANEL_Y - 20, `shield -${absorbed}`, 0x66ccff)
+        }
+
         this.playerHp = Math.max(0, this.playerHp - dmg)
         this.refreshPlayerPanel()
         this.cameras.main.shake(80, 0.003)
@@ -775,7 +1157,7 @@ export class BattleScene extends Phaser.Scene {
       delay += 600
     })
 
-    // After all mobs attacked: regen mana, then back to player turn.
+    // After all mobs attacked: regen mana, advance the round, back to player.
     this.time.delayedCall(delay + 400, () => {
       if (this.phase !== 'enemy_turn') return   // already ended
       if (this.playerHp <= 0) return            // defeat already triggered
@@ -783,6 +1165,7 @@ export class BattleScene extends Phaser.Scene {
         this.playerMana = Math.min(this.playerMaxMana, this.playerMana + this.manaRegen)
         this.refreshPlayerPanel()
       }
+      this.roundNo++
       this.resumePlayerTurn()
     })
   }
@@ -792,7 +1175,7 @@ export class BattleScene extends Phaser.Scene {
    *  an enemy; otherwise prompt for a skill. */
   private resumePlayerTurn() {
     const s = this.selectedSkill
-    if (s && !s.isHeal && s.mpCost <= this.playerMana && this.mobs.some(m => m.alive)) {
+    if (s && s.targeting === 'single' && s.mpCost <= this.playerMana && this.mobs.some(m => m.alive)) {
       this.phase = 'target_select'
       this.setLog(`${s.icon}  ${s.name} ready — click an enemy!`, '#ffdd88')
       this.highlightAliveMobs(true)

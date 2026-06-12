@@ -26,6 +26,15 @@ interface BiomeGate {
   color: number
 }
 
+// Multiply-tint applied to the overworld grass tiles + backstop. It cuts the
+// blue/grey cast of the raw CraftPix tiles (grey = equal RGB) and keeps green
+// near full, so the lawn reads as a fresher, more vibrant green WITHOUT getting
+// brighter/harsher (a multiply tint can only darken). Tuned to stay calm, not
+// neon. The matching backstop fill (GRASS_BACKSTOP) is this tint applied to the
+// old fill so any gaps between tiles match.
+const GRASS_TINT = 0xc6f59a
+const GRASS_BACKSTOP = 0x79b239
+
 const BIOME_COLORS: Record<string, number> = {
   'Desert':              0xe8b84b,
   'Pine Forest':         0x1a5c2a,
@@ -129,7 +138,7 @@ export class WorldScene extends Phaser.Scene {
     // ── Ground (CraftPix grassland) ──────────────────────────────────────────
     // Solid backstop fill in the CraftPix grass tone, then the real tiles.
     const groundFill = this.add.graphics()
-    groundFill.fillStyle(0x9cba5f, 1)
+    groundFill.fillStyle(GRASS_BACKSTOP, 1)
     groundFill.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
     groundFill.setDepth(0)
 
@@ -143,10 +152,13 @@ export class WorldScene extends Phaser.Scene {
       const tileW = 64
       const rand = this.rng(99)
       const scale = { scaleX: 4, scaleY: 4 }
+      // Tinted variant for the grass body (see GRASS_TINT) — passed to stamp so
+      // the lawn reads as a more vibrant green.
+      const grassStamp = { ...scale, tint: GRASS_TINT }
       for (let ty = 0; ty < WORLD_HEIGHT; ty += tileW) {
         for (let tx = 0; tx < WORLD_WIDTH; tx += tileW) {
           const frame = rand() < 0.9 ? CP_GRASS : CP_GRASS2
-          groundRT.stamp('cp_ground', frame, tx + tileW / 2, ty + tileW / 2, scale)
+          groundRT.stamp('cp_ground', frame, tx + tileW / 2, ty + tileW / 2, grassStamp)
         }
       }
 
@@ -166,7 +178,7 @@ export class WorldScene extends Phaser.Scene {
               const frame = d.frames[Math.floor(rand() * d.frames.length)]
               const jx = tx + 16 + rand() * (tileW - 32)
               const jy = ty + 16 + rand() * (tileW - 32)
-              groundRT.stamp('cp_details', frame, jx, jy, scale)
+              groundRT.stamp('cp_details', frame, jx, jy, grassStamp)
               break
             }
           }
@@ -653,18 +665,73 @@ export class WorldScene extends Phaser.Scene {
   private decorateBuilding(e: BuildingEntry, i: number) {
     const dx = e.doorX
     const dy = e.doorY
-    const lampLeft = i % 2 === 0
-    // Lamp on one side of the door…
-    this.add.image(dx + (lampLeft ? -82 : 82), dy - 8, 'lamppost').setDepth(3).setScale(2.4)
-    // …a bench on the other.
-    this.add.image(dx + (lampLeft ? 78 : -78), dy + 6, 'bench')
-      .setDepth(3).setScale(2.3).setFlipX(!lampLeft)
-    // A pair of barrels tucked against the wall.
-    this.add.image(dx - 106, dy + 30, 'barrel').setDepth(3).setScale(2.2)
-    this.add.image(dx - 88,  dy + 44, 'barrel').setDepth(3).setScale(2.2)
-    // Greenery on the far side.
+    // Shared ambiance — a lamp by the door and a little greenery — so every
+    // frontage feels lived-in. The door-return spot itself stays clear.
+    this.add.image(dx + 84, dy - 8, 'lamppost').setDepth(3).setScale(2.4)
     this.add.image(dx + 104, dy + 36, `cp_bush${(i % 6) + 1}`).setDepth(3)
     this.add.image(dx + 66,  dy + 50, `cp_flower${(i % 6) + 1}`).setDepth(2)
+
+    // A FUNCTION EMBLEM on the left of the door — a small drawn vignette that
+    // signals what the building is for (echoing its interior workstation).
+    this.drawFunctionEmblem(e.label, dx - 104, dy + 18)
+  }
+
+  /**
+   * Place a real prop sprite beside a building's door that signals its function
+   * (a blacksmith forge for the Forge, a weapon rack for the Armory, a cooking
+   * pot for the Alchemy Lab, a market stall, a training dummy, a supply wagon).
+   * Sprites are CraftPix `autumn_vector` props loaded in BootScene. Each is given
+   * a target on-screen width so the differently-sized source art reads at a
+   * consistent scale; their origin sits near the base so they plant on the
+   * ground. Buildings with no emblem (the Tavern — it has its own terrace) keep
+   * the old generic barrels.
+   */
+  private drawFunctionEmblem(label: string, x: number, y: number) {
+    // The Forge has no standalone anvil/forge PROP in the art library (only a
+    // whole blacksmith BUILDING, which reads as a second house), so it uses a
+    // drawn anvil-and-brazier object instead of a sprite.
+    if (label === 'The Forge') { this.emblemForge(x, y); return }
+
+    // The rest are real CraftPix props. [textureKey, target on-screen width].
+    const EMBLEMS: Record<string, [string, number]> = {
+      'The Armory':      ['emblem_armory',    84],
+      'Alchemy Lab':     ['emblem_alchemy',   92],
+      'Market':          ['emblem_market',    98],
+      'Combat Training': ['emblem_training',  72],
+      'Combat Strategy': ['emblem_strategy',  98],
+    }
+    const emblem = EMBLEMS[label]
+    if (!emblem) {
+      this.add.image(x, y + 12, 'barrel').setDepth(3).setScale(2.2)
+      this.add.image(x + 18, y + 26, 'barrel').setDepth(3).setScale(2.2)
+      return
+    }
+    const [key, targetW] = emblem
+    if (!this.textures.exists(key)) return   // art missing — skip rather than crash
+    const img = this.add.image(x, y, key).setDepth(3).setOrigin(0.5, 0.82)
+    img.setScale(targetW / img.width)        // uniform scale preserves aspect ratio
+  }
+
+  /** Forge: a drawn anvil beside a glowing coal brazier (no anvil prop exists). */
+  private emblemForge(x: number, y: number) {
+    const g = this.add.graphics().setDepth(3)
+    g.fillStyle(0x000000, 0.18); g.fillEllipse(x, y + 14, 96, 32)   // ground shadow
+    // Anvil
+    g.fillStyle(0x2b2b30, 1)
+    g.fillRect(x - 22, y + 4, 44, 9)         // base
+    g.fillRect(x - 8,  y - 6, 16, 12)        // waist
+    g.fillStyle(0x3a3a42, 1)
+    g.fillRect(x - 27, y - 16, 54, 11)       // face
+    g.fillStyle(0x4a4a54, 1)
+    g.fillTriangle(x + 24, y - 16, x + 38, y - 11, x + 24, y - 5) // horn
+    // Coal brazier with a pulsing flame
+    const bx = x + 52
+    g.fillStyle(0x1b120c, 1); g.fillRect(bx - 14, y - 4, 28, 16)
+    g.fillStyle(0x2a1c12, 1); g.fillRect(bx - 16, y + 10, 32, 6)
+    const fire = this.add.ellipse(bx, y - 6, 22, 16, 0xff7a30, 0.92).setDepth(4)
+    this.tweens.add({ targets: fire, scaleX: 1.2, scaleY: 1.35, alpha: 0.6,
+      duration: 620, yoyo: true, repeat: -1, ease: 'Sine.inOut' })
+    this.add.text(bx, y - 6, '🔥', { fontSize: '18px' }).setOrigin(0.5).setDepth(5)
   }
 
   private addTavernTerrace() {
@@ -851,7 +918,7 @@ export class WorldScene extends Phaser.Scene {
     container.add(bg)
 
     // Title
-    const title = this.add.text(0, -panelH / 2 + 32, `⚔ Enter ${biomeName}`, {
+    const title = this.add.text(0, -panelH / 2 + 32, `⚔ Enter the ${biomeName} Campaign`, {
       fontSize: '20px',
       fontFamily: 'Georgia, serif',
       color: '#ffd700',
@@ -1065,7 +1132,7 @@ export class WorldScene extends Phaser.Scene {
         this.closeBiomeMenu()
       }
     } else if (this.nearBiomeGate && !this.popupOpen) {
-      this.promptText.setText(`Press E to enter ${this.nearBiomeGate.name}`).setVisible(true)
+      this.promptText.setText(`Press E to enter the ${this.nearBiomeGate.name} Campaign`).setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         this.openBiomeMenu(this.nearBiomeGate.name)
       }
@@ -1074,8 +1141,11 @@ export class WorldScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         if (nearBuilding.label === 'Combat Strategy') {
           this.player.setVelocity(0, 0)
-          this.scene.pause('WorldScene')
-          this.scene.launch('StrategyScene')
+          this.scene.stop('UIScene')
+          this.scene.start('CraftBuildingScene', {
+            building: 'combat_strategy',
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Combat Training') {

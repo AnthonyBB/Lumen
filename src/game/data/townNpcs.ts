@@ -103,7 +103,7 @@ export const TOWN_NPCS: NpcDef[] = [
     lines: [
       'Ready for battle? Spend your Skill Shards 🔷 here at Combat Training to learn attacks, spells and heals. Earn shards by clearing campaigns out in the biomes!',
       'In a fight, whoever has the higher Speed strikes first — so watch your stats! Equip better gear to boost them.',
-      'Defeat your foes and you\'ll earn XP and silver, and sometimes they\'ll drop equipment for you to claim. Clear a whole biome for a bigger reward!',
+      'Defeat your foes and you\'ll earn XP and silver, and sometimes they\'ll drop equipment for you to claim. Clear a whole campaign for a bigger reward!',
     ],
   },
   {

@@ -14,6 +14,9 @@ export interface IPlayerProgress extends Document {
   /** Current grade per subject (1..12, or 13 = mastered). Subjects progress
    *  independently. Defaults to grade 1 for every subject. */
   subjectGrades: Record<Subject, number>
+  /** Adventure rank id — gates the curriculum grade band served to this player.
+   *  See server/game/data/adventureRanks.ts. */
+  adventureRank: string
   /** topicId → number of quiz passes (0..3). Topic ids are stable
    *  (`<subject>_g<grade>_t<n>`), so counts survive restarts. */
   topicPasses: Record<string, number>
@@ -60,6 +63,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     subjectGrades: {
       type: Schema.Types.Mixed,
       default: () => ({ math: 1, science: 1, history: 1, language: 1 }),
+    },
+    adventureRank: {
+      type: String,
+      default: 'grade_1_3',
     },
     topicPasses: {
       type: Schema.Types.Mixed,

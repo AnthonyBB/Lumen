@@ -27,6 +27,9 @@ export interface Player {
   /** Current grade per subject (persisted), 1..12, or 13 (MASTERED_GRADE) when
    *  all 12 grades of a subject are complete. Subjects progress independently. */
   subjectGrades: Record<Subject, number>;
+  /** Adventure rank id (persisted) — gates which curriculum grade band the
+   *  player is served questions from. See game/data/adventureRanks.ts. */
+  adventureRank: string;
   /** topicId → number of quiz passes (persisted), 0..3. A topic is COMPLETE at 3. */
   topicPasses: Record<string, number>;
   /** Skill ids purchased with Skill Shards (persisted). */
@@ -377,6 +380,15 @@ export interface InventoryItem {
   baseDamage?: { min: number; max: number };
   /** Armor: level-scaled base defense (adds to the Defense stat). */
   baseDefense?: number;
+  /** Adventure rank this gear/potion was crafted at (e.g. 'grade_4_6'). Its
+   *  power scales by M(min(craftRank, currentRank)). Missing → treated as the
+   *  lowest rank. See game/data/adventureRanks.ts. */
+  craftRank?: string;
+  /** Crafted gear: the recipe id and material tier it was forged from. Used by
+   *  the rank-upgrade flow to price the upgrade (recipe base cost × rank delta,
+   *  spent in the item's material tier). Absent on starter/legacy gear. */
+  recipeId?: string;
+  craftTier?: number;
   /** Absolute position (0-based) when stored in a chest, so the chest can hold
    *  items at specific tab/slot positions rather than packed from the start.
    *  Unset for bag items. */

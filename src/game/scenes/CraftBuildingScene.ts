@@ -1,14 +1,13 @@
 import Phaser from 'phaser'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
-import { addLeaveButton } from '../ui/leaveButton'
 import type { CraftBuilding } from '../data/recipes'
 
 type CursorKeys = Phaser.Types.Input.Keyboard.CursorKeys
 type WASD = Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>
 
 /** Buildings that use this walk-in interior (craft buildings + service shops). */
-export type InteriorId = CraftBuilding | 'combat_training'
+export type InteriorId = CraftBuilding | 'combat_training' | 'combat_strategy'
 
 /** Which workstation centrepiece the room draws. */
 type Station = 'anvil' | 'armorBench' | 'cauldron' | 'dummy'
@@ -63,10 +62,18 @@ const DEFS: Record<InteriorId, BuildingDef> = {
     wallProps: ['⚔️', '🛡️', '🏹', '🎯'],
     station: 'dummy', open: { scene: 'SkillShopScene' },
   },
+  combat_strategy: {
+    title: '📜  Combat Strategy',
+    floor: 0x26242e, floorAlt: 0x2c2a36, wall: 0x16151c, wallTrim: 0x322d44,
+    accent: 0xb39ddb, npcKey: 'npc_citizen2', npcName: 'Tactician Vael',
+    wallProps: ['📜', '🗺️', '🎯', '⚔️'],
+    station: 'dummy', open: { scene: 'StrategyScene' },
+  },
 }
 
 const WALL_BAND = 96 // top wall height
 const BORDER = 28    // side/bottom stone border
+const DOOR_W = 120   // door opening width (bottom-centre) — walk here + E to leave
 
 /**
  * A walk-in service building. The player enters a themed interior and walks up
@@ -88,7 +95,9 @@ export class CraftBuildingScene extends Phaser.Scene {
   private cursors!: CursorKeys
   private wasd!: WASD
   private eKey!: Phaser.Input.Keyboard.Key
-  private escKey!: Phaser.Input.Keyboard.Key
+  /** Guards against the same E press that entered the house immediately
+   *  triggering the door-exit on the first frame. Set once E is released. */
+  private eReleased = false
 
   private npc!: Phaser.GameObjects.Sprite
   private npcRing!: Phaser.GameObjects.Graphics
@@ -131,9 +140,7 @@ export class CraftBuildingScene extends Phaser.Scene {
       D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
     }
     this.eKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E)
-    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
-
-    this.buildExitButton()
+    this.eReleased = false
 
     // The interaction prompt (hidden until near the smith).
     this.prompt = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - BORDER - 10, '', {
@@ -169,9 +176,8 @@ export class CraftBuildingScene extends Phaser.Scene {
     walls.fillRect(0, WALL_BAND - 8, GAME_WIDTH, 8) // trim under the top wall
 
     // Door opening at the bottom-centre.
-    const doorW = 120
     walls.fillStyle(0x000000, 1)
-    walls.fillRect(GAME_WIDTH / 2 - doorW / 2, GAME_HEIGHT - BORDER, doorW, BORDER)
+    walls.fillRect(GAME_WIDTH / 2 - DOOR_W / 2, GAME_HEIGHT - BORDER, DOOR_W, BORDER)
     this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - BORDER - 2, '⟵ door', {
       fontSize: '12px', color: '#9e9e9e',
     }).setOrigin(0.5, 1).setDepth(3)
@@ -296,14 +302,16 @@ export class CraftBuildingScene extends Phaser.Scene {
     this.physics.add.collider(this.player, z)
   }
 
-  private buildExitButton() {
-    addLeaveButton(this, () => this.leave())
-  }
-
   // ── Interaction ─────────────────────────────────────────────────────────────
 
   private nearSmith(): boolean {
     return Phaser.Math.Distance.Between(this.player.x, this.player.y, this.npc.x, this.npc.y) < 120
+  }
+
+  /** True when the player is standing on the door opening (bottom-centre). */
+  private nearDoor(): boolean {
+    return this.player.y > GAME_HEIGHT - BORDER - 80 &&
+      Math.abs(this.player.x - GAME_WIDTH / 2) < DOOR_W / 2 + 24
   }
 
   private openShop() {
@@ -324,16 +332,25 @@ export class CraftBuildingScene extends Phaser.Scene {
   update() {
     this.player.update(this.cursors, this.wasd)
 
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) { this.leave(); return }
+    // The E that entered the house is often still held on the first frames —
+    // wait for a release before E can talk/leave, so we don't instantly exit.
+    if (this.eKey.isUp) this.eReleased = true
+    const ePressed = this.eReleased && Phaser.Input.Keyboard.JustDown(this.eKey)
 
-    const near = this.nearSmith()
-    this.prompt.setVisible(near)
+    const nearSmith = this.nearSmith()
+    const nearDoor = !nearSmith && this.nearDoor()
     this.npcRing.clear()
-    if (near) {
-      this.prompt.setText(`Press E to talk to ${this.theme.npcName}`)
+
+    if (nearSmith) {
+      this.prompt.setText(`Press E to talk to ${this.theme.npcName}`).setVisible(true)
       this.npcRing.lineStyle(3, this.theme.accent, 0.9)
       this.npcRing.strokeEllipse(this.npc.x, this.npc.y + 24, 70, 28)
-      if (Phaser.Input.Keyboard.JustDown(this.eKey)) this.openShop()
+      if (ePressed) this.openShop()
+    } else if (nearDoor) {
+      this.prompt.setText('Press E to leave').setVisible(true)
+      if (ePressed) { this.leave(); return }
+    } else {
+      this.prompt.setVisible(false)
     }
   }
 }

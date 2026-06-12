@@ -49,6 +49,14 @@ import {
   type MarketListing,
 } from '../game/MarketManager.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
+import { User } from '../db/models/User.js';
+import {
+  ageFromDateOfBirth,
+  defaultRankForAge,
+  ADVENTURE_RANKS,
+  RANK_MAP,
+  rankMultiplier,
+} from '../game/data/adventureRanks.js';
 import { randomUUID } from 'crypto';
 import { GRADE_TOPICS, TOPIC_MAP } from '../game/data/curriculum.js';
 import {
@@ -210,6 +218,33 @@ export function registerHandlers(
     pushCurrency();
   })
 
+  // ── Adventure rank — the grade band the player is served questions from ────
+  //
+  // The player may freely choose any rank (it is NOT age-gated — only the
+  // initial default is derived from age). Server-authoritative: the chosen rank
+  // gates which curriculum grades the player's quizzes draw from.
+  const pushAdventureRank = (): void => {
+    socket.emit('adventureRank:data', {
+      rankId: playerManager.getAdventureRank(socket.id),
+      ranks: ADVENTURE_RANKS.map((r) => ({
+        id: r.id, name: r.name, minGrade: r.minGrade, maxGrade: r.maxGrade,
+      })),
+    });
+  };
+  socket.on('adventureRank:get', () => {
+    if (!requireJoinedPlayer('You must join before viewing your rank.')) return;
+    pushAdventureRank();
+  });
+  socket.on('adventureRank:set', (payload: { rankId?: unknown }) => {
+    if (typeof payload?.rankId !== 'string' || !RANK_MAP[payload.rankId]) {
+      socket.emit('error', { message: 'Unknown adventure rank.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join before setting your rank.')) return;
+    playerManager.setAdventureRank(socket.id, payload.rankId);
+    pushAdventureRank();
+  });
+
   // ── stats:get — Character / Equipment screens request the stat breakdown ──
   //
   // Read-only.  Recomputes attributes + derived combat stats from the player's
@@ -294,6 +329,25 @@ export function registerHandlers(
 
     // Restore persisted XP / level / shard-progress / shop unlocks
     playerManager.applyProgress(socket.id, savedProgress);
+
+    // Adventure Rank: if the player has never had a rank persisted, derive a
+    // sensible DEFAULT from their account age (server-authoritative) and persist
+    // it. Existing ranks are left untouched.
+    if (!savedProgress.rankPersisted) {
+      try {
+        const account = await User.findOne({ username }).lean();
+        if (account?.dateOfBirth) {
+          const rankId = defaultRankForAge(ageFromDateOfBirth(new Date(account.dateOfBirth)));
+          playerManager.setAdventureRank(socket.id, rankId);
+        } else {
+          // No DOB on file — keep the default rank but persist it so this branch
+          // does not re-run every join.
+          playerManager.setAdventureRank(socket.id, playerManager.getAdventureRank(socket.id));
+        }
+      } catch (err) {
+        console.error('[join] adventure-rank default error:', err);
+      }
+    }
 
     // Join the Socket.io room for this zone
     socket.join(player.zone);
@@ -423,8 +477,11 @@ export function registerHandlers(
       const dropLevel = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
       const campaignComplete = payload?.campaignComplete === true;
       // Campaigns reward MATERIALS only (turned into gear at the crafting
-      // buildings) — never finished items. Server-authoritative.
-      const { drops, richVein } = rollMaterials(dropLevel, diff, campaignComplete);
+      // buildings) — never finished items. Server-authoritative. The haul scales
+      // with the player's current rank (M(currentRank)) to match the steeper
+      // craft costs at that rank (see docs/ADVENTURE_RANKS_DESIGN.md §1).
+      const rankMult = rankMultiplier(playerManager.getAdventureRank(socket.id));
+      const { drops, richVein } = rollMaterials(dropLevel, diff, campaignComplete, rankMult);
       if (drops.length) {
         playerManager.grantMaterials(socket.id, drops);
         playerManager.persistProgress(socket.id);
@@ -462,8 +519,11 @@ export function registerHandlers(
           combatAward = 1;
         } else {
           const di = Math.max(0, (DIFFICULTIES as string[]).indexOf(diff)); // 0..4
-          if (Math.random() < 0.12 + di * 0.03) skillAward = 1;  // ~12%–24%
-          if (Math.random() < 0.04 + di * 0.015) combatAward = 1; // ~4%–10%
+          // Shard drops scale with the player's current rank (rewards track the
+          // rank you play — see docs/ADVENTURE_RANKS_DESIGN.md §1/§4e). The
+          // first-ever onboarding grant above stays fixed.
+          if (Math.random() < 0.12 + di * 0.03) skillAward = Math.round(rankMult);  // ~12%–24%
+          if (Math.random() < 0.04 + di * 0.015) combatAward = Math.round(rankMult); // ~4%–10%
         }
         if (skillAward > 0) playerManager.addShards(socket.id, 'skill', skillAward);
         if (combatAward > 0) playerManager.addShards(socket.id, 'combat', combatAward);
@@ -508,6 +568,16 @@ export function registerHandlers(
     if (topic.grade !== currentGrade) {
       socket.emit('error', {
         message: `That topic is grade ${topic.grade}, but your current ${topic.subject} grade is ${currentGrade}.`,
+      });
+      return;
+    }
+
+    // Adventure Rank gate (server-authoritative) — the topic's grade must fall
+    // within the player's rank grade band. The client cannot widen its band.
+    const band = playerManager.getRankGradeBand(socket.id);
+    if (topic.grade < band.min || topic.grade > band.max) {
+      socket.emit('error', {
+        message: `That topic is grade ${topic.grade}, outside your adventure rank's grade band (${band.min}-${band.max}).`,
       });
       return;
     }
@@ -722,7 +792,33 @@ export function registerHandlers(
 
     socket.emit('craft:session_started', {
       sessionId: result.session.sessionId,
-      recipeId: result.session.recipe.id,
+      recipeId: result.session.recipe?.id,
+      firstQuestion: result.firstQuestion,
+    });
+  });
+
+  // ── item:upgrade ───────────────────────────────────────────────────────────
+  //
+  // Begin a RANK upgrade for an owned gear item: a target-rank quiz that, on a
+  // pass, raises the item's craftRank by one rank. Reuses the craft quiz plumbing
+  // (the client answers via `craft:answer`). Server-authoritative — ownership,
+  // material cost, rank ceiling, and the result are all validated here; the
+  // client never sets craftRank.
+  socket.on('item:upgrade', (payload: { itemId?: unknown }) => {
+    if (typeof payload?.itemId !== 'string') {
+      socket.emit('error', { message: 'Invalid upgrade payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before upgrading.');
+    if (!player) return;
+
+    const result = craftSessionManager.startUpgrade(socket.id, payload.itemId);
+    if ('error' in result) {
+      socket.emit('error', { message: result.error });
+      return;
+    }
+    socket.emit('craft:session_started', {
+      sessionId: result.session.sessionId,
       firstQuestion: result.firstQuestion,
     });
   });
@@ -751,10 +847,13 @@ export function registerHandlers(
 
     socket.emit('craft:answer_result', result);
 
-    // A finished craft mutated the bag + material stash — refresh the client.
+    // A finished craft/upgrade mutated the bag + material stash — refresh the
+    // client. An upgrade can change an equipped item's scaled defense, so push
+    // stats too.
     if (result.sessionComplete) {
       pushInventoryUpdate();
       pushMaterials();
+      pushStats();
     }
   });
 
@@ -1170,6 +1269,41 @@ export function registerHandlers(
     const updatedInventory = inventoryManager.getInventory(socket.id)!;
     const updatedChest = chestManager.getChest(payload.chestId)!;
     socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
+  });
+
+  // ── item:delete ──────────────────────────────────────────────────────────
+  //
+  // Permanently discard an item. Server-authoritative: the item is removed from
+  // the player's OWN bag (no chestId) or their OWN chest (chestId given), then
+  // the refreshed state is pushed back. The whole stack is removed.
+  socket.on('item:delete', (payload: { itemId?: unknown; chestId?: unknown }) => {
+    if (typeof payload?.itemId !== 'string') {
+      socket.emit('error', { message: 'Invalid delete payload.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join before deleting items.')) return;
+
+    if (typeof payload.chestId === 'string') {
+      const chest = chestManager.getChest(payload.chestId);
+      if (!chest || chest.ownerId !== socket.id) {
+        socket.emit('error', { message: 'Chest not found or not yours.' });
+        return;
+      }
+      if (!chestManager.deleteFromChest(payload.chestId, socket.id, payload.itemId)) {
+        socket.emit('error', { message: 'That item is not in the chest.' });
+        return;
+      }
+      socket.emit('chest:updated', {
+        chest: chestManager.getChest(payload.chestId)!,
+        inventory: inventoryManager.getInventory(socket.id)!,
+      });
+    } else {
+      if (!inventoryManager.deleteItem(socket.id, payload.itemId)) {
+        socket.emit('error', { message: 'That item is not in your bag.' });
+        return;
+      }
+      pushInventoryUpdate();
+    }
   });
 
   // ── Market ─────────────────────────────────────────────────────────────────

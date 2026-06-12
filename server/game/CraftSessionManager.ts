@@ -18,9 +18,11 @@ import type { QuestionEngine } from './QuestionEngine.js';
 import type { PlayerManager } from './PlayerManager.js';
 import type { InventoryManager } from './InventoryManager.js';
 import type { Question, ClientQuestion, InventoryItem } from '../types/index.js';
-import { TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
 import { RECIPE_MAP, isAlchemy, type Recipe } from './data/recipes.js';
 import { METAL_BY_TIER, REAGENT_BY_TIER, MATERIALS, MAX_TIER } from './data/materials.js';
+import {
+  rankMultiplier, rankIndex, normaliseRankId, gradeBandForRank, ADVENTURE_RANKS, RANK_MAP,
+} from './data/adventureRanks.js';
 import {
   rollCraftedItem,
   RARITY_ORDER,
@@ -45,10 +47,26 @@ interface MaterialCost {
   qty: number;
 }
 
+/** A rank-UPGRADE in progress (raises an item's craftRank by one rank on a
+ *  passing quiz). Present only on upgrade sessions; absent on normal crafts. */
+interface UpgradeInfo {
+  itemId: string;
+  fromRank: string;
+  targetRank: string;
+  /** Material cost (the rank delta) — re-checked + consumed at completion. */
+  cost: MaterialCost[];
+  /** For the result screen. */
+  itemName: string;
+  itemIcon: string;
+  itemRarity: Rarity;
+}
+
 interface CraftSession {
   sessionId: string;
   playerId: string;
-  recipe: Recipe;
+  /** The recipe being crafted. Absent on upgrade sessions (which mutate an
+   *  existing item rather than forging a new one). */
+  recipe?: Recipe;
   tier: number;
   /** Catalyst material id chosen for this craft, or null for a common item. */
   catalystId: string | null;
@@ -57,6 +75,8 @@ interface CraftSession {
   currentIndex: number;
   correctCount: number;
   isComplete: boolean;
+  /** Set when this is a rank-upgrade session instead of a craft. */
+  upgrade?: UpgradeInfo;
 }
 
 /** What a finished craft produced (sent to the client on completion). */
@@ -119,9 +139,19 @@ export class CraftSessionManager {
     return isAlchemy(recipe.building) ? REAGENT_BY_TIER[tier] : METAL_BY_TIER[tier];
   }
 
+  /**
+   * Base-material quantity a recipe costs at the player's current rank. Crafting
+   * cost scales with M(currentRank) so a higher-rank player spends more per craft
+   * — aligning material sinks with the richer rewards they earn (anti-farming;
+   * see docs/ADVENTURE_RANKS_DESIGN.md §1). The catalyst is always a single unit.
+   */
+  private baseQtyFor(recipe: Recipe, craftRank: string): number {
+    return Math.ceil(recipe.materialCost * rankMultiplier(craftRank));
+  }
+
   /** Base material (+ optional catalyst) a recipe/tier/catalyst combination costs. */
-  private costFor(recipe: Recipe, tier: number, catalystId: string | null): MaterialCost[] {
-    const costs: MaterialCost[] = [{ materialId: this.baseMaterial(recipe, tier), qty: recipe.materialCost }];
+  private costFor(recipe: Recipe, tier: number, catalystId: string | null, craftRank: string): MaterialCost[] {
+    const costs: MaterialCost[] = [{ materialId: this.baseMaterial(recipe, tier), qty: this.baseQtyFor(recipe, craftRank) }];
     if (catalystId) costs.push({ materialId: catalystId, qty: 1 });
     return costs;
   }
@@ -150,16 +180,17 @@ export class CraftSessionManager {
     const player = this.playerManager.getPlayer(playerId);
     if (!player) return { error: 'You must join before crafting.' };
 
-    const costs = this.costFor(recipe, tier, catalystId);
+    const costs = this.costFor(recipe, tier, catalystId, this.playerManager.getAdventureRank(playerId));
     if (!this.playerManager.hasMaterials(playerId, costs)) {
       return { error: 'You do not have the materials for this craft.' };
     }
 
-    // Quiz drawn from the player's CURRENT grade in the recipe's subject so the
-    // craft difficulty always tracks the learner (adaptive). Fall back down the
-    // grades if the current grade's topics have no authored questions yet.
-    const grade = player.subjectGrades[recipe.subject];
-    const questions = this.pickQuestions(recipe, grade);
+    // Quiz drawn from the player's ADVENTURE RANK grade band in the recipe's
+    // subject (server-authoritative — the client cannot widen its band). The
+    // band spans several grades, so questions vary across the whole band rather
+    // than being pinned to the (currently frozen) per-subject grade.
+    const band = this.playerManager.getRankGradeBand(playerId);
+    const questions = this.pickQuestions(recipe.subject, band);
     if (questions.length === 0) {
       return { error: 'No crafting trials are available right now. Try another weapon.' };
     }
@@ -187,18 +218,27 @@ export class CraftSessionManager {
     };
   }
 
-  /** Gather up to CRAFT_QUESTION_COUNT questions for a subject at/under a grade. */
-  private pickQuestions(recipe: Recipe, grade: number): Question[] {
-    for (let g = grade; g >= 1; g--) {
-      const topics = TOPICS_BY_SUBJECT_GRADE[recipe.subject]?.[g] ?? [];
-      // Shuffle the grade's topics so repeated crafts vary their subject matter.
-      const order = [...topics].sort(() => Math.random() - 0.5);
-      for (const topic of order) {
-        const qs = this.questionEngine.getQuizQuestions(topic.id, CRAFT_QUESTION_COUNT);
-        if (qs.length >= CRAFT_QUESTION_COUNT) return qs;
-      }
+  /**
+   * Gather up to CRAFT_QUESTION_COUNT questions for a subject drawn from the
+   * player's adventure-rank grade band. Falls back to a NARROWER pool only as a
+   * graceful degradation when the band itself has too few authored questions:
+   *  1. the full band (preferred),
+   *  2. the band's top grade alone,
+   *  3. any single in-band grade that has questions.
+   * A craft still serves a (possibly shorter) quiz rather than failing outright.
+   */
+  private pickQuestions(subject: Recipe['subject'], band: { min: number; max: number }): Question[] {
+    // Preferred: pooled across the whole rank band.
+    const pooled = this.questionEngine.getQuizQuestionsForBand(subject, band.min, band.max, CRAFT_QUESTION_COUNT);
+    if (pooled.length >= CRAFT_QUESTION_COUNT) return pooled;
+
+    // Degrade gracefully: try in-band grades top-down for any non-empty pool.
+    for (let g = band.max; g >= band.min; g--) {
+      const qs = this.questionEngine.getQuizQuestionsForBand(subject, g, g, CRAFT_QUESTION_COUNT);
+      if (qs.length > 0) return qs;
     }
-    return [];
+    // Last resort — whatever the band yielded (may be 0).
+    return pooled;
   }
 
   /**
@@ -235,7 +275,7 @@ export class CraftSessionManager {
     }
 
     session.isComplete = true;
-    const craft = this.finishCraft(session);
+    const craft = session.upgrade ? this.finishUpgrade(session) : this.finishCraft(session);
     this.sessions.delete(sessionId);
     this.byPlayer.delete(playerId);
 
@@ -248,14 +288,16 @@ export class CraftSessionManager {
     const score = session.correctCount;
     const passed = score >= CRAFT_PASS_THRESHOLD;
     const { recipe, tier, catalystId, playerId } = session;
+    if (!recipe) return { success: false, score, total, message: 'Nothing could be crafted.' };
 
     const accuracy = score / total;
     const catalystRarity = catalystId ? MATERIALS[catalystId]?.rarityGate ?? 'common' : 'common';
+    const craftRank = this.playerManager.getAdventureRank(playerId);
 
     if (!passed) {
       // Failed quiz: the base material is wasted, but the catalyst is preserved.
       this.playerManager.consumeMaterials(playerId, [
-        { materialId: this.baseMaterial(recipe, tier), qty: recipe.materialCost },
+        { materialId: this.baseMaterial(recipe, tier), qty: this.baseQtyFor(recipe, craftRank) },
       ]);
       this.playerManager.persistProgress(playerId);
       return {
@@ -267,18 +309,21 @@ export class CraftSessionManager {
     }
 
     // Passed: spend everything. Re-check first (state may have changed mid-quiz).
-    const costs = this.costFor(recipe, tier, catalystId);
+    const costs = this.costFor(recipe, tier, catalystId, craftRank);
     if (!this.playerManager.consumeMaterials(playerId, costs)) {
       return { success: false, score, total, message: 'Your materials ran out before the craft finished.' };
     }
 
     const item = recipe.potion
-      ? this.brewPotion(recipe, tier, catalystRarity, accuracy)
+      ? this.brewPotion(recipe, tier, catalystRarity, accuracy, craftRank)
       : this.forgeGear(recipe, tier, catalystRarity, accuracy);
     if (!item) {
       return { success: false, score, total, message: 'Nothing could be crafted from these materials.' };
     }
 
+    // Tag the item with the rank it was crafted at — its power scales by
+    // M(min(craftRank, currentRank)).
+    item.inv.craftRank = craftRank;
     this.inventoryManager.addItem(playerId, item.inv);
     this.playerManager.persistProgress(playerId);
 
@@ -337,6 +382,8 @@ export class CraftSessionManager {
         xpRequired: rolled.xpRequired,
         baseDamage: rolled.baseDamage,
         baseDefense: rolled.baseDefense,
+        recipeId: recipe.id,
+        craftTier: tier,
       },
       label: rolled.name,
       success: `You crafted a ${rolled.rarity} ${rolled.name}.`,
@@ -348,7 +395,7 @@ export class CraftSessionManager {
    * achieved rarity) multiplies it. Identical potions stack by itemType. Combat
    * auto-use is wired separately (folded into the Strategy loadout).
    */
-  private brewPotion(recipe: Recipe, tier: number, maxRarity: Rarity, accuracy: number):
+  private brewPotion(recipe: Recipe, tier: number, maxRarity: Rarity, accuracy: number, craftRank: string):
     { inv: InventoryItem; label: string; success: string } | null {
     const effect = recipe.potion!;
     // Accuracy can downgrade the achieved rarity below the catalyst's gate.
@@ -363,8 +410,10 @@ export class CraftSessionManager {
     return {
       inv: {
         id: randomUUID(),
-        // Stable type so identical potions stack in the bag.
-        itemType: `potion_${effect}_t${tier}_${rarity}`,
+        // Stable type so identical potions stack in the bag. Rank is part of the
+        // key so potions of different craft ranks (different scaled power) don't
+        // merge into one stack.
+        itemType: `potion_${effect}_t${tier}_${rarity}_${craftRank}`,
         name,
         description: POTION_DESC[effect](power),
         rarity,
@@ -376,6 +425,129 @@ export class CraftSessionManager {
       },
       label: name,
       success: `You brewed ${qty}× ${rarity} ${name} (restores ${power}).`,
+    };
+  }
+
+  // ── Rank upgrade (gear only) ───────────────────────────────────────────────
+
+  /**
+   * Material cost to raise `item` from `fromRank` to `targetRank`: the recipe's
+   * base cost times the rank-multiplier DELTA, spent in the item's material tier.
+   * Because the deltas telescope across single steps, crafting low + upgrading up
+   * costs the same total materials as crafting at the high rank directly.
+   * Gear is always forged from metal (only potions use reagent, and potions are
+   * not upgradeable).
+   */
+  private upgradeCostFor(item: InventoryItem, fromRank: string, targetRank: string): MaterialCost[] {
+    const recipe = item.recipeId ? RECIPE_MAP[item.recipeId] : undefined;
+    const baseCost = recipe?.materialCost ?? 3;
+    const tier = Math.max(1, Math.min(MAX_TIER, item.craftTier ?? 1));
+    const delta = rankMultiplier(targetRank) - rankMultiplier(fromRank);
+    const qty = Math.max(1, Math.ceil(baseCost * delta));
+    return [{ materialId: METAL_BY_TIER[tier], qty }];
+  }
+
+  /**
+   * Begin a rank upgrade for an owned gear item. Validates ownership, that the
+   * item is upgradeable gear (not a potion, not already at the top rank), and
+   * that the player can afford the delta materials (NOT consumed until the quiz
+   * passes). The quiz is drawn from the TARGET rank's grade band — you must
+   * answer rank-appropriate questions to earn the higher rank.
+   */
+  startUpgrade(
+    playerId: string,
+    itemId: string,
+  ): { session: CraftSession; firstQuestion: ClientQuestion } | { error: string } {
+    const player = this.playerManager.getPlayer(playerId);
+    if (!player) return { error: 'You must join before upgrading.' };
+
+    const item = this.inventoryManager.findItem(playerId, itemId);
+    if (!item) return { error: 'You do not own that item.' };
+    if (item.potion || !item.equipSlot) {
+      return { error: 'Only weapons and armor can be upgraded.' };
+    }
+
+    const fromRank = normaliseRankId(item.craftRank);
+    const fi = rankIndex(fromRank);
+    if (fi >= ADVENTURE_RANKS.length - 1) {
+      return { error: 'This item is already at the highest rank.' };
+    }
+    const targetRank = ADVENTURE_RANKS[fi + 1].id;
+
+    const cost = this.upgradeCostFor(item, fromRank, targetRank);
+    if (!this.playerManager.hasMaterials(playerId, cost)) {
+      const need = cost.map((c) => `${c.qty}× ${MATERIALS[c.materialId]?.name ?? c.materialId}`).join(', ');
+      return { error: `You need ${need} to upgrade this item.` };
+    }
+
+    // Quiz from the TARGET rank's band, in the item's original subject.
+    const recipe = item.recipeId ? RECIPE_MAP[item.recipeId] : undefined;
+    const subject = recipe?.subject ?? 'math';
+    const band = gradeBandForRank(targetRank);
+    const questions = this.pickQuestions(subject, band);
+    if (questions.length === 0) {
+      return { error: 'No upgrade trials are available right now. Try again later.' };
+    }
+
+    this.endPlayerSession(playerId);
+    const session: CraftSession = {
+      sessionId: randomUUID(),
+      playerId,
+      tier: item.craftTier ?? 1,
+      catalystId: null,
+      questions: questions.map(shuffleAnswers),
+      currentIndex: 0,
+      correctCount: 0,
+      isComplete: false,
+      upgrade: {
+        itemId, fromRank, targetRank, cost,
+        itemName: item.name, itemIcon: item.icon, itemRarity: item.rarity,
+      },
+    };
+    this.sessions.set(session.sessionId, session);
+    this.byPlayer.set(playerId, session.sessionId);
+
+    return {
+      session,
+      firstQuestion: this.questionEngine.getClientQuestion(session.questions[0]),
+    };
+  }
+
+  /** Consume the delta materials and apply (or fail) the rank upgrade. */
+  private finishUpgrade(session: CraftSession): CraftResult {
+    const total = session.questions.length;
+    const score = session.correctCount;
+    const passed = score >= CRAFT_PASS_THRESHOLD;
+    const { playerId, upgrade } = session;
+    if (!upgrade) return { success: false, score, total, message: 'Nothing to upgrade.' };
+
+    if (!passed) {
+      // Failed quiz: the materials are lost (matches a failed craft).
+      this.playerManager.consumeMaterials(playerId, upgrade.cost);
+      this.playerManager.persistProgress(playerId);
+      return {
+        success: false,
+        score,
+        total,
+        message: `The upgrade failed — you needed ${CRAFT_PASS_THRESHOLD}/${total}. The materials were lost. Keep studying!`,
+      };
+    }
+
+    // Passed: re-check materials (state may have changed mid-quiz), then apply.
+    if (!this.playerManager.consumeMaterials(playerId, upgrade.cost)) {
+      return { success: false, score, total, message: 'Your materials ran out before the upgrade finished.' };
+    }
+    if (!this.inventoryManager.setItemCraftRank(playerId, upgrade.itemId, upgrade.targetRank)) {
+      return { success: false, score, total, message: 'That item could not be found to upgrade.' };
+    }
+    this.playerManager.persistProgress(playerId);
+
+    return {
+      success: true,
+      score,
+      total,
+      item: { name: upgrade.itemName, icon: upgrade.itemIcon, rarity: upgrade.itemRarity },
+      message: `Upgrade complete! ${upgrade.itemName} is now rank ${RANK_MAP[upgrade.targetRank]?.name ?? upgrade.targetRank}.`,
     };
   }
 

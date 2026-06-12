@@ -19,6 +19,13 @@ import type {
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
+import {
+  type AdventureRankId,
+  DEFAULT_RANK_ID,
+  normaliseRankId,
+  gradeBandForRank,
+  effectiveRankMultiplier,
+} from './data/adventureRanks.js';
 import type { AttributeType } from './data/equipmentGen.js';
 
 /** Round to one decimal place (keeps percent-style stats readable). */
@@ -174,6 +181,7 @@ export class PlayerManager {
       position: { ...INITIAL_STATS.position },
       lastMessageAt: 0,
       subjectGrades: defaultSubjectGrades(),
+      adventureRank: DEFAULT_RANK_ID,
       topicPasses: {},
       unlockedSkills: [],
       unlockedStrategies: [],
@@ -270,6 +278,10 @@ export class PlayerManager {
     xp: number;
     level: number;
     subjectGrades: Record<Subject, number>;
+    adventureRank: AdventureRankId;
+    /** True when a rank was already persisted (so the join handler should NOT
+     *  overwrite it with an age-derived default). */
+    rankPersisted: boolean;
     topicPasses: Record<string, number>;
     unlockedSkills: string[];
     unlockedStrategies: string[];
@@ -288,6 +300,8 @@ export class PlayerManager {
           xp: doc.xp,
           level: doc.level,
           subjectGrades: normaliseSubjectGrades(doc.subjectGrades),
+          adventureRank: normaliseRankId(doc.adventureRank),
+          rankPersisted: typeof doc.adventureRank === 'string',
           topicPasses: doc.topicPasses ?? {},
           unlockedSkills: doc.unlockedSkills ?? [],
           unlockedStrategies: doc.unlockedStrategies ?? [],
@@ -305,7 +319,7 @@ export class PlayerManager {
     }
     return {
       xp: 0, level: 1,
-      subjectGrades: defaultSubjectGrades(), topicPasses: {},
+      subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false, topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
       skillShards: 0, combatShards: 0, silver: 0, materials: {},
       campaignsCompleted: 0,
@@ -323,6 +337,7 @@ export class PlayerManager {
       xp: number;
       level: number;
       subjectGrades?: Record<Subject, number>;
+      adventureRank?: string;
       topicPasses?: Record<string, number>;
       unlockedSkills?: string[];
       unlockedStrategies?: string[];
@@ -347,6 +362,7 @@ export class PlayerManager {
       player.level,
     );
     player.subjectGrades = normaliseSubjectGrades(progress.subjectGrades);
+    player.adventureRank = normaliseRankId(progress.adventureRank);
     player.topicPasses = { ...(progress.topicPasses ?? {}) };
     player.unlockedSkills = [...(progress.unlockedSkills ?? [])];
     player.unlockedStrategies = [...(progress.unlockedStrategies ?? [])];
@@ -423,6 +439,7 @@ export class PlayerManager {
         xp: player.xp,
         level: player.level,
         subjectGrades: player.subjectGrades,
+        adventureRank: player.adventureRank,
         topicPasses: player.topicPasses,
         unlockedSkills: player.unlockedSkills,
         unlockedStrategies: player.unlockedStrategies,
@@ -517,6 +534,25 @@ export class PlayerManager {
     if (!player) return false;
     if (player.silver < amount) return false;
     player.silver -= amount;
+    this.persistProgress(socketId);
+    return true;
+  }
+
+  /** The player's adventure rank id (defaults if unknown). */
+  getAdventureRank(socketId: string): AdventureRankId {
+    return normaliseRankId(this.players.get(socketId)?.adventureRank);
+  }
+
+  /** The grade band [min, max] the player's rank draws questions from. */
+  getRankGradeBand(socketId: string): { min: number; max: number } {
+    return gradeBandForRank(this.getAdventureRank(socketId));
+  }
+
+  /** Set the player's adventure rank (server-validated id). Persists. */
+  setAdventureRank(socketId: string, rankId: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    player.adventureRank = normaliseRankId(rankId);
     this.persistProgress(socketId);
     return true;
   }
@@ -699,10 +735,17 @@ export class PlayerManager {
       mp_regen: 0, hp_regen: 0,
     };
 
+    // Gear core power (base defense) scales by the LOWER of the item's craft
+    // rank and the player's current rank — a low-rank piece stays weak when
+    // carried up; a high-rank piece gives no edge at a lower rank (anti-farming,
+    // see docs/ADVENTURE_RANKS_DESIGN.md §1).
+    const currentRank = normaliseRankId(player.adventureRank);
     for (const item of Object.values(equipment)) {
       if (!item) continue;
       // Base defense (armor) is a level-scaled core stat, separate from affixes.
-      if (typeof item.baseDefense === 'number') gear.defense += item.baseDefense;
+      if (typeof item.baseDefense === 'number') {
+        gear.defense += item.baseDefense * effectiveRankMultiplier(item.craftRank ?? DEFAULT_RANK_ID, currentRank);
+      }
       // Crafted gear carries its rolled attributes on the instance (set
       // server-side at craft time). These are the authoritative stat source.
       if (item.attributes && item.attributes.length) {

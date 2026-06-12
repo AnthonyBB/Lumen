@@ -13,7 +13,7 @@
  */
 
 import { createHash } from 'crypto';
-import type { Question, ClientQuestion } from '../types/index.js';
+import type { Question, ClientQuestion, Subject } from '../types/index.js';
 import { MATH_QUESTIONS } from './data/questions/math.js';
 import { SCIENCE_QUESTIONS } from './data/questions/science.js';
 import { HISTORY_QUESTIONS } from './data/questions/history.js';
@@ -48,6 +48,10 @@ export class QuestionEngine {
   /** topicId → question ids belonging to that topic (built once at startup). */
   private byTopic: Map<string, string[]> = new Map();
 
+  /** `<subject>|<grade>` → question ids (built once at startup) — used for
+   *  rank-band filtering, which spans grades rather than a single topic. */
+  private bySubjectGrade: Map<string, string[]> = new Map();
+
   constructor() {
     // Assign STABLE content-derived ids so they survive server restarts. A hash
     // is non-sequential, so clients cannot enumerate the bank by position.
@@ -64,7 +68,45 @@ export class QuestionEngine {
       const list = this.byTopic.get(question.topic);
       if (list) list.push(id);
       else this.byTopic.set(question.topic, [id]);
+
+      const sgKey = `${question.subject}|${question.grade}`;
+      const sgList = this.bySubjectGrade.get(sgKey);
+      if (sgList) sgList.push(id);
+      else this.bySubjectGrade.set(sgKey, [id]);
     }
+  }
+
+  /**
+   * Return up to `count` UNIQUE random questions for a subject drawn from ANY
+   * grade within the inclusive band [minGrade..maxGrade]. Used to serve quizzes
+   * filtered by a player's Adventure Rank (the band spans several grades).
+   *
+   * Pooling across the whole band (rather than one topic) means a quiz varies
+   * its subject matter and never returns empty just because one topic is thin.
+   */
+  getQuizQuestionsForBand(
+    subject: Subject,
+    minGrade: number,
+    maxGrade: number,
+    count = QUIZ_QUESTION_COUNT,
+  ): Question[] {
+    const ids: string[] = [];
+    for (let g = minGrade; g <= maxGrade; g++) {
+      const list = this.bySubjectGrade.get(`${subject}|${g}`);
+      if (list) ids.push(...list);
+    }
+    if (ids.length === 0) return [];
+
+    // Fisher–Yates shuffle a copy so each quiz gets a fresh selection/order.
+    const shuffled = [...ids];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled
+      .slice(0, Math.min(count, shuffled.length))
+      .map((id) => this.questions.get(id)!)
+      .filter((q): q is Question => q !== undefined);
   }
 
   // -------------------------------------------------------------------------

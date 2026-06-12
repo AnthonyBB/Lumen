@@ -242,4 +242,18 @@ export class ChestManager {
     this.persistChest(toPlayerId, chest);
     return true;
   }
+
+  /**
+   * Permanently delete an item from a chest (player-initiated discard).
+   * Validates chest existence + ownership. Returns false on any failure.
+   */
+  deleteFromChest(chestId: string, ownerId: string, itemId: string): boolean {
+    const chest = this.chests.get(chestId);
+    if (!chest || chest.ownerId !== ownerId) return false;
+    const idx = chest.items.findIndex((i) => i.id === itemId);
+    if (idx === -1) return false;
+    chest.items.splice(idx, 1);
+    this.persistChest(ownerId, chest);
+    return true;
+  }
 }

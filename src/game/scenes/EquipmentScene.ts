@@ -116,12 +116,12 @@ const SLOT_PLACEHOLDER: Record<SlotKey, string> = {
 
 /** Empty-slot placeholders that use a real RPG icon from the 'armor_icons'
  *  spritesheet (32×32, 18 cols → frame = row*18 + col) instead of an emoji.
- *  Frames are chosen to be CLEAN single pieces — the old helm/legs/boots frames
- *  (1/21/57) landed on paired/blobby cells that read as broken/"disjointed".
- *  helm=77 (skull helm) · chest=20 · legs=31 · boots=58 · rings=186 (the pack has
- *  no literal ring, so a blue gem stands in for jewellery). */
+ *  Only the two frames that read as CLEAN single pieces are kept: helm=77 (skull
+ *  helm) and chest=20. The legs/boots/ring frames (31/58/186) landed on
+ *  paired/blobby cells that rendered as broken/disjointed, so those slots fall
+ *  back to their emoji placeholders (👖/👢/💍) like the other accessory slots. */
 const SLOT_ICON_FRAME: Partial<Record<SlotKey, number>> = {
-  helm: 77, chest: 20, legs: 31, shoes: 58, ring1: 186, ring2: 186,
+  helm: 77, chest: 20,
 }
 
 // Layout
@@ -538,7 +538,7 @@ export class EquipmentScene extends Phaser.Scene {
 
     // Item icon: the server item's emoji when equipped; otherwise a dim
     // placeholder — a real RPG icon sprite for the slots in SLOT_ICON_FRAME
-    // (helm/chest/legs/boots), else an emoji.
+    // (helm/chest), else an emoji.
     const frame = SLOT_ICON_FRAME[slotKey]
     if (!item && frame !== undefined) {
       container.add(

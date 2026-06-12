@@ -145,6 +145,19 @@ export class BootScene extends Phaser.Scene {
     this.load.image('building_tavern_fallback', '/assets/buildings/house_2.png')
     this.load.image('tav_exterior_raw', '/assets/craftpix/tavern/Tiled/Exterior.png')
 
+    // ── FUNCTION EMBLEM PROPS (CraftPix autumn_vector) ──────────────────────────
+    // Standalone top-down props placed beside each shop's door so the building
+    // reads as its purpose (see WorldScene.decorateBuilding). Spaces in the source
+    // filenames are URL-encoded so the dev server / browser resolve them.
+    // (The Forge uses a drawn anvil — the only blacksmith art is a whole
+    // building, which read as a second house, so no emblem_forge sprite.)
+    const EMBLEM = '/assets/craftpix/autumn_vector/PNG/Top-Down%20Simple%20Autumn_Prop%20-'
+    this.load.image('emblem_armory',   `${EMBLEM}%20Weapon%20Rack.png`)
+    this.load.image('emblem_alchemy',  `${EMBLEM}%20Cooking%20Pot.png`)
+    this.load.image('emblem_market',   `${EMBLEM}%20Stall.png`)
+    this.load.image('emblem_training', `${EMBLEM}%20Training%20Dummy.png`)
+    this.load.image('emblem_strategy', `${EMBLEM}%20Wagon.png`)
+
     // ── TAVERN INTERIOR (CraftPix tavern pack) ──────────────────────────────────
     // Two 16px tilesheets drive the TavernScene interior:
     //   tav_walls    160×288  → 10 cols × 18 rows: stone floor + wall/window tiles

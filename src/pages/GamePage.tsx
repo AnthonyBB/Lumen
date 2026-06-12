@@ -3,9 +3,11 @@ import Phaser from 'phaser'
 import { io, Socket } from 'socket.io-client'
 import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
+import LevelUpCelebration from '../components/LevelUpCelebration'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
+import { RankStore } from '../game/systems/RankStore'
 import { API_BASE } from '../config'
 
 interface GamePageProps {
@@ -14,8 +16,22 @@ interface GamePageProps {
   setContentMode: (mode: 'child' | 'adolescent') => Promise<void>
 }
 
+interface AdventureRank { id: string; name: string; minGrade: number; maxGrade: number }
+
 export default function GamePage({ token, user, setContentMode }: GamePageProps) {
   const [playersOnline, setPlayersOnline] = useState<number | null>(null)
+  const [rankId, setRankId] = useState<string | null>(null)
+  const [ranks, setRanks] = useState<AdventureRank[]>([])
+  // The level to celebrate (null = no celebration showing). Keyed remount on
+  // change lets back-to-back level-ups each replay the animation.
+  const [celebrateLevel, setCelebrateLevel] = useState<number | null>(null)
+
+  /** Change the player's adventure rank — the grade band their questions are
+   *  drawn from. Any rank is allowed (not age-gated). */
+  const changeRank = (id: string) => {
+    const sock = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    sock?.emit('adventureRank:set', { rankId: id })
+  }
 
   // Show content-mode prompt if the user hasn't selected one yet
   const needsContentMode = user !== null && user.contentMode === null
@@ -31,6 +47,18 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       setPlayersOnline(count)
     })
 
+    s.on('adventureRank:data', (d: { rankId: string; ranks: AdventureRank[] }) => {
+      setRankId(d.rankId)
+      setRanks(d.ranks ?? [])
+    })
+
+    // Flashy level-up celebration — fires whenever the server confirms a level
+    // gain (combat XP is the only source). Works regardless of the active Phaser
+    // scene since this overlay lives in React, above the canvas.
+    s.on('player:xp_updated', (d: { newLevel?: number; leveledUp?: boolean }) => {
+      if (d?.leveledUp && typeof d.newLevel === 'number') setCelebrateLevel(d.newLevel)
+    })
+
     s.on('connect', () => {
       // (Re)join on every connect — including reconnects after a server
       // restart. Without this the server has no player record for the socket
@@ -38,12 +66,16 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       // The server derives identity from the JWT; the payload is informational.
       s.emit('player:join', { username: user?.username ?? '' })
       s.emit('players:get_online')
+      s.emit('adventureRank:get')
       // Bind the inventory store to this (possibly new) socket so the HUD
       // shard counters receive inventory:data / inventory:updated pushes.
       InventoryStore.init(s)
       // Bind the stats store too so Character / Equipment screens receive
       // server-pushed `stats:update` snapshots (attributes + derived stats).
       StatsStore.init(s)
+      // Bind the rank store so the Phaser scenes (crafting cost preview, combat
+      // scaling) see the player's current adventure rank.
+      RankStore.init(s)
     })
 
     // The server rejects sockets with invalid/expired tokens. Without this,
@@ -91,6 +123,15 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
 
   return (
     <div className="flex flex-col flex-1 min-h-screen pt-16 bg-lumen-dark">
+      {/* Flashy level-up celebration (keyed so consecutive level-ups replay it) */}
+      {celebrateLevel !== null && (
+        <LevelUpCelebration
+          key={celebrateLevel}
+          level={celebrateLevel}
+          onDone={() => setCelebrateLevel(null)}
+        />
+      )}
+
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
         <div
@@ -101,7 +142,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
 
       {/* HUD */}
       <div className="px-4 pb-6 max-w-[1280px] mx-auto w-full">
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="rounded-xl border border-white/10 bg-white/5 p-4">
             <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Player</p>
             <p className="font-display text-lg text-lumen-gold">
@@ -114,7 +155,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
               {playersOnline !== null ? playersOnline : '—'}
             </p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-right">
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
             <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Content Mode</p>
             <p className="font-display text-sm text-lumen-gold">
               {user?.contentMode === 'adolescent'
@@ -123,6 +164,21 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
                 ? '🌟 Young Explorer'
                 : '—'}
             </p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Adventure Rank</p>
+            <select
+              value={rankId ?? ''}
+              onChange={(e) => changeRank(e.target.value)}
+              disabled={ranks.length === 0}
+              className="w-full bg-lumen-dark/60 border border-white/10 rounded-lg px-2 py-1.5 text-sm text-lumen-gold font-display focus:outline-none focus:border-lumen-gold/50 disabled:opacity-50"
+            >
+              {rankId === null && <option value="">—</option>}
+              {ranks.map((r) => (
+                <option key={r.id} value={r.id} className="bg-lumen-dark text-white">{r.name}</option>
+              ))}
+            </select>
+            <p className="text-[10px] text-gray-500 mt-1">Sets the grade level of your questions.</p>
           </div>
         </div>
       </div>

@@ -139,14 +139,20 @@ export function rollMaterials(
   level: number,
   difficulty: Difficulty,
   campaignComplete: boolean,
+  rankMult = 1,
 ): MaterialRoll {
   const drops: MaterialDrop[] = [];
   const di = DIFF_IDX[difficulty];
   let richVein = false;
 
+  // The bulk material haul scales with the player's rank (M(currentRank)) so a
+  // higher-rank player earns proportionally more — funding the steeper craft
+  // costs at that rank (see docs/ADVENTURE_RANKS_DESIGN.md §1). Gated catalysts
+  // are NOT scaled; they stay a single, rarity-driven drop.
   if (campaignComplete) {
     richVein = Math.random() < (0.12 + di * 0.011); // ~12% (novice) → ~22% (legendary)
-    const units = (2 + Math.ceil(di / 2)) * (richVein ? 2 : 1); // base 2→7, doubled on a vein
+    const baseUnits = (2 + Math.ceil(di / 2)) * (richVein ? 2 : 1); // base 2→7, doubled on a vein
+    const units = Math.max(1, Math.round(baseUnits * rankMult));
     drops.push(...rollBatch(METAL_BY_TIER, difficulty, units));
     drops.push(...rollBatch(REAGENT_BY_TIER, difficulty, units));
 
@@ -155,7 +161,8 @@ export function rollMaterials(
     if (cat) drops.push({ materialId: cat, qty: 1 });
   } else if (Math.random() < dropChance(level, difficulty)) {
     const fam = Math.random() < 0.5 ? METAL_BY_TIER : REAGENT_BY_TIER;
-    drops.push({ materialId: fam[pickTier(difficulty)], qty: 1 + (Math.random() < 0.3 ? 1 : 0) });
+    const baseQty = 1 + (Math.random() < 0.3 ? 1 : 0);
+    drops.push({ materialId: fam[pickTier(difficulty)], qty: Math.max(1, Math.round(baseQty * rankMult)) });
     const cat = CATALYST_BY_RARITY[pickRarity(difficulty)];
     if (cat && Math.random() < 0.5) drops.push({ materialId: cat, qty: 1 });
   }

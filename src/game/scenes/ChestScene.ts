@@ -120,6 +120,12 @@ export class ChestScene extends Phaser.Scene {
   private dragStartX = 0
   private dragStartY = 0
   private detailPanel: Phaser.GameObjects.Container | null = null
+  /** Delete-confirm modal (blocks the board while open). */
+  private confirmModal: Phaser.GameObjects.Container | null = null
+  private confirmOpen = false
+  /** Screen bounds of the detail panel's 🗑 button, so onDown can ignore clicks
+   *  on it (otherwise the global handler would dismiss the panel first). */
+  private deleteBtnBounds: Phaser.Geom.Rectangle | null = null
 
   // Hover highlight (single reused graphics object)
   private hoverGfx!: Phaser.GameObjects.Graphics
@@ -199,7 +205,11 @@ export class ChestScene extends Phaser.Scene {
   }
 
   update() {
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.closeScene()
+    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+      // ESC closes the delete-confirm modal first, then the scene.
+      if (this.confirmOpen) { this.confirmModal?.destroy(); this.confirmModal = null; this.confirmOpen = false }
+      else this.closeScene()
+    }
   }
 
   /** Leave the chest and return to town (next to the chest). */
@@ -508,6 +518,13 @@ export class ChestScene extends Phaser.Scene {
   // ── Drag event handlers ────────────────────────────────────────────────────
 
   private onDown(ptr: Phaser.Input.Pointer) {
+    // While the delete-confirm modal is open it owns all input.
+    if (this.confirmOpen) return
+
+    // A click on the detail panel's 🗑 button is handled by the button itself —
+    // don't let the board logic dismiss the panel out from under it.
+    if (this.deleteBtnBounds && Phaser.Geom.Rectangle.Contains(this.deleteBtnBounds, ptr.x, ptr.y)) return
+
     // Exit button takes priority over everything.
     const eb = EXIT_BTN
     if (ptr.x >= eb.x && ptr.x < eb.x + eb.w && ptr.y >= eb.y && ptr.y < eb.y + eb.h) {
@@ -580,6 +597,7 @@ export class ChestScene extends Phaser.Scene {
   }
 
   private onMove(ptr: Phaser.Input.Pointer) {
+    if (this.confirmOpen) return
     if (!this.dragging) {
       // An armed press that moves past the threshold becomes a real drag.
       if (this.dragItem &&
@@ -609,6 +627,7 @@ export class ChestScene extends Phaser.Scene {
   }
 
   private onUp(ptr: Phaser.Input.Pointer) {
+    if (this.confirmOpen) return
     const from = this.dragFrom
     const item = this.dragItem
     const wasDragging = this.dragging
@@ -628,7 +647,7 @@ export class ChestScene extends Phaser.Scene {
 
     // Released without ever moving → a click: show the item's full stats.
     if (!wasDragging) {
-      this.showItemDetails(item, ptr.x, ptr.y)
+      this.showItemDetails(item, ptr.x, ptr.y, from.panel !== 'inventory')
       return
     }
 
@@ -704,6 +723,61 @@ export class ChestScene extends Phaser.Scene {
   private hideItemDetails() {
     this.detailPanel?.destroy()
     this.detailPanel = null
+    this.deleteBtnBounds = null
+  }
+
+  /** Confirm prompt before permanently discarding an item. */
+  private openDeleteConfirm(item: ClientInventoryItem, fromChest: boolean) {
+    if (this.confirmOpen) return
+    this.confirmOpen = true
+
+    const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+    const w = 380, h = 170
+    const c = this.add.container(0, 0).setDepth(80)
+
+    const backdrop = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.6)
+      .setOrigin(0).setInteractive()
+    c.add(backdrop)
+
+    const bg = this.add.graphics()
+    bg.fillStyle(0x141022, 0.99).fillRoundedRect(cx - w / 2, cy - h / 2, w, h, 12)
+    bg.lineStyle(2, 0xaa3344, 1).strokeRoundedRect(cx - w / 2, cy - h / 2, w, h, 12)
+    c.add(bg)
+
+    const qty = item.quantity > 1 ? ` ×${item.quantity}` : ''
+    c.add(this.add.text(cx, cy - 44, 'Delete item?', {
+      fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ff8899', fontStyle: 'bold',
+    }).setOrigin(0.5))
+    c.add(this.add.text(cx, cy - 12, `${item.icon}  ${item.name}${qty}`, {
+      fontSize: '14px', fontFamily: 'Arial', color: '#ffffff', align: 'center',
+      wordWrap: { width: w - 40 },
+    }).setOrigin(0.5))
+    c.add(this.add.text(cx, cy + 14, 'This cannot be undone.', {
+      fontSize: '11px', fontFamily: 'Arial', color: '#9a9ac0',
+    }).setOrigin(0.5))
+
+    const mkBtn = (label: string, dx: number, fill: number, line: number, color: string, cb: () => void) => {
+      const bw = 130, bh = 36, bx = cx + dx - bw / 2, by = cy + h / 2 - 24 - bh / 2
+      const g = this.add.graphics()
+      g.fillStyle(fill, 1).fillRoundedRect(bx, by, bw, bh, 8)
+      g.lineStyle(2, line, 1).strokeRoundedRect(bx, by, bw, bh, 8)
+      const t = this.add.text(cx + dx, by + bh / 2, label, {
+        fontSize: '14px', fontFamily: 'Arial', color, fontStyle: 'bold',
+      }).setOrigin(0.5)
+      const z = this.add.zone(bx, by, bw, bh).setOrigin(0).setInteractive({ useHandCursor: true })
+      z.on('pointerdown', cb)
+      c.add([g, t, z])
+    }
+    const close = () => { c.destroy(); this.confirmModal = null; this.confirmOpen = false }
+    mkBtn('Cancel', -75, 0x2a2a44, 0x4a4a7a, '#ffffff', close)
+    mkBtn('Delete',  75, 0x3a0e16, 0xcc3344, '#ff8899', () => {
+      this.socket?.emit('item:delete', fromChest ? { itemId: item.id, chestId: this.chestId } : { itemId: item.id })
+      this.showFeedback(`Deleted ${item.name}.`)
+      close()
+      this.hideItemDetails()
+    })
+
+    this.confirmModal = c
   }
 
   private attrLabel(type: string): string {
@@ -711,7 +785,7 @@ export class ChestScene extends Phaser.Scene {
   }
 
   /** Floating panel near (x, y) showing the item's full stats. */
-  private showItemDetails(item: ClientInventoryItem, x: number, y: number) {
+  private showItemDetails(item: ClientInventoryItem, x: number, y: number, fromChest = false) {
     this.hideItemDetails()
 
     const rarCol = RARITY_COLOR[item.rarity] ?? RARITY_COLOR.common
@@ -744,8 +818,9 @@ export class ChestScene extends Phaser.Scene {
       fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#9bd0ff', lineSpacing: 3,
     }).setOrigin(0, 0)
 
-    const w = Math.min(Math.max(name.width, sub.width, stats.width) + padX * 2, 320)
-    const h = name.height + sub.height + stats.height + gap * 2 + padY * 2
+    const delH = 22
+    const w = Math.min(Math.max(name.width, sub.width, stats.width, 120) + padX * 2, 320)
+    const h = name.height + sub.height + stats.height + delH + gap * 3 + padY * 2
     // Anchor near the cursor, clamped on-screen.
     let px = x + 14
     let py = y + 14
@@ -762,7 +837,18 @@ export class ChestScene extends Phaser.Scene {
     bg.fillStyle(0x0a0a1e, 0.98).fillRoundedRect(px, py, w, h, 8)
     bg.lineStyle(1.5, rarCol, 0.9).strokeRoundedRect(px, py, w, h, 8)
 
-    this.detailPanel = this.add.container(0, 0).setDepth(60).add([bg, name, sub, stats])
+    // 🗑 Delete button along the bottom.
+    const delY = py + h - padY - delH
+    const delBtn = this.add.text(px + w / 2, delY + delH / 2, '🗑  Delete', {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#ff9aa2', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true })
+    delBtn.on('pointerover', () => delBtn.setColor('#ff5566'))
+    delBtn.on('pointerout',  () => delBtn.setColor('#ff9aa2'))
+    delBtn.on('pointerdown', () => this.openDeleteConfirm(item, fromChest))
+    // Let onDown ignore clicks here so the panel isn't dismissed first.
+    this.deleteBtnBounds = new Phaser.Geom.Rectangle(px, delY - 2, w, delH + 6)
+
+    this.detailPanel = this.add.container(0, 0).setDepth(60).add([bg, name, sub, stats, delBtn])
   }
 
   // ── Drag cleanup ───────────────────────────────────────────────────────────

@@ -56,9 +56,12 @@ export interface Player {
   lastMessageAt: number; // unix ms — used for chat rate-limiting
   /** The account's roster of characters. Always has at least one. */
   characters: Character[];
-  /** Which character is currently active (drives the town avatar, the
-   *  Character/Equipment screens, and solo combat until party combat lands). */
+  /** Which character is currently active (drives the town avatar and the
+   *  Character/Equipment screens). */
   activeCharacterId: string;
+  /** The campaign party — an ordered list of up to 4 owned character ids that
+   *  fight together (see docs/CHARACTERS_DESIGN.md §5). Always has ≥1 entry. */
+  party: string[];
   /** Current grade per subject (persisted, ACCOUNT-wide), 1..12, or 13
    *  (MASTERED_GRADE) when all 12 grades of a subject are complete. */
   subjectGrades: Record<Subject, number>;

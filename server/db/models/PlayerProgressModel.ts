@@ -44,6 +44,8 @@ export interface IPlayerProgress extends Document {
   characters: Character[]
   /** Which roster character is active. */
   activeCharacterId: string
+  /** Ordered campaign party (≤4 owned character ids). */
+  party: string[]
   /** Recruit Tokens — spent to recruit new characters. */
   recruitTokens: number
 }
@@ -130,6 +132,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     activeCharacterId: {
       type: String,
       default: '',
+    },
+    party: {
+      type: [String],
+      default: [],
     },
     recruitTokens: {
       type: Number,

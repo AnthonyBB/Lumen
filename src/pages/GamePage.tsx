@@ -148,6 +148,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
         <RosterPanel
           roster={roster}
           onSetActive={(id) => emit('roster:set_active', { characterId: id })}
+          onSetParty={(party) => emit('party:set', { party })}
           onCreate={(name, cls) => emit('roster:create', { name, class: cls })}
           onClose={() => setRosterOpen(false)}
         />

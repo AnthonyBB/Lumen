@@ -269,6 +269,7 @@ export function registerHandlers(
       id: c.id, name: c.name, class: c.class, level: c.level, xp: c.xp,
     })),
     activeCharacterId: playerManager.getActiveCharacter(socket.id)?.id ?? '',
+    party: playerManager.getParty(socket.id),
     freeSlots: Math.max(0, FREE_ROSTER_SIZE - playerManager.getCharacters(socket.id).length),
   });
   const pushRoster = (): void => { socket.emit('roster:data', buildRoster()); };
@@ -294,6 +295,17 @@ export function registerHandlers(
     pushStats();
     pushInventoryUpdate();
     pushCurrency(); // Skill Shards are per-character
+  });
+
+  socket.on('party:set', (payload: { party?: unknown }) => {
+    if (!Array.isArray(payload?.party) || !payload.party.every((id) => typeof id === 'string')) {
+      socket.emit('error', { message: 'Invalid party payload.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    playerManager.setParty(socket.id, payload.party as string[]);
+    playerManager.persistProgress(socket.id);
+    pushRoster();
   });
 
   socket.on('roster:create', (payload: { name?: unknown; class?: unknown }) => {

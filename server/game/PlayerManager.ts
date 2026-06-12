@@ -79,6 +79,9 @@ export const POINTS_PER_LEVEL = 3;
 /** Hard level cap. */
 export const LEVEL_CAP = 50;
 
+/** Max characters in a campaign party (see docs/CHARACTERS_DESIGN.md §5). */
+export const MAX_PARTY_SIZE = 4;
+
 // ── Skill ranks (see docs/CHARACTERS_DESIGN.md §4) ──────────────────────────
 /** Highest rank a skill can reach. */
 export const MAX_SKILL_RANK = 5;
@@ -223,6 +226,27 @@ function migrateFlatToCharacter(doc: {
   }, name);
 }
 
+/** Clean a campaign party: keep only owned ids, in order, deduped, capped at
+ *  MAX_PARTY_SIZE; fall back to the active (or first) character if empty. */
+function sanitiseParty(ids: unknown, characters: Character[], activeId: string): string[] {
+  const owned = new Set(characters.map((c) => c.id));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  if (Array.isArray(ids)) {
+    for (const id of ids) {
+      if (typeof id === 'string' && owned.has(id) && !seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+        if (out.length >= MAX_PARTY_SIZE) break;
+      }
+    }
+  }
+  if (out.length === 0) {
+    out.push(owned.has(activeId) ? activeId : (characters[0]?.id ?? ''));
+  }
+  return out.filter((id) => id);
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -240,6 +264,7 @@ export const TOPIC_PASSES_TO_COMPLETE = 3;
 export interface LoadedProgress {
   characters: Character[];
   activeCharacterId: string;
+  party: string[];
   subjectGrades: Record<Subject, number>;
   adventureRank: AdventureRankId;
   /** True when a rank was already persisted (so join should NOT overwrite it
@@ -308,6 +333,7 @@ export class PlayerManager {
       lastMessageAt: 0,
       characters: [starter],
       activeCharacterId: starter.id,
+      party: [starter.id],
       subjectGrades: defaultSubjectGrades(),
       adventureRank: DEFAULT_RANK_ID,
       topicPasses: {},
@@ -384,6 +410,22 @@ export class PlayerManager {
     const player = this.players.get(socketId);
     if (!player || !player.characters.some((c) => c.id === characterId)) return false;
     player.activeCharacterId = characterId;
+    return true;
+  }
+
+  /** The campaign party (ordered owned character ids, always ≥1). */
+  getParty(socketId: string): string[] {
+    const player = this.players.get(socketId);
+    if (!player) return [];
+    return sanitiseParty(player.party, player.characters, player.activeCharacterId);
+  }
+
+  /** Replace the campaign party (ordered ids). Owned ids only, deduped, capped at
+   *  MAX_PARTY_SIZE, never empty. Returns false only for an unknown player. */
+  setParty(socketId: string, ids: string[]): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    player.party = sanitiseParty(ids, player.characters, player.activeCharacterId);
     return true;
   }
 
@@ -474,6 +516,9 @@ export class PlayerManager {
         return {
           characters,
           activeCharacterId,
+          party: sanitiseParty(
+            (doc as { party?: string[] }).party, characters, activeCharacterId,
+          ),
           subjectGrades: normaliseSubjectGrades(doc.subjectGrades),
           adventureRank: normaliseRankId(doc.adventureRank),
           rankPersisted: typeof doc.adventureRank === 'string',
@@ -493,6 +538,7 @@ export class PlayerManager {
     return {
       characters: [starter],
       activeCharacterId: starter.id,
+      party: [starter.id],
       subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false,
       topicPasses: {}, unlockedStrategies: [], combatShards: 0, silver: 0, materials: {},
       campaignsCompleted: 0, recruitTokens: 0,
@@ -532,6 +578,7 @@ export class PlayerManager {
       player.characters.some((c) => c.id === progress.activeCharacterId)
         ? progress.activeCharacterId
         : player.characters[0].id;
+    player.party = sanitiseParty(progress.party, player.characters, player.activeCharacterId);
   }
 
   // -------------------------------------------------------------------------
@@ -597,6 +644,7 @@ export class PlayerManager {
         // Roster (the new source of truth for per-character state).
         characters: player.characters,
         activeCharacterId: player.activeCharacterId,
+        party: player.party,
         // Account-wide.
         subjectGrades: player.subjectGrades,
         adventureRank: player.adventureRank,

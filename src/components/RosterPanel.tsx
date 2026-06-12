@@ -19,12 +19,16 @@ export interface RosterCharacter {
 export interface RosterData {
   characters: RosterCharacter[]
   activeCharacterId: string
+  party: string[]
   freeSlots: number
 }
+
+const MAX_PARTY = 4
 
 interface Props {
   roster: RosterData
   onSetActive: (characterId: string) => void
+  onSetParty: (party: string[]) => void
   onCreate: (name: string, cls: string) => void
   onClose: () => void
 }
@@ -34,11 +38,22 @@ export function classLabel(cls: string): string {
   return cls.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 }
 
-export default function RosterPanel({ roster, onSetActive, onCreate, onClose }: Props) {
+export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate, onClose }: Props) {
   const [recruiting, setRecruiting] = useState(false)
   const [name, setName] = useState('')
   const [cls, setCls] = useState<string>(SKILL_CLASSES[3]) // 'sword' — a friendly default
   const canRecruit = roster.freeSlots > 0
+  const partyFull = roster.party.length >= MAX_PARTY
+
+  const toggleParty = (id: string) => {
+    if (roster.party.includes(id)) {
+      if (roster.party.length <= 1) return // a party always has at least one
+      onSetParty(roster.party.filter((p) => p !== id))
+    } else {
+      if (partyFull) return
+      onSetParty([...roster.party, id])
+    }
+  }
 
   const submit = () => {
     if (name.trim().length < 2) return
@@ -58,7 +73,12 @@ export default function RosterPanel({ roster, onSetActive, onCreate, onClose }: 
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
-          <h2 className="font-display text-xl text-lumen-gold">Your Roster</h2>
+          <div>
+            <h2 className="font-display text-xl text-lumen-gold">Your Roster</h2>
+            <p className="text-xs text-gray-400">
+              Campaign party: <span className="text-lumen-gold">{roster.party.length}/{MAX_PARTY}</span> · ★ marks party members
+            </p>
+          </div>
           <button
             onClick={onClose}
             className="rounded-md px-2 py-1 text-gray-400 hover:bg-white/10 hover:text-white"
@@ -72,6 +92,8 @@ export default function RosterPanel({ roster, onSetActive, onCreate, onClose }: 
         <div className="max-h-[55vh] overflow-y-auto p-4 space-y-2">
           {roster.characters.map((c) => {
             const active = c.id === roster.activeCharacterId
+            const inParty = roster.party.includes(c.id)
+            const lastInParty = inParty && roster.party.length <= 1
             return (
               <div
                 key={c.id}
@@ -81,8 +103,9 @@ export default function RosterPanel({ roster, onSetActive, onCreate, onClose }: 
                     : 'border-white/10 bg-white/5'
                 }`}
               >
-                <div>
-                  <p className="font-display text-base text-white">
+                <div className="min-w-0">
+                  <p className="font-display text-base text-white truncate">
+                    {inParty && <span className="mr-1 text-lumen-gold" title="In campaign party">★</span>}
                     {c.name}
                     {active && <span className="ml-2 text-xs text-lumen-gold">● Active</span>}
                   </p>
@@ -90,16 +113,32 @@ export default function RosterPanel({ roster, onSetActive, onCreate, onClose }: 
                     {classLabel(c.class)} · Level {c.level}
                   </p>
                 </div>
-                {active ? (
-                  <span className="text-xs font-semibold text-lumen-gold">In play</span>
-                ) : (
+                <div className="flex items-center gap-2">
+                  {/* Party toggle */}
                   <button
-                    onClick={() => onSetActive(c.id)}
-                    className="rounded-lg border border-lumen-gold/40 px-3 py-1.5 text-sm text-lumen-gold hover:bg-lumen-gold/15"
+                    onClick={() => toggleParty(c.id)}
+                    disabled={(!inParty && partyFull) || lastInParty}
+                    title={inParty ? 'Remove from party' : 'Add to party'}
+                    className={`rounded-lg border px-2.5 py-1.5 text-sm disabled:opacity-30 disabled:cursor-not-allowed ${
+                      inParty
+                        ? 'border-lumen-gold/60 bg-lumen-gold/15 text-lumen-gold'
+                        : 'border-white/15 text-gray-300 hover:bg-white/10'
+                    }`}
                   >
-                    Play as
+                    {inParty ? '★ In party' : '☆ Party'}
                   </button>
-                )}
+                  {/* Active (solo screens) */}
+                  {active ? (
+                    <span className="text-xs font-semibold text-lumen-gold">In play</span>
+                  ) : (
+                    <button
+                      onClick={() => onSetActive(c.id)}
+                      className="rounded-lg border border-white/15 px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10"
+                    >
+                      Play as
+                    </button>
+                  )}
+                </div>
               </div>
             )
           })}

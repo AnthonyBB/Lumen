@@ -48,6 +48,8 @@ export interface IPlayerProgress extends Document {
   party: string[]
   /** Recruit Tokens — spent to recruit new characters. */
   recruitTokens: number
+  /** Study-to-Haste stacks ({ expiresAt, minutes }). */
+  hasteStacks: unknown[]
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -141,6 +143,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       type: Number,
       default: 0,
       min: 0,
+    },
+    hasteStacks: {
+      type: Schema.Types.Mixed,
+      default: () => [],
     },
   },
   { timestamps: true },

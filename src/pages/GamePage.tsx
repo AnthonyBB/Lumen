@@ -5,6 +5,7 @@ import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
 import LevelUpCelebration from '../components/LevelUpCelebration'
 import RosterPanel, { type RosterData } from '../components/RosterPanel'
+import StudyPanel, { type HasteData } from '../components/StudyPanel'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
@@ -28,6 +29,8 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   const [celebrateLevel, setCelebrateLevel] = useState<number | null>(null)
   const [roster, setRoster] = useState<RosterData | null>(null)
   const [rosterOpen, setRosterOpen] = useState(false)
+  const [haste, setHaste] = useState<HasteData | null>(null)
+  const [studyOpen, setStudyOpen] = useState(false)
 
   const emit = (event: string, payload?: unknown) => {
     const sock = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
@@ -68,6 +71,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
     })
 
     s.on('roster:data', (d: RosterData) => setRoster(d))
+    s.on('haste:data', (d: HasteData) => setHaste(d))
 
     s.on('connect', () => {
       // (Re)join on every connect — including reconnects after a server
@@ -78,6 +82,7 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       s.emit('players:get_online')
       s.emit('adventureRank:get')
       s.emit('roster:get')
+      s.emit('haste:get')
       // Bind the inventory store to this (possibly new) socket so the HUD
       // shard counters receive inventory:data / inventory:updated pushes.
       InventoryStore.init(s)
@@ -154,6 +159,11 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
         />
       )}
 
+      {/* Study-to-Haste panel */}
+      {studyOpen && haste && (
+        <StudyPanel haste={haste} onClose={() => setStudyOpen(false)} />
+      )}
+
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
         <div
@@ -212,6 +222,19 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
             </select>
             <p className="text-[10px] text-gray-500 mt-1">Sets the grade level of your questions.</p>
           </div>
+          <button
+            onClick={() => haste && setStudyOpen(true)}
+            disabled={!haste}
+            className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
+          >
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Study Hall</p>
+            <p className="font-display text-lg text-lumen-gold">
+              {haste
+                ? `Battle every ${Math.floor(haste.intervalMinutes / 60) > 0 ? `${Math.floor(haste.intervalMinutes / 60)}h` : ''}${haste.intervalMinutes % 60 > 0 ? ` ${haste.intervalMinutes % 60}m` : (Math.floor(haste.intervalMinutes / 60) > 0 ? '' : '0m')}`.trim()
+                : '—'}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-1">Study to speed up idle battles.</p>
+          </button>
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@
 import type {
   Player,
   Character,
+  HasteStack,
   PublicPlayer,
   Subject,
   AttributeKey,
@@ -81,6 +82,18 @@ export const LEVEL_CAP = 50;
 
 /** Max characters in a campaign party (see docs/CHARACTERS_DESIGN.md §5). */
 export const MAX_PARTY_SIZE = 4;
+
+// ── Study-to-Haste (see docs/CHARACTERS_DESIGN.md §3) ───────────────────────
+/** Default automated-battle interval (minutes). */
+export const HASTE_DEFAULT_MIN = 240;
+/** Floor the interval can be reduced to (minutes). */
+export const HASTE_FLOOR_MIN = 60;
+/** Max minutes one study test can shave off (a clean test). */
+export const HASTE_STEP_MIN = 30;
+/** Max simultaneous active haste stacks. */
+export const MAX_HASTE_STACKS = 6;
+/** How long each stack lasts (rolling 3-day clock). */
+export const HASTE_DURATION_MS = 3 * 24 * 60 * 60 * 1000;
 
 // ── Skill ranks (see docs/CHARACTERS_DESIGN.md §4) ──────────────────────────
 /** Highest rank a skill can reach. */
@@ -319,6 +332,19 @@ export function deriveCombatStats(
   };
 }
 
+/** Sanitise persisted haste stacks: keep unexpired, valid entries (clamp minutes),
+ *  cap at MAX_HASTE_STACKS most-recent. */
+function sanitiseHasteStacks(raw: unknown): HasteStack[] {
+  const now = Date.now();
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((s) => s as Partial<HasteStack>)
+    .filter((s) => typeof s?.expiresAt === 'number' && s.expiresAt > now && typeof s?.minutes === 'number')
+    .map((s) => ({ expiresAt: s.expiresAt as number, minutes: Math.max(1, Math.min(HASTE_STEP_MIN, Math.round(s.minutes as number))) }))
+    .sort((a, b) => a.expiresAt - b.expiresAt)
+    .slice(-MAX_HASTE_STACKS);
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -349,6 +375,7 @@ export interface LoadedProgress {
   materials: Record<string, number>;
   campaignsCompleted: number;
   recruitTokens: number;
+  hasteStacks: HasteStack[];
 }
 
 /** Skill shards granted for completing any quiz (effort reward, every test). */
@@ -415,6 +442,7 @@ export class PlayerManager {
       materials: {},
       campaignsCompleted: 0,
       recruitTokens: 0,
+      hasteStacks: [],
     };
 
     this.players.set(socketId, player);
@@ -607,6 +635,7 @@ export class PlayerManager {
           materials: { ...((doc.materials as Record<string, number>) ?? {}) },
           campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
           recruitTokens: Math.max(0, (doc as { recruitTokens?: number }).recruitTokens ?? 0),
+          hasteStacks: sanitiseHasteStacks((doc as { hasteStacks?: unknown }).hasteStacks),
         };
       }
     } catch (err) {
@@ -619,7 +648,7 @@ export class PlayerManager {
       party: [starter.id],
       subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false,
       topicPasses: {}, unlockedStrategies: [], combatShards: 0, silver: 0, materials: {},
-      campaignsCompleted: 0, recruitTokens: 0,
+      campaignsCompleted: 0, recruitTokens: 0, hasteStacks: [],
     };
   }
 
@@ -641,6 +670,7 @@ export class PlayerManager {
     player.materials = { ...(progress.materials ?? {}) };
     player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
     player.recruitTokens = Math.max(0, Math.floor(progress.recruitTokens ?? 0));
+    player.hasteStacks = sanitiseHasteStacks(progress.hasteStacks);
 
     // Roster — finalise each character: clamp its allocation to its level cap and
     // keep only strategy-loadout entries that are in the account's catalog.
@@ -733,6 +763,7 @@ export class PlayerManager {
         materials: player.materials,
         campaignsCompleted: player.campaignsCompleted,
         recruitTokens: player.recruitTokens,
+        hasteStacks: player.hasteStacks,
         // Legacy mirror of the active character's level/xp — kept so older code
         // paths / dashboards reading the flat fields still see sane values.
         xp: activeChar.xp,
@@ -849,6 +880,51 @@ export class PlayerManager {
     player.recruitTokens -= amount;
     this.persistProgress(socketId);
     return true;
+  }
+
+  // ── Study-to-Haste (§3) ──────────────────────────────────────────────────
+  /** Drop expired stacks; keep at most MAX_HASTE_STACKS most-recent. */
+  private pruneHaste(player: Player): HasteStack[] {
+    const now = Date.now();
+    player.hasteStacks = (player.hasteStacks ?? [])
+      .filter((s) => s.expiresAt > now)
+      .sort((a, b) => a.expiresAt - b.expiresAt)
+      .slice(-MAX_HASTE_STACKS);
+    return player.hasteStacks;
+  }
+
+  /** Current automated-battle interval + haste state for the account. */
+  getHaste(socketId: string): {
+    intervalMinutes: number; defaultMinutes: number; floorMinutes: number;
+    stacks: number; maxStacks: number; stackExpiries: number[];
+  } {
+    const player = this.players.get(socketId);
+    if (!player) {
+      return { intervalMinutes: HASTE_DEFAULT_MIN, defaultMinutes: HASTE_DEFAULT_MIN, floorMinutes: HASTE_FLOOR_MIN, stacks: 0, maxStacks: MAX_HASTE_STACKS, stackExpiries: [] };
+    }
+    const active = this.pruneHaste(player);
+    const reduction = active.reduce((s, st) => s + st.minutes, 0);
+    const intervalMinutes = Math.max(HASTE_FLOOR_MIN, Math.min(HASTE_DEFAULT_MIN, HASTE_DEFAULT_MIN - reduction));
+    return {
+      intervalMinutes, defaultMinutes: HASTE_DEFAULT_MIN, floorMinutes: HASTE_FLOOR_MIN,
+      stacks: active.length, maxStacks: MAX_HASTE_STACKS,
+      stackExpiries: active.map((s) => s.expiresAt),
+    };
+  }
+
+  /** Add a haste stack worth `minutes` reduction (score-scaled, clamped to
+   *  HASTE_STEP_MIN), lasting HASTE_DURATION_MS. Caps at MAX_HASTE_STACKS
+   *  (drops the oldest). Returns the new haste state. Persists. */
+  addHasteStack(socketId: string, minutes: number): ReturnType<PlayerManager['getHaste']> {
+    const player = this.players.get(socketId);
+    if (player) {
+      const m = Math.max(1, Math.min(HASTE_STEP_MIN, Math.round(minutes)));
+      this.pruneHaste(player);
+      player.hasteStacks.push({ expiresAt: Date.now() + HASTE_DURATION_MS, minutes: m });
+      this.pruneHaste(player); // re-cap to MAX_HASTE_STACKS
+      this.persistProgress(socketId);
+    }
+    return this.getHaste(socketId);
   }
 
   /** The player's adventure rank id (defaults if unknown). */

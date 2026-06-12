@@ -174,6 +174,7 @@ export function registerHandlers(
     playerManager,
     learningSessionManager,
     craftSessionManager,
+    studySessionManager,
     inventoryManager,
     chestManager,
   } = game;
@@ -353,6 +354,35 @@ export function registerHandlers(
     playerManager.persistProgress(socket.id);
     pushRoster();
     console.log(`[roster] ${player.username} recruited ${res.character.name} (${res.character.class})${cost > 0 ? ` for ${cost} token(s)` : ''}`);
+  });
+
+  // ── Study-to-Haste — the account-wide test that speeds up idle combat (§3) ──
+  const pushHaste = (): void => { socket.emit('haste:data', playerManager.getHaste(socket.id)); };
+
+  socket.on('haste:get', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    pushHaste();
+  });
+
+  socket.on('study:start', () => {
+    if (!requireJoinedPlayer('You must join before studying.')) return;
+    const res = studySessionManager.start(socket.id);
+    if ('error' in res) { socket.emit('error', { message: res.error }); return; }
+    socket.emit('study:started', { sessionId: res.session.sessionId, firstQuestion: res.firstQuestion });
+  });
+
+  socket.on('study:answer', (payload: { sessionId?: unknown; questionId?: unknown; answerIndex?: unknown }) => {
+    if (typeof payload?.sessionId !== 'string' || typeof payload?.questionId !== 'string' ||
+        !isSafeNumber(payload?.answerIndex, 0, 3)) {
+      socket.emit('error', { message: 'Invalid study answer payload.' });
+      return;
+    }
+    const result = studySessionManager.submitAnswer(
+      payload.sessionId, socket.id, payload.questionId, Math.floor(payload.answerIndex as number),
+    );
+    if ('error' in result) { socket.emit('error', { message: result.error }); return; }
+    socket.emit('study:answer_result', result);
+    if (result.sessionComplete) pushHaste(); // a passed test changed the interval
   });
 
   // ── stats:get — Character / Equipment screens request the stat breakdown ──

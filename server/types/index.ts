@@ -83,6 +83,18 @@ export interface Player {
   campaignsCompleted: number;
   /** Recruit Tokens (persisted, ACCOUNT-wide) — spent to recruit new characters. */
   recruitTokens: number;
+  /** Study-to-Haste stacks (persisted, ACCOUNT-wide). Each passed study test adds
+   *  one; they reduce the automated-battle interval and expire on rolling 3-day
+   *  clocks (see docs/CHARACTERS_DESIGN.md §3). */
+  hasteStacks: HasteStack[];
+}
+
+/** One Study-to-Haste stack: a timed interval reduction. */
+export interface HasteStack {
+  /** Unix ms when this stack expires (earned time + 3 days). */
+  expiresAt: number;
+  /** Minutes shaved off the automated-battle interval (score-scaled, ≤30). */
+  minutes: number;
 }
 
 // ---------------------------------------------------------------------------

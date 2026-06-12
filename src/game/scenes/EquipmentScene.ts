@@ -116,10 +116,12 @@ const SLOT_PLACEHOLDER: Record<SlotKey, string> = {
 
 /** Empty-slot placeholders that use a real RPG icon from the 'armor_icons'
  *  spritesheet (32×32, 18 cols → frame = row*18 + col) instead of an emoji.
- *  helm=(1,0) chest=(2,1) legs=(3,1) boots=(3,3). (Frame 40 was an empty/boot
- *  cell — it rendered as a broken helm; frame 1 is a clean plumed helm.) */
+ *  Frames are chosen to be CLEAN single pieces — the old helm/legs/boots frames
+ *  (1/21/57) landed on paired/blobby cells that read as broken/"disjointed".
+ *  helm=77 (skull helm) · chest=20 · legs=31 · boots=58 · rings=186 (the pack has
+ *  no literal ring, so a blue gem stands in for jewellery). */
 const SLOT_ICON_FRAME: Partial<Record<SlotKey, number>> = {
-  helm: 1, chest: 20, legs: 21, shoes: 57,
+  helm: 77, chest: 20, legs: 31, shoes: 58, ring1: 186, ring2: 186,
 }
 
 // Layout

@@ -38,7 +38,8 @@ import type {
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { EQUIPMENT_MAP, ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
-import { rollCombatDrops, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
   marketPrice,
@@ -418,31 +419,28 @@ export function registerHandlers(
     if (diff) {
       const dropLevel = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
       const campaignComplete = payload?.campaignComplete === true;
-      const drops = rollCombatDrops(dropLevel, diff, campaignComplete);
+      // Campaigns reward MATERIALS only (turned into gear at the crafting
+      // buildings) — never finished items. Server-authoritative.
+      const drops = rollMaterials(dropLevel, diff, campaignComplete);
       if (drops.length) {
-        for (const eq of drops) {
-          inventoryManager.addItem(socket.id, {
-            id: randomUUID(),
-            itemType: eq.id,            // eq_NNNN — EQUIPMENT_MAP supplies stats on equip
-            name: eq.name,
-            description: eq.description,
-            rarity: eq.rarity as ItemRarity,
-            stats: {},
-            quantity: 1,
-            stackable: false,
-            icon: eq.icon,
-          });
-        }
-        pushInventoryUpdate();
+        playerManager.grantMaterials(socket.id, drops);
+        playerManager.persistProgress(socket.id);
         console.log(
-          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}dropped ${drops.length}: ` +
-          drops.map((d) => `${d.name} [${d.rarity}]`).join(', '),
+          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}materials: ` +
+          drops.map((d) => `${MATERIALS[d.materialId]?.name ?? d.materialId} x${d.qty}`).join(', '),
         );
       }
+      // Reuse the existing reward-chip shape: name carries the quantity, and the
+      // chip rarity colours catalysts by their gate / base mats by tier.
+      const tierRarity = (t: number): string =>
+        t >= 7 ? 'legendary' : t >= 6 ? 'epic' : t >= 5 ? 'rare' : t >= 3 ? 'uncommon' : 'common';
       socket.emit('combat:loot', {
         campaignComplete,
-        // itemType (eq_NNNN) lets the client resolve attributes for inspection.
-        items: drops.map((d) => ({ name: d.name, icon: d.icon, rarity: d.rarity, itemType: d.id })),
+        items: drops.map((d) => {
+          const m = MATERIALS[d.materialId];
+          const rarity = m?.family === 'catalyst' ? (m.rarityGate ?? 'rare') : tierRarity(m?.tier ?? 1);
+          return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
+        }),
       });
     }
   });

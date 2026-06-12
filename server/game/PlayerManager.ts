@@ -181,6 +181,7 @@ export class PlayerManager {
       skillShards: 0,
       combatShards: 0,
       silver: 0,
+      materials: {},
       attributePoints: defaultAttributePoints(),
     };
 
@@ -275,6 +276,7 @@ export class PlayerManager {
     skillShards: number;
     combatShards: number;
     silver: number;
+    materials: Record<string, number>;
     attributePoints: Record<AttributeKey, number>;
   }> {
     try {
@@ -291,6 +293,7 @@ export class PlayerManager {
           skillShards: Math.max(0, doc.skillShards ?? 0),
           combatShards: Math.max(0, doc.combatShards ?? 0),
           silver: Math.max(0, doc.silver ?? 0),
+          materials: { ...((doc.materials as Record<string, number>) ?? {}) },
           attributePoints: normaliseAttributePoints(doc.attributePoints),
         };
       }
@@ -301,7 +304,7 @@ export class PlayerManager {
       xp: 0, level: 1,
       subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
-      skillShards: 0, combatShards: 0, silver: 0,
+      skillShards: 0, combatShards: 0, silver: 0, materials: {},
       attributePoints: defaultAttributePoints(),
     };
   }
@@ -323,6 +326,7 @@ export class PlayerManager {
       skillShards?: number;
       combatShards?: number;
       silver?: number;
+      materials?: Record<string, number>;
       attributePoints?: Record<AttributeKey, number>;
     },
   ): void {
@@ -348,6 +352,27 @@ export class PlayerManager {
     player.skillShards = Math.max(0, Math.floor(progress.skillShards ?? 0));
     player.combatShards = Math.max(0, Math.floor(progress.combatShards ?? 0));
     player.silver = Math.max(0, Math.floor(progress.silver ?? 0));
+    player.materials = { ...(progress.materials ?? {}) };
+  }
+
+  // -------------------------------------------------------------------------
+  // Crafting materials
+  // -------------------------------------------------------------------------
+
+  /** Current material counts for a player (material id → quantity). */
+  getMaterials(socketId: string): Record<string, number> {
+    return this.players.get(socketId)?.materials ?? {};
+  }
+
+  /** Add material drops to a player's stash. Returns false if unknown player. */
+  grantMaterials(socketId: string, drops: { materialId: string; qty: number }[]): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    for (const d of drops) {
+      if (d.qty <= 0) continue;
+      player.materials[d.materialId] = (player.materials[d.materialId] ?? 0) + Math.floor(d.qty);
+    }
+    return true;
   }
 
   /**
@@ -371,6 +396,7 @@ export class PlayerManager {
         skillShards: player.skillShards,
         combatShards: player.combatShards,
         silver: player.silver,
+        materials: player.materials,
         attributePoints: player.attributePoints,
       },
       { upsert: true, new: true },

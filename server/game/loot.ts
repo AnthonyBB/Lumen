@@ -13,6 +13,9 @@ import {
   type EquipmentItem,
   type Rarity,
 } from './data/equipmentGen.js';
+import {
+  METAL_BY_TIER, REAGENT_BY_TIER, CATALYST_BY_RARITY, MAX_TIER,
+} from './data/materials.js';
 
 // Keep these keys in sync with the client's DIFFICULTIES (src/game/data/mobs.ts).
 export type Difficulty = 'beginner' | 'easy' | 'medium' | 'hard' | 'expert';
@@ -108,6 +111,48 @@ export function rollCombatDrops(
   } else if (Math.random() < dropChance(level, difficulty)) {
     const it = pickItemOfRarity(pickRarity(difficulty));
     if (it) drops.push(it);
+  }
+
+  return drops;
+}
+
+// ── Material drops (the new campaign reward — see docs/CRAFTING_DESIGN.md) ─────
+
+export interface MaterialDrop {
+  materialId: string;
+  qty: number;
+}
+
+/** Base material tier by difficulty; nudged up by enemy level. */
+const BASE_TIER: Record<Difficulty, number> = {
+  beginner: 1, easy: 2, medium: 3, hard: 5, expert: 6,
+};
+
+/**
+ * Roll the materials a victory grants. Campaigns drop a batch of the
+ * difficulty-appropriate metal + reagent, plus a rarity-gated catalyst on the
+ * existing (difficulty-gated) rarity roll. Per-encounter wins drop a smaller,
+ * chance-based amount. No finished gear ever drops — only materials.
+ */
+export function rollMaterials(
+  level: number,
+  difficulty: Difficulty,
+  campaignComplete: boolean,
+): MaterialDrop[] {
+  const tier = Math.min(MAX_TIER, BASE_TIER[difficulty] + Math.floor(level / 30));
+  const drops: MaterialDrop[] = [];
+
+  if (campaignComplete) {
+    const batch = 2 + DIFF_IDX[difficulty]; // 2 (beginner) → 6 (expert)
+    drops.push({ materialId: METAL_BY_TIER[tier], qty: batch });
+    drops.push({ materialId: REAGENT_BY_TIER[tier], qty: batch });
+    const cat = CATALYST_BY_RARITY[pickRarity(difficulty)];
+    if (cat) drops.push({ materialId: cat, qty: 1 });
+  } else if (Math.random() < dropChance(level, difficulty)) {
+    const fam = Math.random() < 0.5 ? METAL_BY_TIER : REAGENT_BY_TIER;
+    drops.push({ materialId: fam[tier], qty: 1 + (Math.random() < 0.3 ? 1 : 0) });
+    const cat = CATALYST_BY_RARITY[pickRarity(difficulty)];
+    if (cat && Math.random() < 0.5) drops.push({ materialId: cat, qty: 1 });
   }
 
   return drops;

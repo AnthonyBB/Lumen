@@ -375,6 +375,34 @@ export class PlayerManager {
     return true;
   }
 
+  /** True when the player owns at least `qty` of every listed material. */
+  hasMaterials(socketId: string, costs: { materialId: string; qty: number }[]): boolean {
+    const owned = this.players.get(socketId)?.materials;
+    if (!owned) return false;
+    // Sum required per id first, so duplicate entries are handled correctly.
+    const need: Record<string, number> = {};
+    for (const c of costs) need[c.materialId] = (need[c.materialId] ?? 0) + Math.max(0, Math.floor(c.qty));
+    return Object.entries(need).every(([id, q]) => (owned[id] ?? 0) >= q);
+  }
+
+  /**
+   * Atomically remove material costs from a player's stash. Returns false (and
+   * changes nothing) unless every cost can be fully paid — callers rely on this
+   * all-or-nothing behaviour so a craft never half-consumes ingredients.
+   */
+  consumeMaterials(socketId: string, costs: { materialId: string; qty: number }[]): boolean {
+    const player = this.players.get(socketId);
+    if (!player || !this.hasMaterials(socketId, costs)) return false;
+    for (const c of costs) {
+      const q = Math.max(0, Math.floor(c.qty));
+      if (q <= 0) continue;
+      const left = (player.materials[c.materialId] ?? 0) - q;
+      if (left > 0) player.materials[c.materialId] = left;
+      else delete player.materials[c.materialId];
+    }
+    return true;
+  }
+
   /**
    * Fire-and-forget write of the player's current progress to MongoDB.
    * Uses the player's username as the stable userId key.

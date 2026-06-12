@@ -25,6 +25,8 @@ import type {
   LearningStartPayload,
   LearningAnswerPayload,
   LearningEndPayload,
+  CraftStartPayload,
+  CraftAnswerPayload,
   ShopBuySkillPayload,
   ShopBuyStrategyPayload,
   StrategySetLoadoutPayload,
@@ -148,6 +150,7 @@ export function registerHandlers(
   const {
     playerManager,
     learningSessionManager,
+    craftSessionManager,
     inventoryManager,
     chestManager,
   } = game;
@@ -640,6 +643,71 @@ export function registerHandlers(
     }
 
     learningSessionManager.endSession(payload.sessionId);
+  });
+
+  // ── craft:start ──────────────────────────────────────────────────────────
+  //
+  // Begin a Forge weapon craft: a short Math quiz that produces a weapon.
+  // Server-authoritative — the recipe, tier, catalyst and material ownership are
+  // all validated here; the client only ever receives answer text, never the
+  // correct index, and never the rolled item until materials are spent.
+  socket.on('craft:start', (payload: CraftStartPayload) => {
+    if (
+      typeof payload?.recipeId !== 'string' ||
+      !isSafeNumber(payload?.tier, 1, 7) ||
+      !(payload?.catalystId === null || typeof payload?.catalystId === 'string')
+    ) {
+      socket.emit('error', { message: 'Invalid craft start payload.' });
+      return;
+    }
+
+    const player = requireJoinedPlayer('You must join before crafting.');
+    if (!player) return;
+
+    const result = craftSessionManager.startCraft(
+      socket.id,
+      payload.recipeId,
+      payload.tier,
+      payload.catalystId,
+    );
+    if ('error' in result) {
+      socket.emit('error', { message: result.error });
+      return;
+    }
+
+    socket.emit('craft:session_started', {
+      sessionId: result.session.sessionId,
+      recipeId: result.session.recipe.id,
+      firstQuestion: result.firstQuestion,
+    });
+  });
+
+  // ── craft:answer ─────────────────────────────────────────────────────────
+  socket.on('craft:answer', (payload: CraftAnswerPayload) => {
+    if (
+      typeof payload?.sessionId !== 'string' ||
+      typeof payload?.questionId !== 'string' ||
+      !isSafeNumber(payload?.answerIndex, 0, 3)
+    ) {
+      socket.emit('error', { message: 'Invalid craft answer payload.' });
+      return;
+    }
+
+    const result = craftSessionManager.submitAnswer(
+      payload.sessionId,
+      socket.id,
+      payload.questionId,
+      payload.answerIndex,
+    );
+    if ('error' in result) {
+      socket.emit('error', { message: result.error });
+      return;
+    }
+
+    socket.emit('craft:answer_result', result);
+
+    // A finished craft mutated the bag + material stash — refresh the client.
+    if (result.sessionComplete) pushInventoryUpdate();
   });
 
   // ── chat:message ─────────────────────────────────────────────────────────

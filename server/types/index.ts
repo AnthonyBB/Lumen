@@ -188,6 +188,25 @@ export interface LearningEndPayload {
   sessionId: string;
 }
 
+// ── Crafting event payloads (Client → Server) ──────────────────────────────
+
+/** Payload for `craft:start` — begin a Forge weapon craft. */
+export interface CraftStartPayload {
+  /** Recipe id (see server/game/data/recipes.ts). */
+  recipeId: string;
+  /** Metal tier to spend (1..7) — sets the item-level band. */
+  tier: number;
+  /** Catalyst material id to spend, or null for a common item. */
+  catalystId: string | null;
+}
+
+/** Payload for `craft:answer` — answer the current craft-quiz question. */
+export interface CraftAnswerPayload {
+  sessionId: string;
+  questionId: string;
+  answerIndex: number;
+}
+
 // ── Shop event payloads (Client → Server) ──────────────────────────────────
 
 /** Payload for `shop:buy_skill` — only the skill id; everything else is validated server-side. */

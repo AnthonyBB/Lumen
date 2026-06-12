@@ -12,6 +12,7 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import { addLeaveButton } from '../ui/leaveButton'
 import { SKILL_TREES, type CombatSkill, type SkillTreeDef } from '../data/skillTrees'
 
 const COLOR_BG         = 0x0d0d1a
@@ -160,30 +161,18 @@ export class SkillShopScene extends Phaser.Scene {
     g.lineStyle(2, COLOR_BORDER, 1)
     g.lineBetween(0, PANEL_TOP - 4, GAME_WIDTH, PANEL_TOP - 4)
 
-    this.add.text(24, PANEL_TOP / 2, '🏋  COMBAT TRAINING — SKILL SHOP', {
+    // Title centred so the standard Leave button can own the top-left corner
+    // (consistent with the crafting buildings).
+    this.add.text(GAME_WIDTH / 2, PANEL_TOP / 2, '🏋  COMBAT TRAINING — SKILL SHOP', {
       fontSize: '22px', fontFamily: 'Georgia, serif',
       color: COLOR_TEXT_GOLD, fontStyle: 'bold',
-    }).setOrigin(0, 0.5).setDepth(6)
+    }).setOrigin(0.5, 0.5).setDepth(6)
 
-    this.headerBalanceText = this.add.text(GAME_WIDTH - 140, PANEL_TOP / 2, '🔷 Skill Shards:  …', {
+    this.headerBalanceText = this.add.text(GAME_WIDTH - 24, PANEL_TOP / 2, '🔷 Skill Shards:  …', {
       fontSize: '16px', fontFamily: 'Georgia, serif', color: '#66bbff', fontStyle: 'bold',
     }).setOrigin(1, 0.5).setDepth(6)
 
-    // ESC close button
-    const closeBtnX = GAME_WIDTH - 70
-    const closeBtnY = PANEL_TOP / 2
-    const closeBg = this.add.graphics().setDepth(6)
-    closeBg.fillStyle(0x2a0a0a, 1)
-    closeBg.fillRoundedRect(closeBtnX - 50, closeBtnY - 14, 100, 28, 6)
-    closeBg.lineStyle(1, 0xaa3333, 1)
-    closeBg.strokeRoundedRect(closeBtnX - 50, closeBtnY - 14, 100, 28, 6)
-
-    const closeText = this.add.text(closeBtnX, closeBtnY, 'ESC  Close', {
-      fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#cc6666',
-    }).setOrigin(0.5, 0.5).setDepth(7).setInteractive({ useHandCursor: true })
-    closeText.on('pointerover', () => closeText.setColor('#ff9999'))
-    closeText.on('pointerout',  () => closeText.setColor('#cc6666'))
-    closeText.on('pointerdown', () => this.closeScene())
+    addLeaveButton(this, () => this.closeScene())
   }
 
   // ── Left panel: 13 classes ─────────────────────────────────────────────────

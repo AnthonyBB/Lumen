@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { Player } from '../objects/Player'
+import { addLeaveButton } from '../ui/leaveButton'
 import type { CraftBuilding } from '../data/recipes'
 
 type CursorKeys = Phaser.Types.Input.Keyboard.CursorKeys
@@ -296,16 +297,7 @@ export class CraftBuildingScene extends Phaser.Scene {
   }
 
   private buildExitButton() {
-    const w = 150, h = 38, x = 24, y = 24
-    const btn = this.add.graphics().setDepth(40).setScrollFactor(0)
-    btn.fillStyle(0x000000, 0.6); btn.fillRoundedRect(x, y, w, h, 8)
-    btn.lineStyle(2, this.theme.accent, 1); btn.strokeRoundedRect(x, y, w, h, 8)
-    const label = this.add.text(x + w / 2, y + h / 2, '⟵ Leave (Esc)', {
-      fontSize: '15px', color: '#ffffff', fontStyle: 'bold',
-    }).setOrigin(0.5).setDepth(41).setScrollFactor(0).setInteractive({ useHandCursor: true })
-    label.on('pointerover', () => label.setColor('#ffd54f'))
-    label.on('pointerout', () => label.setColor('#ffffff'))
-    label.on('pointerdown', () => this.leave())
+    addLeaveButton(this, () => this.leave())
   }
 
   // ── Interaction ─────────────────────────────────────────────────────────────

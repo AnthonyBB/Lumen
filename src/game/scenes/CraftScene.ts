@@ -2,6 +2,7 @@ import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { recipesFor, type Recipe, type CraftBuilding } from '../data/recipes'
+import { addLeaveButton } from '../ui/leaveButton'
 import {
   MATERIALS, ladderFor, MAX_TIER, CATALYSTS, type Material,
 } from '../data/materials'
@@ -166,13 +167,8 @@ export class CraftScene extends Phaser.Scene {
     this.add.text(GAME_WIDTH / 2, 28, BUILDING_UI[this.building].title, {
       fontSize: '22px', color: '#ffcc80', fontStyle: 'bold',
     }).setOrigin(0.5)
-    // Clickable leave button (works in every state, independent of the keyboard).
-    const leave = this.add.text(24, 28, '✕  Leave  (ESC)', {
-      fontSize: '14px', color: '#ffccbc', fontStyle: 'bold',
-    }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true })
-    leave.on('pointerover', () => leave.setColor('#ffffff'))
-    leave.on('pointerout', () => leave.setColor('#ffccbc'))
-    leave.on('pointerdown', () => this.closeScene())
+    // Standard leave button (works in every state, independent of the keyboard).
+    addLeaveButton(this, () => this.closeScene())
   }
 
   // ── Rendering ───────────────────────────────────────────────────────────────

@@ -65,7 +65,8 @@ const xpForMob = (level: number) => 10 + level * 2
 
 /** Silver dropped per defeated enemy: scales with level × difficulty tier. */
 const SILVER_TIER_MULT: Record<Difficulty, number> = {
-  beginner: 1, easy: 1, medium: 1.5, hard: 2, expert: 2.5,
+  novice: 1, easy: 1, casual: 1.25, medium: 1.5, hard: 1.75,
+  veteran: 2, expert: 2.25, master: 2.5, elite: 2.75, legendary: 3,
 }
 const silverForMob = (level: number, difficulty: Difficulty) =>
   Math.max(1, Math.round(level * SILVER_TIER_MULT[difficulty]))
@@ -110,7 +111,8 @@ function toBattleSkill(cs: CombatSkill): Skill {
 
 // Sprite scale per difficulty (16px source tile → on-screen px)
 const MOB_SCALE: Record<string, number> = {
-  beginner: 4, easy: 4, medium: 4.5, hard: 5, expert: 5.5,
+  novice: 4, easy: 4, casual: 4.2, medium: 4.4, hard: 4.6,
+  veteran: 4.8, expert: 5, master: 5.2, elite: 5.4, legendary: 5.6,
 }
 
 // Layout zones

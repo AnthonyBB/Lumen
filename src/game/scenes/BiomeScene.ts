@@ -625,7 +625,10 @@ export class BiomeScene extends Phaser.Scene {
     // (campaignComplete=true) on the same event, so we ignore the per-encounter
     // ones — otherwise an (often empty) per-encounter emit would be consumed
     // here and the real campaign reward would be dropped.
-    const onLoot = (data: { campaignComplete?: boolean; items?: RewardItem[] }) => {
+    const onLoot = (data: {
+      campaignComplete?: boolean; items?: RewardItem[]
+      richVein?: boolean; catalystRarity?: string | null
+    }) => {
       if (!data?.campaignComplete) return
       socket?.off('combat:loot', onLoot)
       const items = data?.items ?? []
@@ -634,6 +637,8 @@ export class BiomeScene extends Phaser.Scene {
         fontSize: '13px', fontFamily: 'Georgia, serif', color: '#9be7ff',
       }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
       this.renderRewardChips(items, cx, cy + 14)
+      // Celebrate a rich vein or a rare+ catalyst with a banner + flash.
+      this.playRewardCelebration(!!data.richVein, data.catalystRarity ?? null, cx, cy - H / 2 - 16)
     }
     socket?.on('combat:loot', onLoot)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => socket?.off('combat:loot', onLoot))
@@ -652,6 +657,52 @@ export class BiomeScene extends Phaser.Scene {
 
   private static readonly REWARD_COLORS: Record<string, string> = {
     common: '#aaaaaa', uncommon: '#44cc44', rare: '#4488ff', epic: '#cc44ff', legendary: '#ffaa00',
+  }
+
+  private static readonly REWARD_COLOR_NUM: Record<string, number> = {
+    uncommon: 0x44cc44, rare: 0x4488ff, epic: 0xcc44ff, legendary: 0xffaa00,
+  }
+
+  /**
+   * Celebratory FX on the reward screen for a "rich vein" (doubled haul) or a
+   * rare+ catalyst: a pulsing banner above the panel, a coloured camera flash,
+   * a small shake, and a sprinkle of sparkles. Routine uncommon catalysts don't
+   * trigger it — only the genuinely exciting drops do.
+   */
+  private playRewardCelebration(richVein: boolean, catalystRarity: string | null, cx: number, bannerY: number) {
+    const lines: { text: string; color: string }[] = []
+    let flash = 0xffd54f
+    if (richVein) lines.push({ text: '✨  RICH VEIN!  ✨', color: '#ffd54f' })
+    const bigCatalyst = !!catalystRarity && ['rare', 'epic', 'legendary'].includes(catalystRarity)
+    if (bigCatalyst) {
+      const name = catalystRarity!.charAt(0).toUpperCase() + catalystRarity!.slice(1)
+      lines.push({ text: `✨  ${name} Catalyst!  ✨`, color: BiomeScene.REWARD_COLORS[catalystRarity!] ?? '#ffd54f' })
+      flash = BiomeScene.REWARD_COLOR_NUM[catalystRarity!] ?? flash
+    }
+    if (!lines.length) return
+
+    lines.forEach((ln, i) => {
+      const t = this.add.text(cx, bannerY - i * 28, ln.text, {
+        fontSize: '19px', fontFamily: 'Georgia, serif', color: ln.color, fontStyle: 'bold',
+        stroke: '#000000', strokeThickness: 3,
+      }).setOrigin(0.5, 0.5).setDepth(205).setScrollFactor(0)
+      this.tweens.add({ targets: t, scale: { from: 0.5, to: 1.1 }, duration: 380, ease: 'Back.out' })
+      this.tweens.add({ targets: t, alpha: { from: 0.55, to: 1 }, duration: 480, yoyo: true, repeat: 2, hold: 150 })
+    })
+
+    const r = (flash >> 16) & 255, g = (flash >> 8) & 255, b = flash & 255
+    this.cameras.main.flash(450, r, g, b)
+    this.cameras.main.shake(220, 0.004)
+
+    for (let i = 0; i < 9; i++) {
+      const sp = this.add.text(cx + Phaser.Math.Between(-170, 170), bannerY + 20, '✨', {
+        fontSize: '15px',
+      }).setOrigin(0.5).setDepth(204).setScrollFactor(0)
+      this.tweens.add({
+        targets: sp, y: sp.y + Phaser.Math.Between(50, 100), alpha: 0,
+        duration: 900, delay: i * 55, ease: 'Sine.out', onComplete: () => sp.destroy(),
+      })
+    }
   }
 
   /** Lay out the reward items as a centred, wrapping row of hoverable chips. */

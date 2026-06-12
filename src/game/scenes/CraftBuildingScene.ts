@@ -6,7 +6,13 @@ import type { CraftBuilding } from '../data/recipes'
 type CursorKeys = Phaser.Types.Input.Keyboard.CursorKeys
 type WASD = Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>
 
-interface Theme {
+/** Buildings that use this walk-in interior (craft buildings + service shops). */
+export type InteriorId = CraftBuilding | 'combat_training'
+
+/** Which workstation centrepiece the room draws. */
+type Station = 'anvil' | 'armorBench' | 'cauldron' | 'dummy'
+
+interface BuildingDef {
   title: string
   /** Floor checker colours. */
   floor: number
@@ -16,31 +22,45 @@ interface Theme {
   wallTrim: number
   /** Warm/cool accent used for lighting + the workstation. */
   accent: number
-  /** NPC texture key (loaded in BootScene) + display name + craft verb. */
+  /** NPC texture key (loaded in BootScene) + display name. */
   npcKey: string
   npcName: string
   /** Emoji decorations hung on the back wall. */
   wallProps: string[]
+  /** Centrepiece drawn for this building. */
+  station: Station
+  /** Scene the NPC opens (overlay), plus any data to pass it. */
+  open: { scene: string; data?: Record<string, unknown> }
 }
 
-const THEMES: Record<CraftBuilding, Theme> = {
+const DEFS: Record<InteriorId, BuildingDef> = {
   forge: {
     title: '🔥  The Forge',
     floor: 0x2b231d, floorAlt: 0x322a22, wall: 0x1c1611, wallTrim: 0x3a2a1c,
     accent: 0xff7a30, npcKey: 'npc_citizen3', npcName: 'Brann the Blacksmith',
     wallProps: ['🗡️', '⚔️', '🔨', '🔱'],
+    station: 'anvil', open: { scene: 'CraftScene', data: { building: 'forge' } },
   },
   armory: {
     title: '🛡️  The Armory',
     floor: 0x282b31, floorAlt: 0x2f323a, wall: 0x171a22, wallTrim: 0x2c313d,
     accent: 0x6fb7ff, npcKey: 'npc_citizen4', npcName: 'Sera the Armorer',
     wallProps: ['🛡️', '⛑️', '🧤', '🥾'],
+    station: 'armorBench', open: { scene: 'CraftScene', data: { building: 'armory' } },
   },
   alchemy: {
     title: '⚗️  The Alchemy Lab',
     floor: 0x1e2922, floorAlt: 0x24302a, wall: 0x132019, wallTrim: 0x274a38,
     accent: 0x66ffb0, npcKey: 'npc_citizen5', npcName: 'Mira the Alchemist',
     wallProps: ['❤️', '🔷', '💧', '🌿'],
+    station: 'cauldron', open: { scene: 'CraftScene', data: { building: 'alchemy' } },
+  },
+  combat_training: {
+    title: '⚔️  Combat Training',
+    floor: 0x2a2622, floorAlt: 0x312d28, wall: 0x1a1714, wallTrim: 0x3a3128,
+    accent: 0xffb74d, npcKey: 'npc_citizen1', npcName: 'Captain Doran',
+    wallProps: ['⚔️', '🛡️', '🏹', '🎯'],
+    station: 'dummy', open: { scene: 'SkillShopScene' },
   },
 }
 
@@ -48,16 +68,18 @@ const WALL_BAND = 96 // top wall height
 const BORDER = 28    // side/bottom stone border
 
 /**
- * A walk-in crafting building. The player enters a themed interior (Forge or
- * Armory) and walks up to the resident smith; pressing E by the smith opens the
- * crafting screen (CraftScene). ESC / the Exit button returns to town.
+ * A walk-in service building. The player enters a themed interior and walks up
+ * to the resident NPC; pressing E by them opens that building's screen (crafting
+ * for the smiths, the skill shop for the combat trainer). ESC / the Exit button
+ * returns to town.
  *
  * Launched as a full scene switch from WorldScene with { building, returnX,
- * returnY }, mirroring the Tavern.
+ * returnY }, mirroring the Tavern. The opened overlay is told to resume this
+ * scene on close (parentScene).
  */
 export class CraftBuildingScene extends Phaser.Scene {
-  private building: CraftBuilding = 'forge'
-  private theme: Theme = THEMES.forge
+  private building: InteriorId = 'forge'
+  private theme: BuildingDef = DEFS.forge
   private returnX = 0
   private returnY = 0
 
@@ -75,9 +97,9 @@ export class CraftBuildingScene extends Phaser.Scene {
     super({ key: 'CraftBuildingScene' })
   }
 
-  init(data: { building?: CraftBuilding; returnX?: number; returnY?: number }) {
+  init(data: { building?: InteriorId; returnX?: number; returnY?: number }) {
     this.building = data?.building ?? 'forge'
-    this.theme = THEMES[this.building]
+    this.theme = DEFS[this.building]
     this.returnX = data?.returnX ?? GAME_WIDTH / 2
     this.returnY = data?.returnY ?? GAME_HEIGHT / 2
   }
@@ -178,7 +200,7 @@ export class CraftBuildingScene extends Phaser.Scene {
     glow.fillStyle(t.accent, 0.12)
     glow.fillCircle(cx, benchY + 20, 170)
 
-    if (this.building === 'forge') {
+    if (this.theme.station === 'anvil') {
       // Furnace set into the back wall with a pulsing fire.
       const furnace = this.add.graphics().setDepth(3)
       furnace.fillStyle(0x120a06, 1)
@@ -197,7 +219,7 @@ export class CraftBuildingScene extends Phaser.Scene {
       anvil.fillRect(cx - 18, benchY - 10, 36, 18)        // waist
       anvil.fillStyle(0x3a3a42, 1)
       anvil.fillRect(cx - 56, benchY - 26, 112, 18)       // face + horn
-    } else if (this.building === 'armory') {
+    } else if (this.theme.station === 'armorBench') {
       // Armor bench + weapon rack on the back wall.
       const rack = this.add.graphics().setDepth(3)
       rack.fillStyle(0x14161d, 1)
@@ -213,7 +235,7 @@ export class CraftBuildingScene extends Phaser.Scene {
       bench.fillRect(cx - 60, benchY + 4, 120, 18)
       bench.fillStyle(0x363a45, 1)
       bench.fillRect(cx - 60, benchY - 8, 120, 12)
-    } else {
+    } else if (this.theme.station === 'cauldron') {
       // Shelves of reagents on the back wall.
       const shelf = this.add.graphics().setDepth(3)
       shelf.fillStyle(0x122019, 1)
@@ -236,6 +258,24 @@ export class CraftBuildingScene extends Phaser.Scene {
         const b = this.add.text(cx + dx, benchY, '∘', { fontSize: '16px', color: '#dfffe9' }).setOrigin(0.5).setDepth(17)
         this.tweens.add({ targets: b, y: benchY - 26, alpha: 0, duration: 1400, repeat: -1, delay: (dx + 14) * 80, ease: 'Sine.out' })
       }
+    } else {
+      // Combat training: a weapon rack on the wall + a straw training dummy.
+      const rack = this.add.graphics().setDepth(3)
+      rack.fillStyle(0x1d1813, 1)
+      rack.fillRoundedRect(cx - 80, WALL_BAND - 2, 160, 24, 5)
+      this.add.text(cx, WALL_BAND + 10, '⚔️ 🏹 🛡️', { fontSize: '18px' }).setOrigin(0.5).setDepth(4)
+
+      // Target dummies flanking the trainer.
+      for (const dx of [-160, 160]) {
+        this.add.text(cx + dx, benchY - 4, '🎯', { fontSize: '34px' }).setOrigin(0.5).setDepth(15)
+      }
+      // A straw practice dummy (post + cross-arm + sack head).
+      const dummy = this.add.graphics().setDepth(15)
+      dummy.fillStyle(0x6b4f2a, 1)
+      dummy.fillRect(cx - 6, benchY - 30, 12, 60)           // post
+      dummy.fillRect(cx - 34, benchY - 18, 68, 10)          // arms
+      dummy.fillStyle(0xc9a25a, 1)
+      dummy.fillCircle(cx, benchY - 34, 14)                 // straw head
     }
 
     // The smith / alchemist — stands behind the station, facing the player.
@@ -274,14 +314,15 @@ export class CraftBuildingScene extends Phaser.Scene {
     return Phaser.Math.Distance.Between(this.player.x, this.player.y, this.npc.x, this.npc.y) < 120
   }
 
-  private openCraft() {
+  private openShop() {
     this.player.setVelocity(0, 0)
     this.scene.pause()
-    this.scene.launch('CraftScene', { building: this.building, parentScene: this.scene.key })
-    // Scenes render in scene-list order; this interior is registered AFTER
-    // CraftScene, so without this the craft UI would draw underneath the (paused
+    const { scene, data } = this.theme.open
+    this.scene.launch(scene, { ...(data ?? {}), parentScene: this.scene.key })
+    // Scenes render in scene-list order and this interior may be registered AFTER
+    // the overlay, so without this the overlay could draw underneath the (paused
     // but still rendering) interior and look frozen. Force it to the top.
-    this.scene.bringToTop('CraftScene')
+    this.scene.bringToTop(scene)
   }
 
   private leave() {
@@ -300,7 +341,7 @@ export class CraftBuildingScene extends Phaser.Scene {
       this.prompt.setText(`Press E to talk to ${this.theme.npcName}`)
       this.npcRing.lineStyle(3, this.theme.accent, 0.9)
       this.npcRing.strokeEllipse(this.npc.x, this.npc.y + 24, 70, 28)
-      if (Phaser.Input.Keyboard.JustDown(this.eKey)) this.openCraft()
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) this.openShop()
     }
   }
 }

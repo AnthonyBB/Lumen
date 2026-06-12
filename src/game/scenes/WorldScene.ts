@@ -1078,8 +1078,11 @@ export class WorldScene extends Phaser.Scene {
         }
         if (nearBuilding.label === 'Combat Training') {
           this.player.setVelocity(0, 0)
-          this.scene.pause('WorldScene')
-          this.scene.launch('SkillShopScene')
+          this.scene.stop('UIScene')
+          this.scene.start('CraftBuildingScene', {
+            building: 'combat_training',
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Market') {

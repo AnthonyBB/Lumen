@@ -65,6 +65,13 @@ export class SkillShopScene extends Phaser.Scene {
     super({ key: 'SkillShopScene' })
   }
 
+  /** Scene to resume when this overlay closes (the building interior, or town). */
+  private parentScene = 'WorldScene'
+
+  init(data?: { parentScene?: string }) {
+    this.parentScene = data?.parentScene ?? 'WorldScene'
+  }
+
   create() {
     this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
     this.scrollOffset = 0
@@ -407,7 +414,7 @@ export class SkillShopScene extends Phaser.Scene {
   }
 
   private closeScene() {
-    this.scene.stop('SkillShopScene')
-    this.scene.resume('WorldScene')
+    this.scene.resume(this.parentScene)
+    this.scene.stop()
   }
 }

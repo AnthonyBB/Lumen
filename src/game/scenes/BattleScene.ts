@@ -230,9 +230,9 @@ export class BattleScene extends Phaser.Scene {
     this.showInitiativeBanner(playerFirst)
 
     if (playerFirst) {
-      this.setLog('Choose a skill, then select a target.')
+      this.setLog('Your move!')
       this.time.delayedCall(1100, () => {
-        if (this.phase === 'animating') this.phase = 'player_turn'
+        if (this.phase === 'animating') this.resumePlayerTurn()
       })
     } else {
       this.setLog('The enemy moves first — brace yourself!', '#ff8888')
@@ -594,6 +594,8 @@ export class BattleScene extends Phaser.Scene {
       g.lineBetween(-bw / 2 + 10, bh / 2, bw / 2 - 10, bh / 2)
     }
     draw(fillIdle, skill.color)
+    // Reflect the currently-armed skill when the panel is (re)built.
+    if (this.selectedSkill?.id === skill.id) draw(fillActive, skill.color)
 
     const icon = this.add.text(0, -12, skill.icon, { fontSize: '20px' }).setOrigin(0.5, 0.5)
     const name = this.add.text(0, 8, skill.name, {
@@ -780,6 +782,14 @@ export class BattleScene extends Phaser.Scene {
     if (s && !s.isHeal && s.mpCost <= this.playerMana && this.mobs.some(m => m.alive)) {
       this.phase = 'target_select'
       this.setLog(`${s.icon}  ${s.name} ready — click an enemy!`, '#ffdd88')
+      this.highlightAliveMobs(true)
+    } else if (this.mobs.some(m => m.alive)) {
+      // Convenience: default to the free basic Attack so the player can just
+      // click an enemy. They can still pick a different skill instead.
+      this.selectedSkill = BASIC_ATTACK
+      this.resetSkillButtons()
+      this.phase = 'target_select'
+      this.setLog(`${BASIC_ATTACK.icon}  ${BASIC_ATTACK.name} ready — click an enemy, or pick another skill.`, '#ffdd88')
       this.highlightAliveMobs(true)
     } else {
       this.selectedSkill = null

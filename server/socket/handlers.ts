@@ -1172,6 +1172,41 @@ export function registerHandlers(
     socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
   });
 
+  // ── item:delete ──────────────────────────────────────────────────────────
+  //
+  // Permanently discard an item. Server-authoritative: the item is removed from
+  // the player's OWN bag (no chestId) or their OWN chest (chestId given), then
+  // the refreshed state is pushed back. The whole stack is removed.
+  socket.on('item:delete', (payload: { itemId?: unknown; chestId?: unknown }) => {
+    if (typeof payload?.itemId !== 'string') {
+      socket.emit('error', { message: 'Invalid delete payload.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join before deleting items.')) return;
+
+    if (typeof payload.chestId === 'string') {
+      const chest = chestManager.getChest(payload.chestId);
+      if (!chest || chest.ownerId !== socket.id) {
+        socket.emit('error', { message: 'Chest not found or not yours.' });
+        return;
+      }
+      if (!chestManager.deleteFromChest(payload.chestId, socket.id, payload.itemId)) {
+        socket.emit('error', { message: 'That item is not in the chest.' });
+        return;
+      }
+      socket.emit('chest:updated', {
+        chest: chestManager.getChest(payload.chestId)!,
+        inventory: inventoryManager.getInventory(socket.id)!,
+      });
+    } else {
+      if (!inventoryManager.deleteItem(socket.id, payload.itemId)) {
+        socket.emit('error', { message: 'That item is not in your bag.' });
+        return;
+      }
+      pushInventoryUpdate();
+    }
+  });
+
   // ── Market ─────────────────────────────────────────────────────────────────
   //
   // Player-driven market.  Everything is server-authoritative: prices come from

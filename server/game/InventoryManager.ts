@@ -220,6 +220,20 @@ export class InventoryManager {
     return true;
   }
 
+  /**
+   * Permanently delete an item from a player's bag (the WHOLE stack), e.g. when
+   * the player chooses to discard it. Returns false if not found.
+   */
+  deleteItem(playerId: string, itemId: string): boolean {
+    const inv = this.inventories.get(playerId);
+    if (!inv) return false;
+    const idx = inv.items.findIndex((i) => i.id === itemId);
+    if (idx === -1) return false;
+    inv.items.splice(idx, 1);
+    this.persistInventory(playerId);
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Equipment
   // -------------------------------------------------------------------------

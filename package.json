@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "server:dev": "npx tsx watch server/index.ts",
-    "server:build": "tsc --project server/tsconfig.json"
+    "server:build": "tsc --project server/tsconfig.json",
+    "verify-user": "npx tsx server/scripts/verifyUser.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.17",

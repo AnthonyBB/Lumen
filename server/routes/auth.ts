@@ -27,6 +27,20 @@ const authLimiter = rateLimit({
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/**
+ * Dev-only escape hatch: skip the email-verification gate at login so a local
+ * tester doesn't have to fish the verification link out of the server log.
+ * HARD-gated on BOTH a non-production environment AND an explicit opt-in flag,
+ * so it can never be on by default and can never apply in production.
+ *   Enable locally:  NODE_ENV != "production"  +  DEV_SKIP_EMAIL_VERIFICATION=true
+ */
+function devSkipEmailVerification(): boolean {
+  return (
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DEV_SKIP_EMAIL_VERIFICATION === 'true'
+  )
+}
+
 function dbRequired(res: Response): boolean {
   if (!isDbConnected()) {
     res.status(503).json({ error: 'Database unavailable. Please try again later.' })
@@ -164,11 +178,19 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   }
 
   if (!user.emailVerified) {
-    res.status(403).json({
-      error: 'Please verify your email before logging in.',
-      unverified: true,
-    })
-    return
+    if (devSkipEmailVerification()) {
+      console.warn(
+        `[Auth] ⚠ DEV bypass — allowing UNVERIFIED login for ${user.email} ` +
+        `(DEV_SKIP_EMAIL_VERIFICATION=true, NODE_ENV=${process.env.NODE_ENV ?? 'undefined'}). ` +
+        'This must never be enabled in production.',
+      )
+    } else {
+      res.status(403).json({
+        error: 'Please verify your email before logging in.',
+        unverified: true,
+      })
+      return
+    }
   }
 
   user.lastLogin = new Date()

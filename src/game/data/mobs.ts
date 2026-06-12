@@ -77,7 +77,9 @@ export const TIER_LEVEL_BANDS: Record<MobTier, [number, number]> = {
 // This is the single source of truth for difficulty on the CLIENT. The server
 // keeps a matching (small) copy for loot scaling — keep the keys in sync (see
 // server/game/loot.ts).
-export type Difficulty = 'beginner' | 'easy' | 'medium' | 'hard' | 'expert'
+export type Difficulty =
+  | 'novice' | 'easy' | 'casual' | 'medium' | 'hard'
+  | 'veteran' | 'expert' | 'master' | 'elite' | 'legendary'
 
 export interface DifficultyConfig {
   key: Difficulty
@@ -97,15 +99,23 @@ export interface DifficultyConfig {
 }
 
 export const DIFFICULTIES: Record<Difficulty, DifficultyConfig> = {
-  beginner: { key: 'beginner', label: 'Beginner', pool: 'easy',   band: [1, 4],    count: [1, 2],  color: '#9be88a', colorNum: 0x9be88a, icon: '🌱' },
-  easy:     { key: 'easy',     label: 'Easy',     pool: 'easy',   band: [3, 12],   count: [2, 3],  color: '#88ff88', colorNum: 0x88ff88, icon: '🌿' },
-  medium:   { key: 'medium',   label: 'Medium',   pool: 'medium', band: [14, 35],  count: [3, 5],  color: '#ffcc44', colorNum: 0xffcc44, icon: '🔥' },
-  hard:     { key: 'hard',     label: 'Hard',     pool: 'hard',   band: [38, 65],  count: [5, 8],  color: '#ff6666', colorNum: 0xff6666, icon: '💀' },
-  expert:   { key: 'expert',   label: 'Expert',   pool: 'hard',   band: [68, 100], count: [7, 10], color: '#c98bff', colorNum: 0xc98bff, icon: '👑' },
+  novice:    { key: 'novice',    label: 'Novice',    pool: 'easy',   band: [1, 4],    count: [1, 2],  color: '#9be88a', colorNum: 0x9be88a, icon: '🌱' },
+  easy:      { key: 'easy',      label: 'Easy',      pool: 'easy',   band: [4, 11],   count: [2, 3],  color: '#88ff88', colorNum: 0x88ff88, icon: '🌿' },
+  casual:    { key: 'casual',    label: 'Casual',    pool: 'easy',   band: [10, 20],  count: [2, 4],  color: '#b6e84a', colorNum: 0xb6e84a, icon: '🍃' },
+  medium:    { key: 'medium',    label: 'Medium',    pool: 'medium', band: [18, 32],  count: [3, 5],  color: '#ffcc44', colorNum: 0xffcc44, icon: '🔥' },
+  hard:      { key: 'hard',      label: 'Hard',      pool: 'medium', band: [30, 46],  count: [4, 6],  color: '#ff9944', colorNum: 0xff9944, icon: '⚔️' },
+  veteran:   { key: 'veteran',   label: 'Veteran',   pool: 'hard',   band: [44, 60],  count: [5, 7],  color: '#ff6666', colorNum: 0xff6666, icon: '🛡️' },
+  expert:    { key: 'expert',    label: 'Expert',    pool: 'hard',   band: [58, 73],  count: [6, 8],  color: '#ff4d6d', colorNum: 0xff4d6d, icon: '💀' },
+  master:    { key: 'master',    label: 'Master',    pool: 'hard',   band: [71, 84],  count: [7, 9],  color: '#c98bff', colorNum: 0xc98bff, icon: '👑' },
+  elite:     { key: 'elite',     label: 'Elite',     pool: 'hard',   band: [82, 93],  count: [8, 10], color: '#9b6bff', colorNum: 0x9b6bff, icon: '✨' },
+  legendary: { key: 'legendary', label: 'Legendary', pool: 'hard',   band: [90, 100], count: [9, 12], color: '#ffd54f', colorNum: 0xffd54f, icon: '⭐' },
 }
 
 /** Difficulty keys ordered easiest → hardest (drives the campaign menu order). */
-export const DIFFICULTY_ORDER: Difficulty[] = ['beginner', 'easy', 'medium', 'hard', 'expert']
+export const DIFFICULTY_ORDER: Difficulty[] = [
+  'novice', 'easy', 'casual', 'medium', 'hard',
+  'veteran', 'expert', 'master', 'elite', 'legendary',
+]
 
 // ── Bestiary ────────────────────────────────────────────────────────────────
 

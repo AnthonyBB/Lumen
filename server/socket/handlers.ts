@@ -424,12 +424,12 @@ export function registerHandlers(
       const campaignComplete = payload?.campaignComplete === true;
       // Campaigns reward MATERIALS only (turned into gear at the crafting
       // buildings) — never finished items. Server-authoritative.
-      const drops = rollMaterials(dropLevel, diff, campaignComplete);
+      const { drops, richVein } = rollMaterials(dropLevel, diff, campaignComplete);
       if (drops.length) {
         playerManager.grantMaterials(socket.id, drops);
         playerManager.persistProgress(socket.id);
         console.log(
-          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}materials: ` +
+          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}${richVein ? '*RICH VEIN* ' : ''}materials: ` +
           drops.map((d) => `${MATERIALS[d.materialId]?.name ?? d.materialId} x${d.qty}`).join(', '),
         );
       }
@@ -442,6 +442,11 @@ export function registerHandlers(
         const rarity = m?.family === 'catalyst' ? (m.rarityGate ?? 'rare') : tierRarity(m?.tier ?? 1);
         return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
       });
+
+      // Highlights for the end-screen special effect: did a special catalyst drop,
+      // and at what rarity? (drives a celebratory FX on the reward screen).
+      const catalystDrop = drops.find((d) => MATERIALS[d.materialId]?.family === 'catalyst');
+      const catalystRarity = catalystDrop ? (MATERIALS[catalystDrop.materialId]?.rarityGate ?? null) : null;
 
       // ── Shard rewards (campaign completion only) ────────────────────────────
       // Shards used to come from the Learning Center; now they drop from clearing
@@ -472,7 +477,7 @@ export function registerHandlers(
         }
       }
 
-      socket.emit('combat:loot', { campaignComplete, items });
+      socket.emit('combat:loot', { campaignComplete, items, richVein, catalystRarity });
     }
   });
 

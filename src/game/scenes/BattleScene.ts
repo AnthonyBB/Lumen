@@ -65,7 +65,8 @@ const xpForMob = (level: number) => 10 + level * 2
 
 /** Silver dropped per defeated enemy: scales with level × difficulty tier. */
 const SILVER_TIER_MULT: Record<Difficulty, number> = {
-  beginner: 1, easy: 1, medium: 1.5, hard: 2, expert: 2.5,
+  novice: 1, easy: 1, casual: 1.25, medium: 1.5, hard: 1.75,
+  veteran: 2, expert: 2.25, master: 2.5, elite: 2.75, legendary: 3,
 }
 const silverForMob = (level: number, difficulty: Difficulty) =>
   Math.max(1, Math.round(level * SILVER_TIER_MULT[difficulty]))
@@ -110,7 +111,8 @@ function toBattleSkill(cs: CombatSkill): Skill {
 
 // Sprite scale per difficulty (16px source tile → on-screen px)
 const MOB_SCALE: Record<string, number> = {
-  beginner: 4, easy: 4, medium: 4.5, hard: 5, expert: 5.5,
+  novice: 4, easy: 4, casual: 4.2, medium: 4.4, hard: 4.6,
+  veteran: 4.8, expert: 5, master: 5.2, elite: 5.4, legendary: 5.6,
 }
 
 // Layout zones
@@ -228,9 +230,9 @@ export class BattleScene extends Phaser.Scene {
     this.showInitiativeBanner(playerFirst)
 
     if (playerFirst) {
-      this.setLog('Choose a skill, then select a target.')
+      this.setLog('Your move!')
       this.time.delayedCall(1100, () => {
-        if (this.phase === 'animating') this.phase = 'player_turn'
+        if (this.phase === 'animating') this.resumePlayerTurn()
       })
     } else {
       this.setLog('The enemy moves first — brace yourself!', '#ff8888')
@@ -592,6 +594,8 @@ export class BattleScene extends Phaser.Scene {
       g.lineBetween(-bw / 2 + 10, bh / 2, bw / 2 - 10, bh / 2)
     }
     draw(fillIdle, skill.color)
+    // Reflect the currently-armed skill when the panel is (re)built.
+    if (this.selectedSkill?.id === skill.id) draw(fillActive, skill.color)
 
     const icon = this.add.text(0, -12, skill.icon, { fontSize: '20px' }).setOrigin(0.5, 0.5)
     const name = this.add.text(0, 8, skill.name, {
@@ -778,6 +782,14 @@ export class BattleScene extends Phaser.Scene {
     if (s && !s.isHeal && s.mpCost <= this.playerMana && this.mobs.some(m => m.alive)) {
       this.phase = 'target_select'
       this.setLog(`${s.icon}  ${s.name} ready — click an enemy!`, '#ffdd88')
+      this.highlightAliveMobs(true)
+    } else if (this.mobs.some(m => m.alive)) {
+      // Convenience: default to the free basic Attack so the player can just
+      // click an enemy. They can still pick a different skill instead.
+      this.selectedSkill = BASIC_ATTACK
+      this.resetSkillButtons()
+      this.phase = 'target_select'
+      this.setLog(`${BASIC_ATTACK.icon}  ${BASIC_ATTACK.name} ready — click an enemy, or pick another skill.`, '#ffdd88')
       this.highlightAliveMobs(true)
     } else {
       this.selectedSkill = null

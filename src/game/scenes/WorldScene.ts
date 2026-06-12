@@ -834,7 +834,7 @@ export class WorldScene extends Phaser.Scene {
       ?? ['Beginner Area', 'Easy Area', 'Medium Area', 'Hard Area', 'Expert Area']
 
     const panelW = 420
-    const panelH = 420
+    const panelH = 600
     const cam = this.cameras.main
     const cx = cam.scrollX + GAME_WIDTH / 2
     const cy = cam.scrollY + GAME_HEIGHT / 2
@@ -866,14 +866,16 @@ export class WorldScene extends Phaser.Scene {
     divider.lineBetween(-panelW / 2 + 20, -panelH / 2 + 52, panelW / 2 - 20, -panelH / 2 + 52)
     container.add(divider)
 
-    // Difficulty buttons — one per mode, easiest → hardest, names + accents
-    // pulled from the shared DIFFICULTIES config.
-    const firstY = -118
-    const stepY = 52
+    // Difficulty buttons — one per mode, easiest → hardest, accents + level
+    // bands pulled from the shared DIFFICULTIES config. Per-biome flavour names
+    // only exist for the first few modes, so fall back to the difficulty label.
+    const firstY = -210
+    const stepY = 44
     DIFFICULTY_ORDER.forEach((diff, i) => {
       const cfg = DIFFICULTIES[diff]
+      const loc = locations[i] ?? cfg.label
       this.createBiomeButton(
-        container, cfg.icon, locations[i], diff, biomeName, firstY + i * stepY, color,
+        container, cfg.icon, loc, diff, biomeName, firstY + i * stepY, color,
       )
     })
 
@@ -911,7 +913,7 @@ export class WorldScene extends Phaser.Scene {
     borderColor: number
   ) {
     const bw = 360
-    const bh = 42
+    const bh = 38
     const by = yOffset - bh / 2
 
     const btnBg = this.add.graphics()
@@ -921,21 +923,21 @@ export class WorldScene extends Phaser.Scene {
     btnBg.strokeRoundedRect(-bw / 2, by, bw, bh, 8)
     container.add(btnBg)
 
-    const diffColor = DIFFICULTIES[difficulty].color
-    const diffLabel = DIFFICULTIES[difficulty].label
+    const cfg = DIFFICULTIES[difficulty]
 
-    const btnText = this.add.text(-bw / 2 + 16, yOffset, `${icon} ${locationName}`, {
+    const btnText = this.add.text(-bw / 2 + 16, yOffset, `${icon} ${cfg.label}`, {
       fontSize: '15px',
       fontFamily: 'Georgia, serif',
-      color: '#dddddd',
+      color: cfg.color,
+      fontStyle: 'bold',
     })
     btnText.setOrigin(0, 0.5)
     container.add(btnText)
 
-    const diffText = this.add.text(bw / 2 - 16, yOffset, `— ${diffLabel}`, {
-      fontSize: '13px',
+    const diffText = this.add.text(bw / 2 - 16, yOffset, `Lv ${cfg.band[0]}–${cfg.band[1]}`, {
+      fontSize: '12px',
       fontFamily: 'Arial, sans-serif',
-      color: diffColor,
+      color: '#9aa0c0',
     })
     diffText.setOrigin(1, 0.5)
     container.add(diffText)

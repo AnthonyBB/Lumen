@@ -23,7 +23,7 @@ I am a highly educated game designer and software engineer with an interest in m
 
 # Architecture & Security (anti-cheat)
 
-The server is **authoritative for everything that can be cheated** — XP, level, stats, inventory, equipment, crafting materials, shards, silver, loot, and quiz answers. The client only *requests* mutations and *renders* what the server pushes.
+The server is **authoritative for everything that can be cheated** — XP, level, stats, inventory, equipment, crafting materials, shards, silver, loot, and quiz answers. The client only _requests_ mutations and _renders_ what the server pushes.
 
 - A question's `correctIndex` is **never sent to the client** before validation; quizzes are scored server-side.
 - Crafted gear is **rolled server-side** and the item carries its own `attributes`/`equipSlot`/`xpRequired` on the persisted instance — those fields are the authoritative stat source and the client never sets them.
@@ -51,8 +51,7 @@ The server is **authoritative for everything that can be cheated** — XP, level
 
 # Conventions & Gotchas
 
-- **Licensed art is git-ignored and must NEVER be committed:** `graphics/`, `public/assets/craftpix/`, `public/assets/icons/` (CraftPix/Kenney packs). Never commit `.claude/settings.local.json` either.
 - **Emoji:** my Windows 10 machine lacks emoji newer than ~2015 (they render as empty boxes). Use older emoji or drawn Phaser textures for in-game glyphs.
 - **Verifying changes:** the game is login-gated, so default to typechecking. A dev-only, hard-gated login bypass exists for local testing (`DEV_AUTH_BYPASS` / `DEV_SKIP_EMAIL_VERIFICATION`, plus `npm run verify-user`) — see the Rules reminder about stripping dev/no-password logic before shipping.
-- **Phaser scene patterns:** scenes render in their config-list order; an overlay launched over a *paused* parent must `bringToTop` (or it draws underneath and looks frozen), and must `resume` the scene that launched it on close (`parentScene`), not always `WorldScene`.
+- **Phaser scene patterns:** scenes render in their config-list order; an overlay launched over a _paused_ parent must `bringToTop` (or it draws underneath and looks frozen), and must `resume` the scene that launched it on close (`parentScene`), not always `WorldScene`.
 - **Git:** only commit when I ask; branch off `master`; end commit messages with the `Co-Authored-By: Claude` trailer.

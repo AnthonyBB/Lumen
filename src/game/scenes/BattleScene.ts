@@ -1025,12 +1025,18 @@ export class BattleScene extends Phaser.Scene {
       difficulty: this.battleData.difficulty,
       level: repLevel,
     })
-    socket?.once('combat:loot', (data: { items?: { name: string; icon: string; rarity: string }[] }) => {
+    const onLoot = (data: { campaignComplete?: boolean; items?: { name: string; icon: string; rarity: string }[] }) => {
+      // The campaign reward belongs to BiomeScene's victory screen — ignore it
+      // here so this listener never consumes it out from under that screen.
+      if (data?.campaignComplete) return
+      socket?.off('combat:loot', onLoot)
       const items = data?.items ?? []
       if (!items.length || !this.scene.isActive()) return
       const txt = items.map(it => `${it.icon} ${it.name}`).join(', ')
       this.setLog(`💎  Loot: ${txt}!  (+${this.xpGained} XP)`, '#9be7ff')
-    })
+    }
+    socket?.on('combat:loot', onLoot)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => socket?.off('combat:loot', onLoot))
 
     this.cameras.main.flash(600, 1, 0.84, 0)
     this.setLog(`⚔  All enemies defeated!  +${this.xpGained} XP  ·  +${this.silverGained} silver!`, '#ffd700')

@@ -615,16 +615,23 @@ export class BiomeScene extends Phaser.Scene {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#44ffaa', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
-    // Reward area — filled when combat:loot arrives. Each item is a hoverable
-    // chip; hovering shows a tooltip with its full stats.
-    socket?.once('combat:loot', (data: { items?: RewardItem[] }) => {
+    // Reward area — filled when the CAMPAIGN combat:loot arrives. The server
+    // tags per-encounter loot (campaignComplete=false) and campaign loot
+    // (campaignComplete=true) on the same event, so we ignore the per-encounter
+    // ones — otherwise an (often empty) per-encounter emit would be consumed
+    // here and the real campaign reward would be dropped.
+    const onLoot = (data: { campaignComplete?: boolean; items?: RewardItem[] }) => {
+      if (!data?.campaignComplete) return
+      socket?.off('combat:loot', onLoot)
       const items = data?.items ?? []
       if (!items.length || !this.scene.isActive()) return
       this.add.text(cx, cy - 24, '💎  Reward  —  hover an item to inspect its stats', {
         fontSize: '13px', fontFamily: 'Georgia, serif', color: '#9be7ff',
       }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
       this.renderRewardChips(items, cx, cy + 14)
-    })
+    }
+    socket?.on('combat:loot', onLoot)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => socket?.off('combat:loot', onLoot))
 
     this.cameras.main.flash(700, 255, 215, 0)
 

@@ -219,6 +219,45 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
 })
 
 // ---------------------------------------------------------------------------
+// POST /api/auth/dev-login  (DEV ONLY — no password)
+// Issues a JWT for a named user WITHOUT credentials, so a local tester (or an
+// automated agent that won't type passwords) can get a session. Hard-gated:
+// returns 404 unless NODE_ENV != "production" AND DEV_AUTH_BYPASS=true, so it is
+// completely invisible in any normal/production deployment.
+// ---------------------------------------------------------------------------
+
+router.post('/dev-login', async (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === 'production' || process.env.DEV_AUTH_BYPASS !== 'true') {
+    res.status(404).json({ error: 'Not found.' })
+    return
+  }
+
+  const username =
+    (typeof req.body?.username === 'string' && req.body.username.trim()) || 'claude'
+  console.warn(
+    `[Auth] ⚠ DEV-LOGIN issuing a credential-less token for "${username}". ` +
+    'This endpoint must never be enabled in production.',
+  )
+
+  // Prefer the real account (preserves its ageGroup/contentMode) if the DB has
+  // one; otherwise mint a synthetic adult identity so nothing gates gameplay.
+  let userId = `dev:${username}`
+  let ageGroup: 'child' | 'teen' | 'adult' = 'adult'
+  let contentMode: 'child' | 'adolescent' | null = 'adolescent'
+  if (isDbConnected()) {
+    const user = await User.findOne({ username })
+    if (user) {
+      userId = user._id.toString()
+      ageGroup = user.ageGroup
+      contentMode = user.contentMode ?? 'adolescent'
+    }
+  }
+
+  const token = signToken({ userId, username, ageGroup, contentMode })
+  res.json({ token, user: { username, ageGroup, contentMode } })
+})
+
+// ---------------------------------------------------------------------------
 // GET /api/auth/verify-email?token=xxx
 // ---------------------------------------------------------------------------
 

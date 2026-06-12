@@ -4,10 +4,11 @@
 // and offers a few pages of kid-friendly guidance.
 //
 // Positions are world coordinates near each NPC's building in the
-// spread-out town (buildings: Learning Center 895,1010 ·
-// Tavern 1395,870 · Combat Training 1780,1150 · Market 935,1575 ·
-// Combat Strategy 1715,1610 · well/plaza ~1280,1280). Each guide
-// stands on the plaza-facing side of the building they describe.
+// spread-out town (buildings: Armory 895,1010 · Tavern 1395,870 ·
+// Combat Training 1780,1150 · Market 935,1575 · Combat Strategy
+// 1715,1610 · The Forge 1290,1700 · Alchemy Lab 620,1640 ·
+// well/plaza ~1280,1280). Each guide stands in front of the
+// building they describe.
 // ============================================================
 
 export interface NpcDef {
@@ -62,15 +63,36 @@ export const TOWN_NPCS: NpcDef[] = [
     ],
   },
   {
-    id: 'scholar',
-    name: 'Mira the Scholar',
-    x: 1035, y: 1190,
+    id: 'guide_forge',
+    name: 'Apprentice Finn',
+    x: 1410, y: 1800,
     sprite: 'npc_citizen2',
     lines: [
-      'Never stop learning! Head into the Learning Center and answer questions to grow.',
-      'Each quiz you complete earns you a Skill Shard 🔷. Take those to the Combat Training hall to learn new skills and spells for battle.',
-      'Master an entire topic and you\'ll earn a Combat Shard 🔶. Spend those at the Combat Strategy Hall to learn clever battle strategies.',
-      'The more you study, the more shards you earn — and the stronger your hero becomes. Knowledge is power here, quite literally!',
+      'This is the Forge! Step inside and Brann the Blacksmith will help you craft weapons by answering Math questions.',
+      'Bring metal you gathered on your adventures, pick a weapon, then choose a metal tier — higher tiers forge mightier weapons.',
+      'Add a sparkling catalyst to aim for a rarer weapon. The better you answer the quiz, the finer the blade you\'ll make!',
+    ],
+  },
+  {
+    id: 'guide_armory',
+    name: 'Squire Bryn',
+    x: 1020, y: 1120,
+    sprite: 'npc_citizen3',
+    lines: [
+      'Welcome to the Armory! Inside, Sera the Armorer forges armor — and here the questions are all about Science.',
+      'Spend metal to craft helmets, chestplates, greaves and more. The metal\'s tier decides how sturdy the armor turns out.',
+      'A catalyst unlocks rarer armor, but you must answer enough questions correctly to claim it. Study hard and stay protected!',
+    ],
+  },
+  {
+    id: 'guide_alchemy',
+    name: 'Herbalist Posy',
+    x: 745, y: 1745,
+    sprite: 'npc_citizen5',
+    lines: [
+      'Step into the Alchemy Lab! Mira the Alchemist brews potions, and you\'ll answer Science questions to help her.',
+      'Potions use reagents — the leaves and blooms you gather — instead of metal. Higher-tier reagents brew stronger potions.',
+      'Brew Healing, Mana or Rejuvenation potions to carry into battle. Answer perfectly and you\'ll even bottle an extra dose!',
     ],
   },
   {

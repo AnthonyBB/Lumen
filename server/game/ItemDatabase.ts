@@ -10,7 +10,7 @@
 
 import type { InventoryItem, ItemRarity, EquipmentSlotKey, ItemStats } from '../types/index.js';
 import { randomUUID } from 'crypto';
-import { ALL_EQUIPMENT, EQUIPMENT_MAP, type EquipSlot } from './data/equipmentGen.js';
+import { rollCraftedItem, type EquipSlot, type SkillClass } from './data/equipmentGen.js';
 
 // ---------------------------------------------------------------------------
 // Item template (no runtime UUID yet — IDs are stamped at creation time)
@@ -212,55 +212,35 @@ const GEN_SLOT_TO_KEY: Record<EquipSlot, EquipmentSlotKey> = {
   amulet: 'necklace',
 };
 
-const CORE_ATTRS = new Set(['strength', 'constitution', 'dexterity', 'intelligence', 'spirit']);
-
 /**
- * The ids of ~3 generated starter items — picked deterministically from the
- * generated catalogue: the first zero-xp items (no XP gate) that carry at least
- * one core attribute bonus, each in a distinct equipment slot so the attribute
- * boosts are immediately visible across the paper doll.
+ * A small starter kit, ROLLED fresh per account (common, tier 1) the same way
+ * crafted gear is — so a brand-new hero isn't naked before their first campaign.
+ * The rolled attributes/slot live on each item instance (authoritative stats).
  */
-function pickGeneratedStarterIds(): string[] {
-  const ids: string[] = [];
-  const usedSlots = new Set<EquipSlot>();
-  for (const item of ALL_EQUIPMENT) {
-    if (item.xpRequired > 0) continue;
-    if (!item.attributes.some((a) => CORE_ATTRS.has(a.type))) continue;
-    if (usedSlots.has(item.slot)) continue;
-    usedSlots.add(item.slot);
-    ids.push(item.id);
-    if (ids.length >= 3) break;
-  }
-  return ids;
-}
+const STARTER_SPEC: { slot: EquipSlot; cls: SkillClass | null }[] = [
+  { slot: 'weapon', cls: 'sword' },
+  { slot: 'chest', cls: null },
+  { slot: 'helmet', cls: null },
+];
 
-const GENERATED_STARTER_IDS = pickGeneratedStarterIds();
-
-/**
- * Instantiate the generated starter equipment items (with fresh UUIDs).  A
- * generated item's stable itemType IS its catalogue id (eq_NNNN), which is how
- * EQUIPMENT_MAP lookups in the equip handler and stat computation resolve it.
- */
 export function getGeneratedStarterItems(): InventoryItem[] {
-  const out: InventoryItem[] = [];
-  for (const id of GENERATED_STARTER_IDS) {
-    const gen = EQUIPMENT_MAP[id];
-    if (!gen) continue;
-    out.push({
+  return STARTER_SPEC.map(({ slot, cls }) => {
+    const rolled = rollCraftedItem({ slot, cls, rarity: 'common', tier: 1, quizQuality: 1 });
+    return {
       id: randomUUID(),
-      itemType: gen.id,
-      name: gen.name,
-      description: gen.description,
-      rarity: gen.rarity,
-      // Legacy ItemStats shape stays empty — generated bonuses live in
-      // EQUIPMENT_MAP and are read server-side during stat computation.
+      itemType: `gear_${slot}`,
+      name: rolled.name,
+      description: rolled.description,
+      rarity: rolled.rarity,
       stats: {},
       quantity: 1,
       stackable: false,
-      icon: gen.icon,
-    });
-  }
-  return out;
+      icon: rolled.icon,
+      equipSlot: rolled.slot,
+      attributes: rolled.attributes,
+      xpRequired: rolled.xpRequired,
+    };
+  });
 }
 
 /** The slot a generated starter item would occupy (for callers that need it). */

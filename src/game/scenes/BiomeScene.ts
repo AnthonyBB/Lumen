@@ -27,8 +27,10 @@ import {
   RL_ROCKS_BROWN, RL_ROCKS_BROWN_MOSS, RL_ROCKS_GRAY, RL_ROCKS_GRAY_MOSS, RL_ROCKS_WATER,
   TD_MONSTERS,
   CPD_BLADES, CPD_SPECKS, CPD_TUFTS, CPD_MOUNDS,
+  ROAD, ROAD_GRASS_TINT,
 } from '../data/tileFrames'
 import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
+import { StatsStore } from '../systems/StatsStore'
 
 // ── World dimensions ────────────────────────────────────────────────────────
 
@@ -36,6 +38,14 @@ const WORLD_W = 3840   // 3 × GAME_WIDTH
 const WORLD_H = 2160   // 3 × GAME_HEIGHT
 
 // ── Scene data ──────────────────────────────────────────────────────────────
+
+/** A campaign reward item as pushed by the server's `combat:loot`. */
+interface RewardItem {
+  name: string
+  icon: string
+  rarity: string
+  itemType?: string   // eq_NNNN — resolves attributes via EQUIPMENT_MAP
+}
 
 interface BiomeSceneData {
   biome: string
@@ -64,16 +74,24 @@ type PathState = 'idle' | 'walking' | 'encounter_pause' | 'complete'
 
 const WALK_SPEED = 180  // world-px per second
 
-// S-curve waypoints as fractions of world size
+// Winding waypoints as fractions of world size. Kept close together with a
+// gentle left/right sway (fx ≈ 0.44–0.56) so each right-angle leg stays short —
+// the trail reads as a continuously winding path rather than long straight
+// "corridor" legs. Still exactly 3 encounters, so the campaign is unchanged.
 const WP_DEFS: { fx: number; fy: number; type: PathNode['type'] }[] = [
-  { fx: 0.50, fy: 0.94, type: 'start'     },
-  { fx: 0.28, fy: 0.74, type: 'walk'      },
-  { fx: 0.55, fy: 0.55, type: 'encounter' },
-  { fx: 0.78, fy: 0.38, type: 'walk'      },
-  { fx: 0.45, fy: 0.22, type: 'encounter' },
-  { fx: 0.22, fy: 0.10, type: 'walk'      },
-  { fx: 0.55, fy: 0.04, type: 'encounter' },
-  { fx: 0.55, fy: 0.04, type: 'end'       },
+  { fx: 0.50, fy: 0.95, type: 'start'     },
+  { fx: 0.44, fy: 0.88, type: 'walk'      },
+  { fx: 0.55, fy: 0.81, type: 'walk'      },
+  { fx: 0.45, fy: 0.74, type: 'encounter' },
+  { fx: 0.56, fy: 0.66, type: 'walk'      },
+  { fx: 0.45, fy: 0.59, type: 'walk'      },
+  { fx: 0.55, fy: 0.51, type: 'encounter' },
+  { fx: 0.45, fy: 0.43, type: 'walk'      },
+  { fx: 0.55, fy: 0.35, type: 'walk'      },
+  { fx: 0.46, fy: 0.27, type: 'walk'      },
+  { fx: 0.55, fy: 0.18, type: 'encounter' },
+  { fx: 0.49, fy: 0.10, type: 'walk'      },
+  { fx: 0.50, fy: 0.04, type: 'end'       },
 ]
 
 // ── BiomeScene ─────────────────────────────────────────────────────────────
@@ -85,9 +103,11 @@ export class BiomeScene extends Phaser.Scene {
   private pathState: PathState = 'idle'
   private playerHp = 100
   private playerMaxHp = 100
+  private healthRegen = 0   // HP restored between battles (scales off Constitution)
   private encountersCleared = 0
   private totalXpGained = 0
   private maxEnemyLevel = 1   // highest enemy level faced — scales the campaign reward
+  private rewardTooltip: Phaser.GameObjects.Container | null = null
   private rng!: Phaser.Math.RandomDataGenerator
 
   private playerSprite!: Phaser.GameObjects.Sprite
@@ -117,6 +137,7 @@ export class BiomeScene extends Phaser.Scene {
       (this.registry.get('hp') as number) ?? this.playerMaxHp,
       this.playerMaxHp,
     )
+    this.healthRegen = StatsStore.get()?.derived.find(r => r.key === 'healthRegen')?.total ?? 0
 
     // World bounds & camera
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H)
@@ -218,14 +239,57 @@ export class BiomeScene extends Phaser.Scene {
       }
       return node
     })
+
+    // Bend each diagonal leg into a right angle by inserting a corner node, so
+    // the path reads as straight axis-aligned segments (which the road pack
+    // autotiles cleanly) while staying winding.  The auto-walker follows the
+    // corners, so movement still tracks the drawn road.  The corner is always
+    // placed VERTICAL-first: because the campaign climbs upward toward the
+    // enemies, walking the vertical leg first always heads TOWARD the next
+    // encounter, then a short horizontal leg aligns onto the node — instead of
+    // randomly wandering sideways (sometimes away from the mobs) first.
+    this.pathNodes = this.insertPathCorners(this.pathNodes)
   }
 
+  /** Insert an axis-aligned corner between any two diagonally-offset nodes,
+   *  always vertical-first so the walker advances toward the next node first. */
+  private insertPathCorners(nodes: PathNode[]): PathNode[] {
+    const out: PathNode[] = []
+    for (let i = 0; i < nodes.length; i++) {
+      out.push(nodes[i])
+      const a = nodes[i]
+      const b = nodes[i + 1]
+      if (!b) break
+      if (a.x === b.x || a.y === b.y) continue   // already straight — no corner
+      // Corner shares a.x then b.y → walk the vertical (toward-the-enemy) leg
+      // first, then the horizontal alignment leg.
+      out.push({
+        x: a.x,
+        y: b.y,
+        type: 'walk', cleared: false,
+        markerGfx: null, markerLabel: null, markerSprite: null,
+      })
+    }
+    return out
+  }
+
+  // Path grid: 48px cells (16px tile × 3); a 3-cell-wide road is ~144px across,
+  // comfortably wider than the 2× player sprite.
+  private static readonly PATH_CELL = 48
+  private static readonly PATH_HALF = 1
+
   private drawPath() {
-    for (let i = 0; i < this.pathNodes.length - 1; i++) {
-      const a = this.pathNodes[i]
-      const b = this.pathNodes[i + 1]
-      if (a.x === b.x && a.y === b.y) continue
-      this.drawPathBetweenWaypoints(a.x, a.y, b.x, b.y)
+    const mask = this.buildPathMask()
+    if (this.textures.exists('road_body')) {
+      const rt = this.add.renderTexture(0, 0, WORLD_W, WORLD_H).setOrigin(0).setDepth(2)
+      this.renderRoads(rt, mask)
+    } else {
+      // Fallback: stamp plain dirt tiles along the mask if the road pack is absent.
+      const CELL = BiomeScene.PATH_CELL
+      mask.forEach((row, r) => row.forEach((on, c) => {
+        if (on) this.add.image(c * CELL + CELL / 2, r * CELL + CELL / 2, 'roguelike',
+          (c + r) % 3 === 0 ? RL_DIRT2 : RL_DIRT).setScale(4).setDepth(2)
+      }))
     }
 
     this.pathNodes.forEach((node, i) => {
@@ -234,15 +298,66 @@ export class BiomeScene extends Phaser.Scene {
     })
   }
 
-  private drawPathBetweenWaypoints(x1: number, y1: number, x2: number, y2: number) {
-    const dist = Phaser.Math.Distance.Between(x1, y1, x2, y2)
-    const steps = Math.floor(dist / 48)
-    for (let i = 0; i <= steps; i++) {
-      const t = steps === 0 ? 0 : i / steps
-      const px = Phaser.Math.Linear(x1, x2, t)
-      const py = Phaser.Math.Linear(y1, y2, t)
-      this.add.image(px, py, 'roguelike', i % 3 === 0 ? RL_DIRT2 : RL_DIRT)
-        .setScale(4).setDepth(2)
+  /** Rasterize the (now axis-aligned) path segments into a boolean cell grid. */
+  private buildPathMask(): boolean[][] {
+    const CELL = BiomeScene.PATH_CELL
+    const HALF = BiomeScene.PATH_HALF
+    const cols = Math.floor(WORLD_W / CELL)
+    const rows = Math.floor(WORLD_H / CELL)
+    const mask: boolean[][] = Array.from({ length: rows }, () => new Array<boolean>(cols).fill(false))
+    const mark = (c: number, r: number) => {
+      if (r >= 0 && r < rows && c >= 0 && c < cols) mask[r][c] = true
+    }
+    const stroke = (x1: number, y1: number, x2: number, y2: number) => {
+      const c1 = Math.round(x1 / CELL), r1 = Math.round(y1 / CELL)
+      const c2 = Math.round(x2 / CELL), r2 = Math.round(y2 / CELL)
+      if (r1 === r2) {
+        for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++)
+          for (let d = -HALF; d <= HALF; d++) mark(c, r1 + d)
+      } else {
+        for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++)
+          for (let d = -HALF; d <= HALF; d++) mark(c1 + d, r)
+      }
+    }
+    for (let i = 0; i < this.pathNodes.length - 1; i++) {
+      const a = this.pathNodes[i], b = this.pathNodes[i + 1]
+      if (a.x === b.x && a.y === b.y) continue
+      stroke(a.x, a.y, b.x, b.y)
+    }
+    return mask
+  }
+
+  /** Autotile the path mask with the CraftPix road pack — opaque cobble body
+   *  plus a grass-overhang fringe, frame picked by which sides border grass.
+   *  Mirrors WorldScene's road renderer so the campaign matches the overworld. */
+  private renderRoads(rt: Phaser.GameObjects.RenderTexture, mask: boolean[][]) {
+    const CELL = BiomeScene.PATH_CELL
+    const rows = mask.length
+    const cols = mask[0].length
+    const scale = { scaleX: CELL / 16, scaleY: CELL / 16 }
+    const isP = (c: number, r: number) =>
+      r >= 0 && r < rows && c >= 0 && c < cols && mask[r][c]
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!mask[r][c]) continue
+        const n = !isP(c, r - 1), s = !isP(c, r + 1)
+        const w = !isP(c - 1, r), e = !isP(c + 1, r)
+        let frame: number
+        if (n && w) frame = ROAD.NW
+        else if (n && e) frame = ROAD.NE
+        else if (s && w) frame = ROAD.SW
+        else if (s && e) frame = ROAD.SE
+        else if (n) frame = ROAD.N
+        else if (s) frame = ROAD.S
+        else if (w) frame = ROAD.W
+        else if (e) frame = ROAD.E
+        else frame = ROAD.C[(c + r) % ROAD.C.length]
+        const px = c * CELL + CELL / 2
+        const py = r * CELL + CELL / 2
+        rt.stamp('road_body', frame, px, py, scale)
+        rt.stamp('road_fringe', frame, px, py, { ...scale, tint: ROAD_GRASS_TINT })
+      }
     }
   }
 
@@ -404,6 +519,10 @@ export class BiomeScene extends Phaser.Scene {
     if (!result.victory) { this.showDefeatOverlay(); return }
 
     this.playerHp       = result.playerHp
+    // Health regen between battles — recover some HP before the next encounter.
+    if (this.healthRegen > 0) {
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.healthRegen))
+    }
     this.totalXpGained += result.xpGained
     this.encountersCleared++
 
@@ -483,36 +602,45 @@ export class BiomeScene extends Phaser.Scene {
       level: this.maxEnemyLevel,
       campaignComplete: true,
     })
-    socket?.once('combat:loot', (data: { items?: { name: string; icon: string; rarity: string }[] }) => {
-      const items = data?.items ?? []
-      if (!items.length || !this.scene.isActive()) return
-      const txt = items.map(it => `${it.icon} ${it.name}`).join('   ')
-      this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 60, `💎  Reward: ${txt}`, {
-        fontSize: '14px', fontFamily: 'Georgia, serif', color: '#9be7ff', fontStyle: 'bold',
-        align: 'center', wordWrap: { width: 520 },
-      }).setOrigin(0.5, 0).setDepth(201).setScrollFactor(0)
-    })
-    this.cameras.main.flash(700, 255, 215, 0)
-
-    const W = 560, H = 280, cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+    const W = 560, H = 364, cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
     const bg = this.add.graphics().setDepth(190).setScrollFactor(0)
     bg.fillStyle(0x000000, 0.9).fillRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)
     bg.lineStyle(2, 0xffd700, 1).strokeRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)
 
-    this.add.text(cx, cy - H / 2 + 42, '🏆  Biome Cleared!', {
+    this.add.text(cx, cy - H / 2 + 40, '🏆  Biome Cleared!', {
       fontSize: '30px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
     const enc = this.encountersCleared
-    this.add.text(cx, cy - 12, `${enc} encounter${enc !== 1 ? 's' : ''} conquered`, {
+    this.add.text(cx, cy - 96, `${enc} encounter${enc !== 1 ? 's' : ''} conquered`, {
       fontSize: '16px', fontFamily: 'Arial', color: '#aaaaaa',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
-    this.add.text(cx, cy + 28, `+${this.totalXpGained} XP earned`, {
+    this.add.text(cx, cy - 60, `+${this.totalXpGained} XP earned`, {
       fontSize: '22px', fontFamily: 'Georgia, serif', color: '#44ffaa', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
 
-    const btn = this.add.text(cx, cy + H / 2 - 32, 'Return to World', {
+    // Reward area — filled when the CAMPAIGN combat:loot arrives. The server
+    // tags per-encounter loot (campaignComplete=false) and campaign loot
+    // (campaignComplete=true) on the same event, so we ignore the per-encounter
+    // ones — otherwise an (often empty) per-encounter emit would be consumed
+    // here and the real campaign reward would be dropped.
+    const onLoot = (data: { campaignComplete?: boolean; items?: RewardItem[] }) => {
+      if (!data?.campaignComplete) return
+      socket?.off('combat:loot', onLoot)
+      const items = data?.items ?? []
+      if (!items.length || !this.scene.isActive()) return
+      this.add.text(cx, cy - 24, '💎  Reward  —  hover an item to inspect its stats', {
+        fontSize: '13px', fontFamily: 'Georgia, serif', color: '#9be7ff',
+      }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
+      this.renderRewardChips(items, cx, cy + 14)
+    }
+    socket?.on('combat:loot', onLoot)
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => socket?.off('combat:loot', onLoot))
+
+    this.cameras.main.flash(700, 255, 215, 0)
+
+    const btn = this.add.text(cx, cy + H / 2 - 30, 'Return to World', {
       fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
       backgroundColor: '#2a1060', padding: { x: 24, y: 12 },
     }).setOrigin(0.5, 0.5).setDepth(200).setScrollFactor(0)
@@ -520,6 +648,95 @@ export class BiomeScene extends Phaser.Scene {
     btn.on('pointerover', () => btn.setColor('#ffd700'))
     btn.on('pointerout',  () => btn.setColor('#ffffff'))
     btn.on('pointerdown', () => this.returnToWorld())
+  }
+
+  private static readonly REWARD_COLORS: Record<string, string> = {
+    common: '#aaaaaa', uncommon: '#44cc44', rare: '#4488ff', epic: '#cc44ff', legendary: '#ffaa00',
+  }
+
+  /** Lay out the reward items as a centred, wrapping row of hoverable chips. */
+  private renderRewardChips(items: RewardItem[], cx: number, startY: number) {
+    const gap = 10
+    const made = items.map(it => {
+      const txt = this.add.text(0, 0, `${it.icon} ${this.truncate(it.name, 20)}`, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif',
+        color: BiomeScene.REWARD_COLORS[it.rarity] ?? '#dddddd',
+        backgroundColor: '#16163a', padding: { x: 8, y: 5 },
+      }).setOrigin(0, 0.5).setDepth(201).setScrollFactor(0)
+      return { it, txt, w: txt.width }
+    })
+
+    // Wrap chips into rows no wider than the modal.
+    const maxRowW = 520
+    const rows: (typeof made)[] = [[]]
+    let rowW = 0
+    for (const m of made) {
+      if (rowW + m.w + gap > maxRowW && rows[rows.length - 1].length) { rows.push([]); rowW = 0 }
+      rows[rows.length - 1].push(m); rowW += m.w + gap
+    }
+
+    let y = startY
+    for (const row of rows) {
+      const totalW = row.reduce((s, m) => s + m.w, 0) + gap * (row.length - 1)
+      let x = cx - totalW / 2
+      for (const m of row) {
+        m.txt.setPosition(x, y)
+        const hit = this.add.rectangle(x + m.w / 2, y, m.w, 28, 0, 0)
+          .setDepth(202).setScrollFactor(0).setInteractive({ useHandCursor: true })
+        hit.on('pointerover', () => this.showRewardTooltip(m.it, x + m.w / 2, y - 20))
+        hit.on('pointerout',  () => this.hideRewardTooltip())
+        x += m.w + gap
+      }
+      y += 34
+    }
+  }
+
+  /** Floating tooltip with an item's rarity, slot and attribute bonuses. */
+  private showRewardTooltip(it: RewardItem, x: number, y: number) {
+    this.hideRewardTooltip()
+    // Campaign rewards are crafting materials / shards now — they carry no gear
+    // attributes, so the tooltip just shows the name + rarity tier.
+    const rar = it.rarity.charAt(0).toUpperCase() + it.rarity.slice(1)
+    const sub = rar
+    const attrs = ''
+
+    const c = this.add.container(0, 0).setDepth(210).setScrollFactor(0)
+    const name = this.add.text(0, 0, it.name, {
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      align: 'center', wordWrap: { width: 300 },
+    }).setOrigin(0.5, 0)
+    const subT = this.add.text(0, 0, sub, {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif',
+      color: BiomeScene.REWARD_COLORS[it.rarity] ?? '#bbbbbb', align: 'center',
+    }).setOrigin(0.5, 0)
+    const attrT = this.add.text(0, 0, attrs, {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#9bd0ff', align: 'center',
+    }).setOrigin(0.5, 0)
+
+    const padX = 14, padY = 10, lineGap = 4
+    const w = Math.max(name.width, subT.width, attrT.width) + padX * 2
+    const h = name.height + subT.height + attrT.height + lineGap * 2 + padY * 2
+    // Clamp horizontally so the box stays on screen; sit it above the chip.
+    const bx = Phaser.Math.Clamp(x, w / 2 + 8, GAME_WIDTH - w / 2 - 8)
+    const top = y - h
+    name.setPosition(bx, top + padY)
+    subT.setPosition(bx, top + padY + name.height + lineGap)
+    attrT.setPosition(bx, top + padY + name.height + subT.height + lineGap * 2)
+
+    const g = this.add.graphics()
+    g.fillStyle(0x0a0a1e, 0.97).fillRoundedRect(bx - w / 2, top, w, h, 8)
+    g.lineStyle(1, 0xffd700, 0.9).strokeRoundedRect(bx - w / 2, top, w, h, 8)
+    c.add([g, name, subT, attrT])
+    this.rewardTooltip = c
+  }
+
+  private hideRewardTooltip() {
+    this.rewardTooltip?.destroy()
+    this.rewardTooltip = null
+  }
+
+  private truncate(s: string, max: number): string {
+    return s.length > max ? s.slice(0, max - 1) + '…' : s
   }
 
   private showDefeatOverlay() {

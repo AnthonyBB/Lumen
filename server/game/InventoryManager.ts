@@ -95,10 +95,25 @@ export class InventoryManager {
 
       const storeKey = socketId ?? userId;
 
+      // Legacy purge: items from the old fixed catalog (itemType `eq_NNNN`) no
+      // longer have a stats source now that gear is rolled at craft time, so we
+      // drop them from the bag and any equipped slots on load.
+      const isLegacyGear = (it?: InventoryItem | null): boolean =>
+        !!it && it.itemType.startsWith('eq_');
+
+      const items = ((doc.items as InventoryItem[]) ?? []).filter((it) => !isLegacyGear(it));
+      const rawEquip = (doc.equipment as PlayerInventory['equipment']) ?? {};
+      const equipment: PlayerInventory['equipment'] = {};
+      for (const [slot, it] of Object.entries(rawEquip)) {
+        if (!isLegacyGear(it as InventoryItem)) {
+          (equipment as Record<string, InventoryItem | undefined>)[slot] = it as InventoryItem;
+        }
+      }
+
       const inventory: PlayerInventory = {
         playerId:  storeKey,
-        items:     (doc.items as InventoryItem[]) ?? [],
-        equipment: (doc.equipment as PlayerInventory['equipment']) ?? {},
+        items,
+        equipment,
         gold:      (doc.gold as number) ?? 0,
       };
 

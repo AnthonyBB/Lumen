@@ -12,6 +12,8 @@ import { StrategyScene } from './scenes/StrategyScene'
 import { SkillShopScene } from './scenes/SkillShopScene'
 import { MarketScene } from './scenes/MarketScene'
 import { TavernScene } from './scenes/TavernScene'
+import { CraftScene } from './scenes/CraftScene'
+import { CraftBuildingScene } from './scenes/CraftBuildingScene'
 import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
@@ -28,7 +30,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
       debug: false,
     },
   },
-  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene, ChestScene, BiomeScene, BattleScene, StrategyScene, SkillShopScene, MarketScene, TavernScene],
+  scene: [BootScene, WorldScene, UIScene, ClassroomScene, CharacterScene, EquipmentScene, ChestScene, BiomeScene, BattleScene, StrategyScene, SkillShopScene, MarketScene, TavernScene, CraftScene, CraftBuildingScene],
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

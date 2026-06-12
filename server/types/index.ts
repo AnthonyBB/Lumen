@@ -42,6 +42,11 @@ export interface Player {
   combatShards: number;
   /** Silver balance (persisted) — money for buying/selling items at the Market. */
   silver: number;
+  /** Crafting material counts (persisted): material id → quantity. */
+  materials: Record<string, number>;
+  /** How many campaigns this player has completed (persisted). Drives the
+   *  one-time first-campaign shard bonus. */
+  campaignsCompleted: number;
   /** Points the player has allocated per character attribute (persisted).
    *  Total earned points = level*3; a base attribute = 5 + attributePoints[attr]. */
   attributePoints: Record<AttributeKey, number>;
@@ -186,6 +191,25 @@ export interface LearningEndPayload {
   sessionId: string;
 }
 
+// ── Crafting event payloads (Client → Server) ──────────────────────────────
+
+/** Payload for `craft:start` — begin a Forge weapon craft. */
+export interface CraftStartPayload {
+  /** Recipe id (see server/game/data/recipes.ts). */
+  recipeId: string;
+  /** Metal tier to spend (1..7) — sets the item-level band. */
+  tier: number;
+  /** Catalyst material id to spend, or null for a common item. */
+  catalystId: string | null;
+}
+
+/** Payload for `craft:answer` — answer the current craft-quiz question. */
+export interface CraftAnswerPayload {
+  sessionId: string;
+  questionId: string;
+  answerIndex: number;
+}
+
 // ── Shop event payloads (Client → Server) ──────────────────────────────────
 
 /** Payload for `shop:buy_skill` — only the skill id; everything else is validated server-side. */
@@ -303,6 +327,8 @@ export interface ErrorPayload {
 // Inventory
 // ---------------------------------------------------------------------------
 
+import type { ItemAttribute, EquipSlot } from '../game/data/equipmentGen.js';
+
 export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 export type EquipmentSlotKey =
   | 'mainHand'
@@ -338,6 +364,19 @@ export interface InventoryItem {
   stackable: boolean;
   /** Client-facing icon key / emoji. */
   icon: string;
+  /** Present on brewed potions (Alchemy Lab): what the potion does + how much.
+   *  `restore` affects both HP and MP. Combat auto-use is wired separately. */
+  potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
+  /** Present on crafted/equippable gear (rolled at craft time, server-side):
+   *  where it equips, its rolled attributes, and the XP needed to equip it.
+   *  These are the authoritative source for stats — the client never sets them. */
+  equipSlot?: EquipSlot;
+  attributes?: ItemAttribute[];
+  xpRequired?: number;
+  /** Absolute position (0-based) when stored in a chest, so the chest can hold
+   *  items at specific tab/slot positions rather than packed from the start.
+   *  Unset for bag items. */
+  chestSlot?: number;
 }
 
 export interface EquipmentSlots {
@@ -399,4 +438,6 @@ export interface ChestTransferPayload {
   chestId: string;
   itemId: string;
   direction: 'to_chest' | 'from_chest';
+  /** For 'to_chest': the absolute chest slot (0-based) to place the item in. */
+  toSlot?: number;
 }

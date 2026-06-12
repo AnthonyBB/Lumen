@@ -8,7 +8,7 @@ import { NpcDialog } from '../objects/NpcDialog'
 import { TOWN_NPCS } from '../data/townNpcs'
 import { DIFFICULTIES, DIFFICULTY_ORDER, type Difficulty } from '../data/mobs'
 import { AnimalManager } from '../systems/AnimalManager'
-import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD } from '../data/tileFrames'
+import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD, ROAD_GRASS_TINT } from '../data/tileFrames'
 
 interface BuildingEntry {
   building: Building
@@ -94,6 +94,9 @@ export class WorldScene extends Phaser.Scene {
   // Per-gate dark "doorway opening" overlay that grows from the centre out when
   // the player is in range, making the gate look like it opens.
   private gateGlows = new Map<string, { glow: Phaser.GameObjects.Graphics; open: boolean }>()
+  // Solid static bodies for the stone gates, so the player can't walk through a
+  // portal (entry is still by the "Press E" proximity prompt). Rebuilt per scene.
+  private gateColliders: Phaser.GameObjects.Zone[] = []
 
   // Spawn position — set via init() when returning from a biome, otherwise world centre
   private spawnX = WORLD_WIDTH / 2
@@ -225,11 +228,13 @@ export class WorldScene extends Phaser.Scene {
     // organic village rather than a square. Each building's frontage is dressed
     // by decorateBuilding() so the props follow wherever a building sits.
     const buildingDefs = [
-      { label: 'Learning Center', x: 895,  y: 1010, w: 192, h: 192 },
       { label: 'Tavern',          x: 1395, y: 870,  w: 220, h: 180 },
       { label: 'Combat Training', x: 1780, y: 1150, w: 252, h: 180 },
       { label: 'Market',          x: 935,  y: 1575, w: 220, h: 157 },
       { label: 'Combat Strategy', x: 1715, y: 1610, w: 196, h: 196 },
+      { label: 'The Forge',       x: 1290, y: 1700, w: 200, h: 170 },
+      { label: 'The Armory',      x: 895,  y: 1010, w: 200, h: 170 },
+      { label: 'Alchemy Lab',     x: 620,  y: 1640, w: 200, h: 170 },
     ]
 
     this.buildings = []
@@ -289,8 +294,15 @@ export class WorldScene extends Phaser.Scene {
 
     // ── Biome entrance gates ──────────────────────────────────────────────────
     this.gateGlows.clear()   // scene instance is reused across restarts
+    this.gateColliders = []
     for (const gate of this.biomeGates) {
       this.drawBiomeGate(gate.x, gate.y, gate.name, gate.color)
+      // Solid body over the gate's lower stone (pillars + base). Bottom sits at
+      // the gate's ground point so the player bumps into it yet stays well
+      // inside the 80px "Press E" range that opens the biome menu.
+      const block = this.add.zone(gate.x, gate.y - 35, 104, 70)
+      this.physics.add.existing(block, true)
+      this.gateColliders.push(block)
     }
 
     // ── Stone accents around each biome gate (CraftPix) ──────────────────────
@@ -310,6 +322,9 @@ export class WorldScene extends Phaser.Scene {
 
     for (const entry of this.buildings) {
       this.physics.add.collider(this.player, entry.building.collider)
+    }
+    for (const block of this.gateColliders) {
+      this.physics.add.collider(this.player, block)
     }
 
     // ── Multiplayer: see and be seen by other players in town ───────────────
@@ -432,10 +447,11 @@ export class WorldScene extends Phaser.Scene {
       }
 
       const sprite = this.add.sprite(p.position.x, p.position.y, 'character_idle')
+        .setScale(1.8)   // match the local player's scale
         .setDepth(9)
       if (this.anims.exists('idle_down')) sprite.play('idle_down')
 
-      const label = this.add.text(p.position.x, p.position.y - 34, p.username, {
+      const label = this.add.text(p.position.x, p.position.y - 50, p.username, {
         fontSize: '11px', fontFamily: 'Arial', color: '#aaddff',
         backgroundColor: '#00000088', padding: { x: 4, y: 1 },
       }).setOrigin(0.5, 1).setDepth(9)
@@ -520,7 +536,8 @@ export class WorldScene extends Phaser.Scene {
         const px = c * CELL + CELL / 2
         const py = r * CELL + CELL / 2
         rt.stamp('road_body', frame, px, py, scale)     // opaque cobble body
-        rt.stamp('road_fringe', frame, px, py, scale)   // grass overhang on top
+        // grass overhang, tinted to match the world's darker grass
+        rt.stamp('road_fringe', frame, px, py, { ...scale, tint: ROAD_GRASS_TINT })
       }
     }
   }
@@ -989,7 +1006,7 @@ export class WorldScene extends Phaser.Scene {
 
       rp.sprite.x = Phaser.Math.Linear(rp.sprite.x, rp.tx, 0.2)
       rp.sprite.y = Phaser.Math.Linear(rp.sprite.y, rp.ty, 0.2)
-      rp.label.setPosition(rp.sprite.x, rp.sprite.y - 34)
+      rp.label.setPosition(rp.sprite.x, rp.sprite.y - 50)
 
       const moving = Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5
       if (moving) {
@@ -1053,13 +1070,6 @@ export class WorldScene extends Phaser.Scene {
     } else if (nearBuilding && !this.popupOpen) {
       this.promptText.setText('Press E to enter').setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        if (nearBuilding.label === 'Learning Center') {
-          this.scene.stop('UIScene')
-          this.scene.start('ClassroomScene', {
-            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
-          })
-          return
-        }
         if (nearBuilding.label === 'Combat Strategy') {
           this.player.setVelocity(0, 0)
           this.scene.pause('WorldScene')
@@ -1068,14 +1078,30 @@ export class WorldScene extends Phaser.Scene {
         }
         if (nearBuilding.label === 'Combat Training') {
           this.player.setVelocity(0, 0)
-          this.scene.pause('WorldScene')
-          this.scene.launch('SkillShopScene')
+          this.scene.stop('UIScene')
+          this.scene.start('CraftBuildingScene', {
+            building: 'combat_training',
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Market') {
           this.player.setVelocity(0, 0)
           this.scene.pause('WorldScene')
           this.scene.launch('MarketScene')
+          return
+        }
+        const craftBuilding =
+          nearBuilding.label === 'The Forge'  ? 'forge'  :
+          nearBuilding.label === 'The Armory' ? 'armory' :
+          nearBuilding.label === 'Alchemy Lab' ? 'alchemy' : null
+        if (craftBuilding) {
+          this.player.setVelocity(0, 0)
+          this.scene.stop('UIScene')
+          this.scene.start('CraftBuildingScene', {
+            building: craftBuilding,
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Tavern') {

@@ -43,6 +43,15 @@ export interface ClientInventoryItem {
   quantity: number;
   stackable: boolean;
   icon: string;
+  /** Crafted gear: where it equips, its rolled attributes, and the equip XP gate
+   *  (set server-side at craft time — authoritative). Absent on non-gear items. */
+  equipSlot?: string;
+  attributes?: { type: string; value: number }[];
+  xpRequired?: number;
+  /** Brewed potion effect (absent on non-potions). */
+  potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
+  /** Absolute 0-based position when stored in a chest (unset for bag items). */
+  chestSlot?: number;
 }
 
 export interface ClientEquipmentSlots {

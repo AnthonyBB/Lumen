@@ -10,6 +10,7 @@ import type { Zone, PublicPlayer } from '../types/index.js';
 import { PlayerManager } from './PlayerManager.js';
 import { QuestionEngine } from './QuestionEngine.js';
 import { LearningSessionManager } from './LearningSessionManager.js';
+import { CraftSessionManager } from './CraftSessionManager.js';
 import { InventoryManager } from './InventoryManager.js';
 import { ChestManager } from './ChestManager.js';
 import { MarketManager } from './MarketManager.js';
@@ -23,6 +24,7 @@ export class GameManager {
   public readonly playerManager: PlayerManager;
   public readonly questionEngine: QuestionEngine;
   public readonly learningSessionManager: LearningSessionManager;
+  public readonly craftSessionManager: CraftSessionManager;
   public readonly inventoryManager: InventoryManager;
   public readonly chestManager: ChestManager;
   public readonly marketManager: MarketManager;
@@ -35,6 +37,11 @@ export class GameManager {
     this.questionEngine = new QuestionEngine();
     this.learningSessionManager = new LearningSessionManager(this.questionEngine, this.playerManager);
     this.inventoryManager = new InventoryManager();
+    this.craftSessionManager = new CraftSessionManager(
+      this.questionEngine,
+      this.playerManager,
+      this.inventoryManager,
+    );
     this.chestManager = new ChestManager(this.inventoryManager);
     this.marketManager = new MarketManager();
 
@@ -89,8 +96,9 @@ export class GameManager {
     this.removeFromZone(socketId, zone);
     this.playerManager.removePlayer(socketId);
 
-    // Clean up any active learning sessions
+    // Clean up any active learning / craft sessions
     this.learningSessionManager.endPlayerSession(socketId);
+    this.craftSessionManager.endPlayerSession(socketId);
 
     // Release inventory memory
     this.inventoryManager.deleteInventory(socketId);

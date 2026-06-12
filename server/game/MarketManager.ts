@@ -13,7 +13,6 @@
 
 import { randomUUID } from 'crypto';
 import type { InventoryItem } from '../types/index.js';
-import { EQUIPMENT_MAP } from './data/equipmentGen.js';
 import {
   MarketListingModel,
   type IMarketListing,
@@ -43,13 +42,13 @@ const RARITY_VALUE: Record<string, number> = {
  * Selling to the system pays `base`; listing to players sets the price to 2*base.
  */
 export function marketPrice(item: InventoryItem): number {
-  const generated = EQUIPMENT_MAP[item.itemType];
-  if (generated) {
-    const rarityValue = RARITY_VALUE[generated.rarity] ?? RARITY_VALUE.common;
-    const attrSum = generated.attributes.reduce((s, a) => s + Math.abs(a.value), 0);
-    return rarityValue + attrSum * 3 + Math.floor(generated.xpRequired / 20);
+  // Crafted gear carries its rolled attributes on the instance.
+  if (item.attributes && item.attributes.length) {
+    const rarityValue = RARITY_VALUE[item.rarity] ?? RARITY_VALUE.common;
+    const attrSum = item.attributes.reduce((s, a) => s + Math.abs(a.value), 0);
+    return rarityValue + attrSum * 3 + Math.floor((item.xpRequired ?? 0) / 20);
   }
-  // Legacy item — sum its numeric stat values.
+  // Non-gear (e.g. potions) — sum any numeric stat values.
   const statSum = Object.values(item.stats ?? {}).reduce(
     (s, v) => s + (typeof v === 'number' ? v : 0),
     0,
@@ -73,7 +72,6 @@ export interface MarketListing {
 
 /** Build the snapshot stored on a listing from a bag item + server catalog. */
 export function buildItemSnapshot(item: InventoryItem): MarketItemSnapshot {
-  const generated = EQUIPMENT_MAP[item.itemType];
   return {
     id: item.id,
     itemType: item.itemType,
@@ -81,9 +79,9 @@ export function buildItemSnapshot(item: InventoryItem): MarketItemSnapshot {
     description: item.description,
     icon: item.icon,
     rarity: item.rarity,
-    slot: generated ? generated.slot : (item.itemType in EQUIPMENT_MAP ? '' : legacySlotFor(item) ?? ''),
+    slot: item.equipSlot ?? legacySlotFor(item) ?? '',
     stats: { ...(item.stats ?? {}) },
-    attributes: generated ? generated.attributes.map((a) => ({ type: a.type, value: a.value })) : undefined,
+    attributes: item.attributes?.map((a) => ({ type: a.type, value: a.value })),
   };
 }
 

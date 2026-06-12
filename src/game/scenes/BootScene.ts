@@ -157,6 +157,18 @@ export class BootScene extends Phaser.Scene {
       frameWidth: 16, frameHeight: 16,
     })
 
+    // ── CLASSROOM (Learning Center) interior pieces ─────────────────────────────
+    //   class_floor   160×288 → 10 cols × 18 rows: warm wood-plank floor tiles
+    //                 live at cols 0–1, rows 14–15 (see ClassroomScene).
+    //   class_objects 304×160 → 19 cols × 10 rows: chapel furniture; the
+    //                 desk-with-open-book sits at cols 12–15, rows 8–9.
+    this.load.spritesheet('class_floor', '/assets/craftpix/interiors/classroom_floor.png', {
+      frameWidth: 16, frameHeight: 16,
+    })
+    this.load.spritesheet('class_objects', '/assets/craftpix/interiors/classroom_objects.png', {
+      frameWidth: 16, frameHeight: 16,
+    })
+
     // ── WORLD PROPS ─────────────────────────────────────────────────────────────
     this.load.image('well',     '/assets/buildings/well.png')
     this.load.image('lamppost', '/assets/props/lamppost.png')

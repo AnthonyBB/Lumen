@@ -36,61 +36,32 @@ export type AttributeType =
   | 'damage_bonus'
   | 'healing_bonus'
   | 'mp_regen'
+  | 'hp_regen'
   | 'fire_damage' | 'ice_damage' | 'lightning_damage' | 'holy_damage' | 'nature_damage'
   | 'crit_chance'
   | 'dot_bonus'
   | 'aoe_bonus'
-  | 'xp_bonus'
   | 'gold_find'
   | 'debuff_resist'
+
+/** All generated-gear attribute/bonus types, in display order. Single source of
+ *  truth for the market's attribute filter (client UI + server validation). */
+export const ATTRIBUTE_TYPES: AttributeType[] = [
+  'constitution', 'intelligence', 'dexterity', 'strength', 'spirit',
+  'damage_bonus', 'healing_bonus', 'mp_regen', 'hp_regen',
+  'fire_damage', 'ice_damage', 'lightning_damage', 'holy_damage', 'nature_damage',
+  'crit_chance', 'dot_bonus', 'aoe_bonus', 'gold_find', 'debuff_resist',
+]
 
 export interface ItemAttribute {
   type: AttributeType
   value: number
 }
 
-export interface EquipmentItem {
-  id: string               // deterministic, e.g. 'eq_0042'
-  name: string
-  slot: EquipSlot
-  classes: SkillClass[]    // which classes can equip
-  rarity: Rarity
-  attributes: ItemAttribute[]
-  xpRequired: number       // XP the player must have earned to equip
-  icon: string             // single emoji
-  description: string      // one kid-friendly sentence
-}
-
-// ------------------------------------------------------------
-// Seeded PRNG — mulberry32 (do not change the seed!)
-// ------------------------------------------------------------
-
-const SEED = 0x4c554d45 // 'LUME'
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0
-  return function () {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 // ------------------------------------------------------------
 // Static part lists
 // ------------------------------------------------------------
-
-const CLASSES: SkillClass[] = [
-  'fire_mage', 'ice_mage', 'lightning_mage',
-  'sword', 'spear', 'axe', 'hammer',
-  'monk', 'paladin', 'assassin', 'cleric', 'shaman', 'bard',
-]
-
-const SLOTS: EquipSlot[] = [
-  'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
-]
 
 const CLASS_LABEL: Record<SkillClass, string> = {
   fire_mage: 'Fire Mage', ice_mage: 'Ice Mage', lightning_mage: 'Lightning Mage',
@@ -187,6 +158,7 @@ const ATTR_PREFIX: Record<AttributeType, string[]> = {
   damage_bonus:     ['Vicious', 'Brutal', 'Fierce', 'Savage'],
   healing_bonus:    ['Soothing', 'Mending', 'Gentle', 'Caring'],
   mp_regen:         ['Channeling', 'Flowing', 'Mystic', 'Focused'],
+  hp_regen:         ['Hardy', 'Vital', 'Mending', 'Stalwart'],
   fire_damage:      ['Blazing', 'Molten', 'Fiery', 'Smoldering'],
   ice_damage:       ['Frosted', 'Glacial', 'Frozen', 'Icy'],
   lightning_damage: ['Sparking', 'Thundering', 'Charged', 'Stormy'],
@@ -195,7 +167,6 @@ const ATTR_PREFIX: Record<AttributeType, string[]> = {
   crit_chance:      ['Keen', 'Precise', 'Sharp', 'Deadly'],
   dot_bonus:        ['Withering', 'Venomous', 'Searing', 'Lingering'],
   aoe_bonus:        ['Sweeping', 'Booming', 'Wide', 'Thunderous'],
-  xp_bonus:         ['Enlightened', "Learner's", 'Studious', 'Insightful'],
   gold_find:        ['Gilded', 'Lucky', 'Prosperous', 'Golden'],
   debuff_resist:    ['Warding', 'Guarded', 'Resolute', 'Steady'],
 }
@@ -210,6 +181,7 @@ const ATTR_SUFFIX: Record<AttributeType, string[]> = {
   damage_bonus:     ['of Hard Hits', 'of the Warrior', 'of Striking'],
   healing_bonus:    ['of Mending', 'of Healing Light', 'of Kind Care'],
   mp_regen:         ['of Flowing Mana', 'of the Wellspring', 'of Steady Focus'],
+  hp_regen:         ['of Recovery', 'of Vitality', 'of Mending'],
   fire_damage:      ['of the Phoenix', 'of Burning Skies', 'of Bright Embers'],
   ice_damage:       ['of the Glacier', 'of Soft Snowfall', "of Winter's Bite"],
   lightning_damage: ['of Rolling Thunder', 'of Dancing Sparks', 'of the Tempest'],
@@ -218,7 +190,6 @@ const ATTR_SUFFIX: Record<AttributeType, string[]> = {
   crit_chance:      ['of Sharp Eyes', 'of the Bullseye', 'of Lucky Strikes'],
   dot_bonus:        ['of Slow Burns', 'of Creeping Harm', 'of Lasting Sting'],
   aoe_bonus:        ['of Wide Blasts', 'of the Whirlwind', 'of Sweeping Force'],
-  xp_bonus:         ['of Learning', 'of Bright Ideas', 'of the Scholar'],
   gold_find:        ['of Riches', 'of Good Fortune', 'of the Merchant'],
   debuff_resist:    ['of Warding', 'of Steady Nerves', 'of the Bulwark'],
 }
@@ -232,7 +203,9 @@ const WEAPON_ICON: Record<SkillClass, string> = {
 }
 
 const SLOT_ICON: Record<Exclude<EquipSlot, 'weapon'>, string> = {
-  helmet: '🪖', chest: '🛡️', legs: '👖',
+  // ⛑️ (not 🪖) — the military-helmet emoji is Unicode 13 (2020) and renders as
+  // an empty box on Windows 10's older Segoe UI Emoji; ⛑️ is universally present.
+  helmet: '⛑️', chest: '🛡️', legs: '👖',
   boots: '👢', gloves: '🧤', ring: '💍', amulet: '📿',
 }
 
@@ -278,7 +251,7 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
   ],
   hammer: [
     ['strength', 3], ['constitution', 3], ['damage_bonus', 2], ['debuff_resist', 1],
-    ['aoe_bonus', 1],
+    ['aoe_bonus', 1], ['hp_regen', 2],
   ],
   monk: [
     ['dexterity', 3], ['spirit', 2], ['constitution', 1], ['crit_chance', 2],
@@ -286,7 +259,7 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
   ],
   paladin: [
     ['strength', 2], ['constitution', 2], ['spirit', 2], ['holy_damage', 2],
-    ['healing_bonus', 1], ['debuff_resist', 1], ['damage_bonus', 1],
+    ['healing_bonus', 1], ['debuff_resist', 1], ['damage_bonus', 1], ['hp_regen', 1],
   ],
   assassin: [
     ['dexterity', 3], ['crit_chance', 3], ['damage_bonus', 2], ['dot_bonus', 1],
@@ -301,14 +274,14 @@ const CLASS_ATTR_POOL: Record<SkillClass, WeightedAttr[]> = {
     ['dot_bonus', 1], ['mp_regen', 1], ['constitution', 1],
   ],
   bard: [
-    ['spirit', 2], ['dexterity', 1], ['xp_bonus', 3], ['debuff_resist', 2],
+    ['spirit', 2], ['dexterity', 1], ['debuff_resist', 2],
     ['healing_bonus', 1], ['gold_find', 2], ['mp_regen', 1],
   ],
 }
 
 const GENERIC_ATTR_POOL: WeightedAttr[] = [
   ['constitution', 2], ['strength', 1], ['dexterity', 1], ['intelligence', 1],
-  ['spirit', 1], ['xp_bonus', 1], ['gold_find', 1], ['debuff_resist', 1],
+  ['spirit', 1], ['gold_find', 1], ['debuff_resist', 1], ['hp_regen', 1],
 ]
 
 /** Base value range (at common rarity) per attribute type. */
@@ -317,18 +290,18 @@ const ATTR_BASE: Record<AttributeType, [number, number]> = {
   strength: [1, 3], spirit: [1, 3],
   damage_bonus: [2, 4], healing_bonus: [2, 4],
   mp_regen: [1, 2],
+  hp_regen: [1, 3],
   fire_damage: [2, 5], ice_damage: [2, 5], lightning_damage: [2, 5],
   holy_damage: [2, 5], nature_damage: [2, 5],
   crit_chance: [1, 2],
   dot_bonus: [2, 4], aoe_bonus: [2, 4],
-  xp_bonus: [1, 2], gold_find: [1, 2],
+  gold_find: [1, 2],
   debuff_resist: [1, 3],
 }
 
 /** Hard caps for percent-style attributes (kept small per design). */
 const ATTR_CAP: Partial<Record<AttributeType, number>> = {
   crit_chance: 8,
-  xp_bonus: 10,
   gold_find: 10,
   debuff_resist: 25,
 }
@@ -338,11 +311,12 @@ const ATTR_POWER_WEIGHT: Record<AttributeType, number> = {
   constitution: 2, intelligence: 2, dexterity: 2, strength: 2, spirit: 2,
   damage_bonus: 1.5, healing_bonus: 1.5,
   mp_regen: 4,
+  hp_regen: 4,
   fire_damage: 1.6, ice_damage: 1.6, lightning_damage: 1.6,
   holy_damage: 1.6, nature_damage: 1.6,
   crit_chance: 6,
   dot_bonus: 1.5, aoe_bonus: 1.5,
-  xp_bonus: 5, gold_find: 4,
+  gold_find: 4,
   debuff_resist: 2,
 }
 
@@ -352,11 +326,6 @@ const ATTR_POWER_WEIGHT: Record<AttributeType, number> = {
 
 const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary']
 
-/** Cumulative roll thresholds: 40 / 30 / 18 / 9 / 3. */
-const RARITY_THRESHOLDS: [Rarity, number][] = [
-  ['common', 0.40], ['uncommon', 0.70], ['rare', 0.88], ['epic', 0.97], ['legendary', 1.0],
-]
-
 const RARITY_ATTR_COUNT: Record<Rarity, [number, number]> = {
   common: [0, 1], uncommon: [1, 2], rare: [2, 3], epic: [3, 4], legendary: [4, 5],
 }
@@ -364,20 +333,6 @@ const RARITY_ATTR_COUNT: Record<Rarity, [number, number]> = {
 /** Attribute value multiplier per rarity. */
 const RARITY_VALUE_MULT: Record<Rarity, number> = {
   common: 1, uncommon: 1.6, rare: 2.5, epic: 4, legendary: 6,
-}
-
-/** Power-score multiplier per rarity. */
-const RARITY_POWER_MULT: Record<Rarity, number> = {
-  common: 1, uncommon: 1.3, rare: 1.7, epic: 2.2, legendary: 2.8,
-}
-
-/** XP-requirement band per rarity (commons free-ish, legendaries 20k–60k). */
-const RARITY_XP_BAND: Record<Rarity, [number, number]> = {
-  common: [0, 200],
-  uncommon: [200, 1500],
-  rare: [1500, 8000],
-  epic: [8000, 20000],
-  legendary: [20000, 60000],
 }
 
 // ------------------------------------------------------------
@@ -390,14 +345,6 @@ function pick<T>(rng: () => number, arr: T[]): T {
 
 function rollInt(rng: () => number, min: number, max: number): number {
   return min + Math.floor(rng() * (max - min + 1))
-}
-
-function rollRarity(rng: () => number): Rarity {
-  const r = rng()
-  for (const [rarity, threshold] of RARITY_THRESHOLDS) {
-    if (r < threshold) return rarity
-  }
-  return 'legendary'
 }
 
 /** Pick a weighted attribute type, excluding already-chosen types. */
@@ -437,15 +384,6 @@ function rollAttributes(rng: () => number, pool: WeightedAttr[], rarity: Rarity)
     attrs.push({ type, value })
   }
   return attrs
-}
-
-function computeXpRequired(attrs: ItemAttribute[], rarity: Rarity): number {
-  const power =
-    attrs.reduce((sum, a) => sum + a.value * ATTR_POWER_WEIGHT[a.type], 0) *
-    RARITY_POWER_MULT[rarity]
-  const raw = Math.round(Math.pow(power, 1.5) * 10)
-  const [lo, hi] = RARITY_XP_BAND[rarity]
-  return Math.min(hi, Math.max(lo, raw))
 }
 
 /** Order an item's attributes by power (value × weight), strongest first.
@@ -532,82 +470,76 @@ function buildDescription(
   return pick(rng, templates)
 }
 
-/** Roman numeral helper for de-duplicating colliding names. */
-function toRoman(n: number): string {
-  const numerals: [number, string][] = [
-    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
-  ]
-  let out = ''
-  for (const [v, s] of numerals) {
-    while (n >= v) { out += s; n -= v }
-  }
-  return out
+// ------------------------------------------------------------
+// Craft-time roller
+// ------------------------------------------------------------
+//
+// Items are no longer baked into a fixed catalog — each one is rolled when it
+// is crafted (server-side, in CraftSessionManager) and then carries its own
+// attributes/slot/xpRequired on the persisted inventory instance. The
+// prefix/suffix name system and attribute pools above are reused as-is.
+
+/** A freshly-rolled item. It has no catalog id — the bag assigns a UUID. */
+export interface CraftedItem {
+  name: string
+  slot: EquipSlot
+  rarity: Rarity
+  attributes: ItemAttribute[]
+  xpRequired: number
+  icon: string
+  description: string
 }
 
-// ------------------------------------------------------------
-// Main generator
-// ------------------------------------------------------------
+/** XP required to equip an item rolled from a given metal tier (1–7). Low tiers
+ *  are ungated so a fresh hero can use starter/early gear; it ramps with tier. */
+const XP_REQUIRED_BY_TIER = [0, 0, 0, 600, 1800, 4200, 8500, 15000]
 
-const ITEMS_PER_CLASS = 70   // 13 × 70 = 910 themed items
-const GENERIC_COUNT = 90     // + 90 any-class items = 1000
-
-export function generateEquipment(): EquipmentItem[] {
-  const rng = mulberry32(SEED)
-  const items: EquipmentItem[] = []
-  const nameCounts = new Map<string, number>()
-  let index = 0
-
-  // Round-robin slots within each class block guarantees every slot
-  // appears for every class (70 items / 8 slots ≥ 8 each).
-  function buildItem(cls: SkillClass | null, slot: EquipSlot): EquipmentItem {
-    const rarity = rollRarity(rng)
-    const pool = cls ? CLASS_ATTR_POOL[cls] : GENERIC_ATTR_POOL
-    const attributes = rollAttributes(rng, pool, rarity)
-    const xpRequired = computeXpRequired(attributes, rarity)
-
-    let name = buildName(rng, slot, rarity, cls, attributes)
-    const seen = nameCounts.get(name) ?? 0
-    nameCounts.set(name, seen + 1)
-    if (seen > 0) name = `${name} ${toRoman(seen + 1)}`
-
-    const icon = slot === 'weapon'
-      ? (cls ? WEAPON_ICON[cls] : '🗡️')
-      : SLOT_ICON[slot]
-
-    const item: EquipmentItem = {
-      id: `eq_${String(index).padStart(4, '0')}`,
-      name,
-      slot,
-      classes: cls ? [cls] : [...CLASSES],
-      rarity,
-      attributes,
-      xpRequired,
-      icon,
-      description: buildDescription(rng, slot, rarity, cls),
-    }
-    index++
-    return item
-  }
-
-  // 910 class-themed items, slots round-robin per class
-  for (const cls of CLASSES) {
-    for (let i = 0; i < ITEMS_PER_CLASS; i++) {
-      items.push(buildItem(cls, SLOTS[i % SLOTS.length]))
-    }
-  }
-
-  // 90 generic any-class items
-  for (let i = 0; i < GENERIC_COUNT; i++) {
-    items.push(buildItem(null, SLOTS[i % SLOTS.length]))
-  }
-
-  return items
+export function tierXpRequired(tier: number): number {
+  return XP_REQUIRED_BY_TIER[Math.max(1, Math.min(MAX_GEN_TIER, tier))] ?? 0
 }
 
-export const ALL_EQUIPMENT: EquipmentItem[] = generateEquipment()
+const MAX_GEN_TIER = 7
 
-export const EQUIPMENT_MAP: Record<string, EquipmentItem> = Object.fromEntries(
-  ALL_EQUIPMENT.map((item) => [item.id, item]),
-)
+export interface RollOptions {
+  slot: EquipSlot
+  /** Equipment class for flavour/naming/attribute pool, or null for any-class. */
+  cls: SkillClass | null
+  rarity: Rarity
+  /** Material tier (1–7) — scales attribute magnitude + the equip XP gate. */
+  tier: number
+  /** Quiz accuracy 0..1 — nudges the stat rolls within the rarity band. */
+  quizQuality: number
+}
 
-export { RARITY_ORDER, CLASSES as EQUIPMENT_CLASSES, SLOTS as EQUIPMENT_SLOTS }
+/**
+ * Roll one item. Uses Math.random (every craft is unique). Attribute magnitudes
+ * scale with the metal tier and, within the rarity band, with quiz quality.
+ */
+export function rollCraftedItem(opts: RollOptions): CraftedItem {
+  const rng = Math.random
+  const { slot, cls, rarity, tier, quizQuality } = opts
+  const pool = cls ? CLASS_ATTR_POOL[cls] : GENERIC_ATTR_POOL
+  const attributes = rollAttributes(rng, pool, rarity)
+
+  const tierMult = 1 + (Math.max(1, tier) - 1) * 0.5        // tier1 ×1 … tier7 ×4
+  const qualityMult = 0.85 + Math.max(0, Math.min(1, quizQuality)) * 0.3 // 0.85 … 1.15
+  for (const a of attributes) {
+    let v = Math.round(a.value * tierMult * qualityMult)
+    const cap = ATTR_CAP[a.type]
+    if (cap !== undefined) v = Math.min(v, cap)
+    a.value = Math.max(1, v)
+  }
+
+  const icon = slot === 'weapon' ? (cls ? WEAPON_ICON[cls] : '🗡️') : SLOT_ICON[slot]
+  return {
+    name: buildName(rng, slot, rarity, cls, attributes),
+    slot,
+    rarity,
+    attributes,
+    xpRequired: tierXpRequired(tier),
+    icon,
+    description: buildDescription(rng, slot, rarity, cls),
+  }
+}
+
+export { RARITY_ORDER }

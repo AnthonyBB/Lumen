@@ -69,6 +69,13 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
     })
     return () => {
       game.destroy(true)
+      // Phaser scenes mount HTML overlay inputs (market search, tavern chat) as
+      // siblings of the canvas. Destroying the game removes the canvas but not
+      // those siblings, so sweep them here to avoid orphans floating over the
+      // app after a StrictMode remount or HMR reload.
+      for (const id of ['lumen-market-search', 'lumen-tavern-chat']) {
+        document.getElementById(id)?.remove()
+      }
     }
   }, [needsContentMode])
 

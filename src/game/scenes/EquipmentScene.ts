@@ -18,7 +18,7 @@ import {
   type ClientPlayerInventory,
 } from '../systems/InventoryStore'
 import { StatsStore, type ClientStats, type ClientStatRow } from '../systems/StatsStore'
-import { EQUIPMENT_MAP, type EquipSlot } from '../data/equipmentGen'
+import type { EquipSlot } from '../data/equipmentGen'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -77,9 +77,9 @@ const LEGACY_ITEM_SLOT: Record<string, SlotKey> = {
   winged_boots:    'shoes',
 }
 
-/** True when a bag item is equippable (generated gear OR known legacy gear). */
-function isEquippable(itemType: string): boolean {
-  return !!EQUIPMENT_MAP[itemType] || !!LEGACY_ITEM_SLOT[itemType]
+/** True when a bag item is equippable (crafted gear OR known legacy gear). */
+function isEquippable(item: ClientInventoryItem): boolean {
+  return !!item.equipSlot || !!LEGACY_ITEM_SLOT[item.itemType]
 }
 
 // Paper-doll layout: the wizard sits in the centre, slots flank it in two
@@ -109,16 +109,19 @@ const SLOT_POSITIONS: Record<SlotKey, { x: number; y: number }> = {
 
 /** Dim placeholder glyph shown in an empty slot. */
 const SLOT_PLACEHOLDER: Record<SlotKey, string> = {
-  mainHand: '🗡️', offHand: '🛡️', helm: '🪖', earring: '💎',
+  mainHand: '🗡️', offHand: '🛡️', helm: '⛑️', earring: '💎',
   ring1: '💍', ring2: '💍', belt: '🔗', shoes: '👢',
   gloves: '🧤', necklace: '📿', chest: '🦺', legs: '👖',
 }
 
 /** Empty-slot placeholders that use a real RPG icon from the 'armor_icons'
  *  spritesheet (32×32, 18 cols → frame = row*18 + col) instead of an emoji.
- *  helm=(4,2) chest=(2,1) legs=(3,1) boots=(3,3). */
+ *  Frames are chosen to be CLEAN single pieces — the old helm/legs/boots frames
+ *  (1/21/57) landed on paired/blobby cells that read as broken/"disjointed".
+ *  helm=77 (skull helm) · chest=20 · legs=31 · boots=58 · rings=186 (the pack has
+ *  no literal ring, so a blue gem stands in for jewellery). */
 const SLOT_ICON_FRAME: Partial<Record<SlotKey, number>> = {
-  helm: 40, chest: 20, legs: 21, shoes: 57,
+  helm: 77, chest: 20, legs: 31, shoes: 58, ring1: 186, ring2: 186,
 }
 
 // Layout
@@ -179,21 +182,42 @@ export class EquipmentScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5).setDepth(50).setVisible(false)
 
     // ── Server state is the only source of truth ──────────────────────────
-    const unsubscribe = InventoryStore.onUpdate((inv) => this.applyInventory(inv))
-    const unsubscribeStats = StatsStore.onUpdate((s) => this.applyStats(s))
+    // The scene reacts to server-pushed snapshots through TWO channels for
+    // robustness, because in dev (React StrictMode double-mount / reconnects)
+    // the shared stores can end up bound to a different live socket than
+    // window.__lumenSocket:
+    //   1. Direct listeners on `this.socket` — the exact socket equip/unequip
+    //      intents go out on, so we always hear the reply to our own action.
+    //   2. The shared InventoryStore / StatsStore — covers the case where the
+    //      server answers on the store's socket instead.
+    // Whichever fires, applyInventory/applyStats rebuild idempotently.
+    const onInventory = (data: unknown) => this.applyInventory(data as ClientPlayerInventory)
+    const onStats = (data: unknown) => this.applyStats(data as ClientStats)
     const onError = (err: { message?: string }) => {
       if (err?.message) this.showFeedback(err.message)
     }
+    this.socket?.on('inventory:data', onInventory)
+    this.socket?.on('inventory:updated', onInventory)
+    this.socket?.on('stats:update', onStats)
     this.socket?.on('error', onError)
+
+    // Seed this.stats first so the first inventory paint shows real stats, then
+    // subscribe (onUpdate fires immediately with any cached snapshot).
+    this.stats = StatsStore.get()
+    const unsubStats = StatsStore.onUpdate((s) => this.applyStats(s))
+    const unsubInv = InventoryStore.onUpdate((inv) => this.applyInventory(inv))
+
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      unsubscribe()
-      unsubscribeStats()
+      this.socket?.off('inventory:data', onInventory)
+      this.socket?.off('inventory:updated', onInventory)
+      this.socket?.off('stats:update', onStats)
       this.socket?.off('error', onError)
+      unsubInv()
+      unsubStats()
     })
 
-    // Render whatever snapshot we already have (onUpdate fires immediately
-    // when one exists); also ask the server for a fresh copy.
-    this.stats = StatsStore.get()
+    // Draw a base/loading state if no inventory snapshot exists yet, then ask
+    // the server for fresh copies (the subscriptions above apply every reply).
     if (!InventoryStore.get()) this.rebuildDynamic()
     this.socket?.emit('inventory:get')
     this.socket?.emit('stats:get')
@@ -224,12 +248,20 @@ export class EquipmentScene extends Phaser.Scene {
     }
   }
 
+  /** Ask the server (on the socket we just emitted an intent on) for a fresh
+   *  inventory + stats snapshot. The reply returns on this same socket, where
+   *  the direct listeners apply it — a guaranteed refresh after equip/unequip. */
+  private requestServerState() {
+    this.socket?.emit('inventory:get')
+    this.socket?.emit('stats:get')
+  }
+
   // ── Server snapshot → render state ──────────────────────────────────────────
 
   private applyInventory(inv: ClientPlayerInventory) {
     this.equipped = (inv.equipment ?? {}) as Partial<Record<SlotKey, ClientInventoryItem>>
     // Both generated gear (equipmentGen) AND legacy ItemDatabase gear are equippable.
-    this.gearItems = (inv.items ?? []).filter(i => isEquippable(i.itemType))
+    this.gearItems = (inv.items ?? []).filter(i => isEquippable(i))
     if (this.selectedItem && !this.gearItems.some(i => i.id === this.selectedItem!.id)) {
       this.selectedItem = null
     }
@@ -254,16 +286,14 @@ export class EquipmentScene extends Phaser.Scene {
 
   /** Display-only: which slot a bag item would land in (server decides the real one). */
   private slotForItem(item: ClientInventoryItem): SlotKey | null {
-    const catalog = EQUIPMENT_MAP[item.itemType]
-    if (catalog) return EQUIP_SLOT_TO_KEY[catalog.slot]
+    if (item.equipSlot) return EQUIP_SLOT_TO_KEY[item.equipSlot as EquipSlot]
     return LEGACY_ITEM_SLOT[item.itemType] ?? null
   }
 
-  /** Short human-readable bonus summary for a bag item (generated or legacy). */
+  /** Short human-readable bonus summary for a bag item (crafted or legacy). */
   private itemBonusSummary(item: ClientInventoryItem): string {
-    const gen = EQUIPMENT_MAP[item.itemType]
-    if (gen) {
-      return gen.attributes
+    if (item.attributes && item.attributes.length) {
+      return item.attributes
         .map(a => `+${a.value} ${this.attrLabel(a.type)}`)
         .join('  ')
     }
@@ -272,6 +302,11 @@ export class EquipmentScene extends Phaser.Scene {
       .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] !== 0)
       .map(([k, v]) => `+${v} ${k.charAt(0).toUpperCase() + k.slice(1)}`)
       .join('  ')
+  }
+
+  /** Display icon for an item (its own rolled icon). */
+  private displayIcon(item: ClientInventoryItem): string {
+    return item.icon
   }
 
   /** Pretty label for a generated-item attribute type. */
@@ -344,7 +379,7 @@ export class EquipmentScene extends Phaser.Scene {
     this.add.text(LEFT_PANEL_X + LEFT_PANEL_W / 2, PANEL_Y + 14, 'Character', {
       fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#7777aa',
     }).setOrigin(0.5, 0)
-    this.drawWizardDoll()
+    this.drawCharacterDoll()
   }
 
   private drawMidPanel() {
@@ -375,11 +410,27 @@ export class EquipmentScene extends Phaser.Scene {
     dg.lineBetween(RIGHT_PANEL_X + 12, PANEL_Y + 34, RIGHT_PANEL_X + RIGHT_PANEL_W - 12, PANEL_Y + 34)
   }
 
-  // ── Wizard paper doll ─────────────────────────────────────────────────────────
+  // ── Character paper doll ───────────────────────────────────────────────────────
 
-  private drawWizardDoll() {
+  /** The player's own front-facing character sprite (same art as the overworld
+   *  avatar), centred in the Character panel. Falls back to a drawn figure if
+   *  the sprite sheet somehow isn't loaded. */
+  private drawCharacterDoll() {
     const cx = DOLL_CX
     const cy = DOLL_CY
+
+    // Soft shadow under the feet.
+    const shadow = this.add.graphics()
+    shadow.fillStyle(0x000000, 0.18)
+    shadow.fillEllipse(cx, cy + 112, 92, 16)
+
+    if (this.textures.exists('character_idle')) {
+      const hero = this.add.sprite(cx, cy, 'character_idle', 12).setScale(5)
+      if (this.anims.exists('idle_down')) hero.play('idle_down')
+      return
+    }
+
+    // ── Fallback: the old drawn wizard figure ───────────────────────────────
     const g  = this.add.graphics()
 
     // Shadow at feet
@@ -489,7 +540,7 @@ export class EquipmentScene extends Phaser.Scene {
         this.add.image(0, -6, 'armor_icons', frame).setScale(1.5).setAlpha(0.55).setOrigin(0.5, 0.5)
       )
     } else {
-      const icon = this.add.text(0, -8, item ? item.icon : SLOT_PLACEHOLDER[slotKey], {
+      const icon = this.add.text(0, -8, item ? this.displayIcon(item) : SLOT_PLACEHOLDER[slotKey], {
         fontSize: '26px',
       }).setOrigin(0.5, 0.5).setAlpha(item ? 1 : 0.25)
       container.add(icon)
@@ -521,6 +572,7 @@ export class EquipmentScene extends Phaser.Scene {
         return
       }
       this.socket.emit('equipment:unequip', { slot: slotKey })
+      this.requestServerState()   // pull fresh state back on THIS socket
     })
     container.add(hit)
 
@@ -644,16 +696,15 @@ export class EquipmentScene extends Phaser.Scene {
     this.inventoryContainer.add(iconBg)
 
     this.inventoryContainer.add(
-      this.add.text(rowX + 34, rowY + 32, item.icon, { fontSize: '26px' }).setOrigin(0.5, 0.5)
+      this.add.text(rowX + 34, rowY + 32, this.displayIcon(item), { fontSize: '26px' }).setOrigin(0.5, 0.5)
     )
 
     // Text info
-    const catalog    = EQUIPMENT_MAP[item.itemType]
     const slotKey    = this.slotForItem(item)
     const rarName    = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
     const rarHex     = rarCol.toString(16).padStart(6, '0')
     const slotLabel  = slotKey ? SLOT_LABELS[slotKey] : item.itemType
-    const xpNote     = catalog && catalog.xpRequired > 0 ? `  ·  needs ${catalog.xpRequired} XP` : ''
+    const xpNote     = (item.xpRequired ?? 0) > 0 ? `  ·  needs ${item.xpRequired} XP` : ''
     const nameText   = this.add.text(rowX + 70, rowY + 9,  item.name, {
       fontSize: '14px', fontFamily: 'Georgia, serif', color: '#dde0ff', fontStyle: 'bold',
     })
@@ -721,6 +772,7 @@ export class EquipmentScene extends Phaser.Scene {
         return
       }
       this.socket.emit('equipment:equip', { itemId: item.id })
+      this.requestServerState()   // pull fresh state back on THIS socket
     })
     this.inventoryContainer.add(equipHit)
   }

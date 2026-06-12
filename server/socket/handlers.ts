@@ -25,6 +25,8 @@ import type {
   LearningStartPayload,
   LearningAnswerPayload,
   LearningEndPayload,
+  CraftStartPayload,
+  CraftAnswerPayload,
   ShopBuySkillPayload,
   ShopBuyStrategyPayload,
   StrategySetLoadoutPayload,
@@ -37,8 +39,9 @@ import type {
   ItemRarity,
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
-import { EQUIPMENT_MAP, type EquipSlot } from '../game/data/equipmentGen.js';
-import { rollCombatDrops, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
+import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
   marketPrice,
@@ -147,6 +150,7 @@ export function registerHandlers(
   const {
     playerManager,
     learningSessionManager,
+    craftSessionManager,
     inventoryManager,
     chestManager,
   } = game;
@@ -418,31 +422,57 @@ export function registerHandlers(
     if (diff) {
       const dropLevel = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
       const campaignComplete = payload?.campaignComplete === true;
-      const drops = rollCombatDrops(dropLevel, diff, campaignComplete);
+      // Campaigns reward MATERIALS only (turned into gear at the crafting
+      // buildings) — never finished items. Server-authoritative.
+      const drops = rollMaterials(dropLevel, diff, campaignComplete);
       if (drops.length) {
-        for (const eq of drops) {
-          inventoryManager.addItem(socket.id, {
-            id: randomUUID(),
-            itemType: eq.id,            // eq_NNNN — EQUIPMENT_MAP supplies stats on equip
-            name: eq.name,
-            description: eq.description,
-            rarity: eq.rarity as ItemRarity,
-            stats: {},
-            quantity: 1,
-            stackable: false,
-            icon: eq.icon,
-          });
-        }
-        pushInventoryUpdate();
+        playerManager.grantMaterials(socket.id, drops);
+        playerManager.persistProgress(socket.id);
         console.log(
-          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}dropped ${drops.length}: ` +
-          drops.map((d) => `${d.name} [${d.rarity}]`).join(', '),
+          `[loot] ${player.username} ${campaignComplete ? '(campaign) ' : ''}materials: ` +
+          drops.map((d) => `${MATERIALS[d.materialId]?.name ?? d.materialId} x${d.qty}`).join(', '),
         );
       }
-      socket.emit('combat:loot', {
-        campaignComplete,
-        items: drops.map((d) => ({ name: d.name, icon: d.icon, rarity: d.rarity })),
+      // Reuse the existing reward-chip shape: name carries the quantity, and the
+      // chip rarity colours catalysts by their gate / base mats by tier.
+      const tierRarity = (t: number): string =>
+        t >= 7 ? 'legendary' : t >= 6 ? 'epic' : t >= 5 ? 'rare' : t >= 3 ? 'uncommon' : 'common';
+      const items = drops.map((d) => {
+        const m = MATERIALS[d.materialId];
+        const rarity = m?.family === 'catalyst' ? (m.rarityGate ?? 'rare') : tierRarity(m?.tier ?? 1);
+        return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
       });
+
+      // ── Shard rewards (campaign completion only) ────────────────────────────
+      // Shards used to come from the Learning Center; now they drop from clearing
+      // campaigns. The first campaign ever grants a guaranteed 2 skill + 1 combat
+      // so a new player can start buying skills/strategies; after that they're a
+      // rare random drop (combat rarer than skill, both nudged up by difficulty).
+      if (campaignComplete) {
+        const firstEver = playerManager.getCampaignsCompleted(socket.id) === 0;
+        let skillAward = 0;
+        let combatAward = 0;
+        if (firstEver) {
+          skillAward = 2;
+          combatAward = 1;
+        } else {
+          const di = Math.max(0, (DIFFICULTIES as string[]).indexOf(diff)); // 0..4
+          if (Math.random() < 0.12 + di * 0.03) skillAward = 1;  // ~12%–24%
+          if (Math.random() < 0.04 + di * 0.015) combatAward = 1; // ~4%–10%
+        }
+        if (skillAward > 0) playerManager.addShards(socket.id, 'skill', skillAward);
+        if (combatAward > 0) playerManager.addShards(socket.id, 'combat', combatAward);
+        playerManager.recordCampaignCompletion(socket.id);
+
+        if (skillAward > 0) items.push({ name: `Skill Shard ×${skillAward}`, icon: '🔷', rarity: 'rare' });
+        if (combatAward > 0) items.push({ name: `Combat Shard ×${combatAward}`, icon: '🔶', rarity: 'epic' });
+        if (skillAward > 0 || combatAward > 0) {
+          pushCurrency(); // refresh the HUD shard counters
+          console.log(`[shards] ${player.username} campaign reward: +${skillAward} skill, +${combatAward} combat${firstEver ? ' (first clear bonus)' : ''}`);
+        }
+      }
+
+      socket.emit('combat:loot', { campaignComplete, items });
     }
   });
 
@@ -643,6 +673,86 @@ export function registerHandlers(
     learningSessionManager.endSession(payload.sessionId);
   });
 
+  // ── materials:get ────────────────────────────────────────────────────────
+  //
+  // Returns the player's crafting-material stash (id → qty). Safe to send: the
+  // client only displays it; all spending is validated server-side at craft.
+  const pushMaterials = (): void => {
+    socket.emit('materials:data', { materials: playerManager.getMaterials(socket.id) });
+  };
+  socket.on('materials:get', () => {
+    if (!requireJoinedPlayer('You must join before viewing materials.')) return;
+    pushMaterials();
+  });
+
+  // ── craft:start ──────────────────────────────────────────────────────────
+  //
+  // Begin a Forge weapon craft: a short Math quiz that produces a weapon.
+  // Server-authoritative — the recipe, tier, catalyst and material ownership are
+  // all validated here; the client only ever receives answer text, never the
+  // correct index, and never the rolled item until materials are spent.
+  socket.on('craft:start', (payload: CraftStartPayload) => {
+    if (
+      typeof payload?.recipeId !== 'string' ||
+      !isSafeNumber(payload?.tier, 1, 7) ||
+      !(payload?.catalystId === null || typeof payload?.catalystId === 'string')
+    ) {
+      socket.emit('error', { message: 'Invalid craft start payload.' });
+      return;
+    }
+
+    const player = requireJoinedPlayer('You must join before crafting.');
+    if (!player) return;
+
+    const result = craftSessionManager.startCraft(
+      socket.id,
+      payload.recipeId,
+      payload.tier,
+      payload.catalystId,
+    );
+    if ('error' in result) {
+      socket.emit('error', { message: result.error });
+      return;
+    }
+
+    socket.emit('craft:session_started', {
+      sessionId: result.session.sessionId,
+      recipeId: result.session.recipe.id,
+      firstQuestion: result.firstQuestion,
+    });
+  });
+
+  // ── craft:answer ─────────────────────────────────────────────────────────
+  socket.on('craft:answer', (payload: CraftAnswerPayload) => {
+    if (
+      typeof payload?.sessionId !== 'string' ||
+      typeof payload?.questionId !== 'string' ||
+      !isSafeNumber(payload?.answerIndex, 0, 3)
+    ) {
+      socket.emit('error', { message: 'Invalid craft answer payload.' });
+      return;
+    }
+
+    const result = craftSessionManager.submitAnswer(
+      payload.sessionId,
+      socket.id,
+      payload.questionId,
+      payload.answerIndex,
+    );
+    if ('error' in result) {
+      socket.emit('error', { message: result.error });
+      return;
+    }
+
+    socket.emit('craft:answer_result', result);
+
+    // A finished craft mutated the bag + material stash — refresh the client.
+    if (result.sessionComplete) {
+      pushInventoryUpdate();
+      pushMaterials();
+    }
+  });
+
   // ── chat:message ─────────────────────────────────────────────────────────
   socket.on('chat:message', (payload: ChatMessagePayload) => {
     if (typeof payload?.message !== 'string') {
@@ -730,24 +840,25 @@ export function registerHandlers(
     }
 
     // Resolve the destination slot + name, supporting BOTH item models:
-    //  • Generated gear (EQUIPMENT_MAP) — server-derived slot + XP gate.
+    //  • Crafted gear — carries its own equipSlot + tier-derived XP gate on the
+    //    instance (rolled server-side at craft time; see CraftSessionManager).
     //  • Legacy ItemDatabase gear (worn_sword, etc.) — its catalogue slot, no
     //    XP gate.  Its {attack,defense,hp} stats fold into derived stats during
     //    stat computation (see PlayerManager.computeStats).
     let slotKey: EquipmentSlotKey;
     let label: string;
 
-    const catalogItem = EQUIPMENT_MAP[bagItem.itemType];
-    if (catalogItem) {
-      // XP gate — enforced server-side; player.xp is server-authoritative
-      if (player.xp < catalogItem.xpRequired) {
+    if (bagItem.equipSlot) {
+      // XP gate — enforced server-side; player.xp is server-authoritative.
+      const need = bagItem.xpRequired ?? 0;
+      if (player.xp < need) {
         socket.emit('error', {
-          message: `You need ${catalogItem.xpRequired} XP to equip ${catalogItem.name} (you have ${player.xp}). Keep learning!`,
+          message: `You need ${need} XP to equip ${bagItem.name} (you have ${player.xp}). Keep adventuring!`,
         });
         return;
       }
-      slotKey = EQUIP_SLOT_TO_KEY[catalogItem.slot];
-      label = catalogItem.name;
+      slotKey = EQUIP_SLOT_TO_KEY[bagItem.equipSlot];
+      label = bagItem.name;
     } else {
       const legacySlot = getItemSlot(bagItem.itemType);
       if (!legacySlot) {
@@ -1040,7 +1151,8 @@ export function registerHandlers(
         socket.emit('error', { message: 'Item not found in your inventory.' });
         return;
       }
-      success = chestManager.transferToChest(payload.chestId, socket.id, item);
+      const toSlot = typeof payload.toSlot === 'number' ? payload.toSlot : undefined;
+      success = chestManager.transferToChest(payload.chestId, socket.id, item, toSlot);
     } else {
       success = chestManager.transferFromChest(payload.chestId, socket.id, payload.itemId);
     }
@@ -1068,6 +1180,9 @@ export function registerHandlers(
   const MARKET_SLOTS: ReadonlySet<string> = new Set([
     'weapon', 'helmet', 'chest', 'legs', 'boots', 'gloves', 'ring', 'amulet',
   ]);
+
+  // Valid attribute-filter values (the generated-gear attribute/bonus types).
+  const MARKET_ATTRIBUTES: ReadonlySet<string> = new Set(ATTRIBUTE_TYPES);
 
   // Synthetic seller for items sold to the system. Items sold this way stay on
   // the market (priced like a player listing, 2× base) so they — and any other
@@ -1149,21 +1264,39 @@ export function registerHandlers(
   };
 
   // ── market:get_listings ──────────────────────────────────────────────────
-  socket.on('market:get_listings', (payload: { slot?: unknown; search?: unknown }) => {
-    const player = requireJoinedPlayer('You must join before browsing the market.');
-    if (!player) return;
+  socket.on(
+    'market:get_listings',
+    (payload: { slot?: unknown; search?: unknown; attribute?: unknown }) => {
+      const player = requireJoinedPlayer('You must join before browsing the market.');
+      if (!player) return;
 
-    const slot =
-      typeof payload?.slot === 'string' && MARKET_SLOTS.has(payload.slot)
-        ? payload.slot
+      // slot omitted / unknown (e.g. the "All" tab) → no slot filter.
+      const slot =
+        typeof payload?.slot === 'string' && MARKET_SLOTS.has(payload.slot)
+          ? payload.slot
+          : undefined;
+      const search = typeof payload?.search === 'string' ? payload.search : '';
+      const attribute =
+        typeof payload?.attribute === 'string' && MARKET_ATTRIBUTES.has(payload.attribute)
+          ? payload.attribute
+          : undefined;
+
+      // Compose the search predicate with the attribute-presence filter; a
+      // listing must satisfy BOTH to appear.
+      const searchPred = buildSearchPredicate(search);
+      const attrPred = attribute
+        ? (l: MarketListing) => (l.itemData.attributes ?? []).some((a) => a.type === attribute)
         : undefined;
-    const search = typeof payload?.search === 'string' ? payload.search : '';
-    const predicate = buildSearchPredicate(search);
+      const parts = [searchPred, attrPred].filter(
+        (p): p is (l: MarketListing) => boolean => !!p,
+      );
+      const predicate = parts.length ? (l: MarketListing) => parts.every((p) => p(l)) : undefined;
 
-    socket.emit('market:listings', {
-      listings: marketManager.getListings({ slot, predicate }),
-    });
-  });
+      socket.emit('market:listings', {
+        listings: marketManager.getListings({ slot, predicate }),
+      });
+    },
+  );
 
   // ── market:my_listings ─────────────────────────────────────────────────────
   socket.on('market:my_listings', () => {

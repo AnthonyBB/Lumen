@@ -24,6 +24,10 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
     this.setCollideWorldBounds(true)
     this.setDepth(10)
+    // Scale the avatar to read at the same height as the town NPCs (citizen
+    // sprites at 2.2×): the player art is 35px tall in its 48px frame vs the
+    // NPCs' 28px, so ~1.8× matches them. The Arcade body scales with the sprite.
+    this.setScale(1.8)
 
     // Hitbox tuned to character feet (40x48 frame)
     const body = this.body as Phaser.Physics.Arcade.Body

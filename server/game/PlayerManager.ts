@@ -19,7 +19,7 @@ import type {
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
-import { EQUIPMENT_MAP, type AttributeType } from './data/equipmentGen.js';
+import type { AttributeType } from './data/equipmentGen.js';
 
 /** Round to one decimal place (keeps percent-style stats readable). */
 function round1(n: number): number {
@@ -66,6 +66,30 @@ export const ATTRIBUTE_BASE = 5;
 
 /** Allocation points granted per level. Total earned = level * this. */
 export const POINTS_PER_LEVEL = 3;
+
+/** Hard level cap. */
+export const LEVEL_CAP = 50;
+
+/**
+ * Total XP required to REACH a given level (level 1 = 0 XP). The per-level cost
+ * rises linearly — cost(L→L+1) = 250 + 150*(L-1) — so the curve gets steadily
+ * steeper as you climb (a quadratic total). Compared with the old flat
+ * 100-XP-per-level this is far slower and progressively harder:
+ *   L2=250, L5=2050, L10=7000, L20=27500, L50=190000.
+ */
+export function xpForLevel(level: number): number {
+  const L = Math.max(1, Math.floor(level));
+  let total = 0;
+  for (let l = 1; l < L; l++) total += 250 + 150 * (l - 1);
+  return total;
+}
+
+/** Highest level whose XP threshold `xp` meets, capped at LEVEL_CAP. */
+export function levelForXp(xp: number): number {
+  let level = 1;
+  while (level < LEVEL_CAP && xp >= xpForLevel(level + 1)) level++;
+  return level;
+}
 
 /** A fresh attributePoints map with all five attributes at 0. */
 function defaultAttributePoints(): Record<AttributeKey, number> {
@@ -157,6 +181,8 @@ export class PlayerManager {
       skillShards: 0,
       combatShards: 0,
       silver: 0,
+      materials: {},
+      campaignsCompleted: 0,
       attributePoints: defaultAttributePoints(),
     };
 
@@ -216,8 +242,8 @@ export class PlayerManager {
     player.xp += amount;
 
     const oldLevel = player.level;
-    // Simple level formula: level = floor(xp / 100) + 1, capped at 50
-    player.level = Math.min(50, Math.floor(player.xp / 100) + 1);
+    // Progressive curve — each level costs more XP than the last (see xpForLevel).
+    player.level = levelForXp(player.xp);
 
     if (player.level > oldLevel) {
       // Restore full HP on level-up and increase max HP
@@ -251,6 +277,8 @@ export class PlayerManager {
     skillShards: number;
     combatShards: number;
     silver: number;
+    materials: Record<string, number>;
+    campaignsCompleted: number;
     attributePoints: Record<AttributeKey, number>;
   }> {
     try {
@@ -267,6 +295,8 @@ export class PlayerManager {
           skillShards: Math.max(0, doc.skillShards ?? 0),
           combatShards: Math.max(0, doc.combatShards ?? 0),
           silver: Math.max(0, doc.silver ?? 0),
+          materials: { ...((doc.materials as Record<string, number>) ?? {}) },
+          campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
           attributePoints: normaliseAttributePoints(doc.attributePoints),
         };
       }
@@ -277,7 +307,8 @@ export class PlayerManager {
       xp: 0, level: 1,
       subjectGrades: defaultSubjectGrades(), topicPasses: {},
       unlockedSkills: [], unlockedStrategies: [], strategyLoadout: [],
-      skillShards: 0, combatShards: 0, silver: 0,
+      skillShards: 0, combatShards: 0, silver: 0, materials: {},
+      campaignsCompleted: 0,
       attributePoints: defaultAttributePoints(),
     };
   }
@@ -299,13 +330,16 @@ export class PlayerManager {
       skillShards?: number;
       combatShards?: number;
       silver?: number;
+      materials?: Record<string, number>;
+      campaignsCompleted?: number;
       attributePoints?: Record<AttributeKey, number>;
     },
   ): void {
     const player = this.players.get(socketId);
     if (!player) return;
     player.xp = Math.max(0, progress.xp);
-    player.level = Math.min(50, Math.max(1, progress.level));
+    // Derive level from XP so the (new, steeper) curve is always authoritative.
+    player.level = levelForXp(player.xp);
     player.maxHp = 100 + (player.level - 1) * 20;
     player.hp = player.maxHp;
     player.attributePoints = this.clampAllocatedToCap(
@@ -323,6 +357,56 @@ export class PlayerManager {
     player.skillShards = Math.max(0, Math.floor(progress.skillShards ?? 0));
     player.combatShards = Math.max(0, Math.floor(progress.combatShards ?? 0));
     player.silver = Math.max(0, Math.floor(progress.silver ?? 0));
+    player.materials = { ...(progress.materials ?? {}) };
+    player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
+  }
+
+  // -------------------------------------------------------------------------
+  // Crafting materials
+  // -------------------------------------------------------------------------
+
+  /** Current material counts for a player (material id → quantity). */
+  getMaterials(socketId: string): Record<string, number> {
+    return this.players.get(socketId)?.materials ?? {};
+  }
+
+  /** Add material drops to a player's stash. Returns false if unknown player. */
+  grantMaterials(socketId: string, drops: { materialId: string; qty: number }[]): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    for (const d of drops) {
+      if (d.qty <= 0) continue;
+      player.materials[d.materialId] = (player.materials[d.materialId] ?? 0) + Math.floor(d.qty);
+    }
+    return true;
+  }
+
+  /** True when the player owns at least `qty` of every listed material. */
+  hasMaterials(socketId: string, costs: { materialId: string; qty: number }[]): boolean {
+    const owned = this.players.get(socketId)?.materials;
+    if (!owned) return false;
+    // Sum required per id first, so duplicate entries are handled correctly.
+    const need: Record<string, number> = {};
+    for (const c of costs) need[c.materialId] = (need[c.materialId] ?? 0) + Math.max(0, Math.floor(c.qty));
+    return Object.entries(need).every(([id, q]) => (owned[id] ?? 0) >= q);
+  }
+
+  /**
+   * Atomically remove material costs from a player's stash. Returns false (and
+   * changes nothing) unless every cost can be fully paid — callers rely on this
+   * all-or-nothing behaviour so a craft never half-consumes ingredients.
+   */
+  consumeMaterials(socketId: string, costs: { materialId: string; qty: number }[]): boolean {
+    const player = this.players.get(socketId);
+    if (!player || !this.hasMaterials(socketId, costs)) return false;
+    for (const c of costs) {
+      const q = Math.max(0, Math.floor(c.qty));
+      if (q <= 0) continue;
+      const left = (player.materials[c.materialId] ?? 0) - q;
+      if (left > 0) player.materials[c.materialId] = left;
+      else delete player.materials[c.materialId];
+    }
+    return true;
   }
 
   /**
@@ -346,6 +430,8 @@ export class PlayerManager {
         skillShards: player.skillShards,
         combatShards: player.combatShards,
         silver: player.silver,
+        materials: player.materials,
+        campaignsCompleted: player.campaignsCompleted,
         attributePoints: player.attributePoints,
       },
       { upsert: true, new: true },
@@ -357,6 +443,20 @@ export class PlayerManager {
   // -------------------------------------------------------------------------
   // Shard currencies (skill / combat) — tracked balances, NOT inventory items.
   // -------------------------------------------------------------------------
+
+  /** Total campaigns this player has completed (persisted). */
+  getCampaignsCompleted(socketId: string): number {
+    return this.players.get(socketId)?.campaignsCompleted ?? 0;
+  }
+
+  /** Record a campaign completion. Returns the new total. Persists. */
+  recordCampaignCompletion(socketId: string): number {
+    const player = this.players.get(socketId);
+    if (!player) return 0;
+    player.campaignsCompleted += 1;
+    this.persistProgress(socketId);
+    return player.campaignsCompleted;
+  }
 
   getSkillShards(socketId: string): number {
     return this.players.get(socketId)?.skillShards ?? 0;
@@ -586,7 +686,7 @@ export class PlayerManager {
   computeStats(
     socketId: string,
     equipment: EquipmentSlots,
-  ): { payload: StatsUpdatePayload; maxHp: number } | null {
+  ): { payload: StatsUpdatePayload; maxHp: number; maxMana: number; manaRegen: number; healthRegen: number } | null {
     const player = this.players.get(socketId);
     if (!player) return null;
 
@@ -596,13 +696,15 @@ export class PlayerManager {
     const gear = {
       hp: 0, attack: 0, defense: 0,
       damage_bonus: 0, magic_damage: 0, healing_bonus: 0, crit_chance: 0,
+      mp_regen: 0, hp_regen: 0,
     };
 
     for (const item of Object.values(equipment)) {
       if (!item) continue;
-      const generated = EQUIPMENT_MAP[item.itemType];
-      if (generated) {
-        for (const a of generated.attributes) {
+      // Crafted gear carries its rolled attributes on the instance (set
+      // server-side at craft time). These are the authoritative stat source.
+      if (item.attributes && item.attributes.length) {
+        for (const a of item.attributes) {
           const t = a.type as AttributeType;
           if ((ATTRIBUTE_KEYS as readonly string[]).includes(t)) {
             attrGear[t as AttributeKey] += a.value;
@@ -612,14 +714,18 @@ export class PlayerManager {
             gear.healing_bonus += a.value;
           } else if (t === 'crit_chance') {
             gear.crit_chance += a.value;
+          } else if (t === 'mp_regen') {
+            gear.mp_regen += a.value;
+          } else if (t === 'hp_regen') {
+            gear.hp_regen += a.value;
           } else if (
             t === 'fire_damage' || t === 'ice_damage' || t === 'lightning_damage' ||
             t === 'holy_damage' || t === 'nature_damage'
           ) {
             gear.magic_damage += a.value;
           }
-          // Other attribute types (mp_regen, xp_bonus, gold_find, dot/aoe,
-          // debuff_resist) are flavour bonuses not surfaced as core stats here.
+          // Remaining types (gold_find, dot/aoe, debuff_resist) are flavour
+          // bonuses not surfaced as core stats here.
         }
       } else {
         // Legacy ItemDatabase item — apply its raw stats directly.
@@ -680,10 +786,10 @@ export class PlayerManager {
       derivedRow('magic', 'Magic Power',
         5 + bINT * 2,
         5 + INT * 2 + gear.magic_damage + gear.damage_bonus),
-      // Defense = STR + CON + gear defense
+      // Defense = STR*2 + gear defense (scales off Strength)
       derivedRow('defense', 'Defense',
-        bSTR + bCON,
-        STR + CON + gear.defense),
+        bSTR * 2,
+        STR * 2 + gear.defense),
       // Speed = 10 + DEX*2
       derivedRow('speed', 'Speed',
         10 + bDEX * 2,
@@ -697,9 +803,24 @@ export class PlayerManager {
         bDEX * 0.5,
         DEX * 0.5 + gear.crit_chance,
         true),
+      // Mana (max) = 20 + SPI*8 — scales off Spirit
+      derivedRow('mana', 'Mana',
+        20 + bSPI * 8,
+        20 + SPI * 8),
+      // Mana Regen / turn = 2 + SPI*0.5 + gear mp_regen — scales off Spirit
+      derivedRow('manaRegen', 'Mana Regen',
+        2 + bSPI * 0.5,
+        2 + SPI * 0.5 + gear.mp_regen),
+      // Health Regen / battle = 3 + CON + gear hp_regen — scales off Constitution
+      derivedRow('healthRegen', 'Health Regen',
+        3 + bCON * 1,
+        3 + CON * 1 + gear.hp_regen),
     ];
 
     const maxHp = 50 + CON * 10 + gear.hp;
+    const maxMana = Math.round(20 + SPI * 8);
+    const manaRegen = round1(2 + SPI * 0.5 + gear.mp_regen);
+    const healthRegen = round1(3 + CON * 1 + gear.hp_regen);
 
     return {
       payload: {
@@ -709,6 +830,9 @@ export class PlayerManager {
         level: player.level,
       },
       maxHp,
+      maxMana,
+      manaRegen,
+      healthRegen,
     };
   }
 

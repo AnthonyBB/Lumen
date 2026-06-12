@@ -14,7 +14,7 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import type { BattleResult, MobDef } from './BattleScene'
+import type { BattleSceneData, BattleResult, MobDef } from './BattleScene'
 import {
   RL_WATER, RL_WATER2, RL_GRASS, RL_GRASS2, RL_GRASS_PEBBLES, RL_GRASS_LUSH,
   RL_DIRT, RL_DIRT2, RL_SNOW, RL_SNOW2, RL_SAND, RL_SAND2,
@@ -542,29 +542,26 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private launchBattle(node: PathNode) {
-    // Server-authoritative party combat: ask the server to resolve this encounter
-    // with the player's party, then animate the returned event log (§5).
-    const mobs = (node.mobs ?? []).map(m => ({
-      name: m.name, level: m.level, maxHp: m.maxHp, attack: m.attack, defense: m.defense, speed: m.speed,
-    }))
-    const repLevel = Math.max(1, ...(node.mobs ?? []).map(m => m.level))
+    // LIVE combat is the interactive, hand-played battle (the rich look + manual
+    // skill/target control) — playing it teaches you the tactics you then bake
+    // into your characters' strategies for autonomous idle combat. (Idle uses the
+    // server resolver; see server/game/combat/idle.ts.)
+    const encNodes = this.pathNodes.filter(n => n.type === 'encounter')
+    const encIdx   = encNodes.findIndex(n => n === node)
+
+    const data: BattleSceneData = {
+      biome:           this.biomeData.biome,
+      difficulty:      this.biomeData.difficulty,
+      mobs:            node.mobs ?? [],
+      encounterIndex:  encIdx,
+      totalEncounters: encNodes.length,
+      playerHp:        this.playerHp,
+      playerMaxHp:     this.playerMaxHp,
+    }
     for (const m of node.mobs ?? []) this.maxEnemyLevel = Math.max(this.maxEnemyLevel, m.level)
 
-    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-    if (!socket) { this.onBattleResult({ victory: true, playerHp: 0, xpGained: 0 }); return }
-
-    this.alertText.setText('⚔  Resolving battle…').setVisible(true)
-    const onResolved = (data: { events: unknown[]; victory: boolean; rewards: unknown }) => {
-      socket.off('campaign:resolved', onResolved)
-      this.alertText.setVisible(false)
-      this.scene.launch('PartyBattleScene', data)
-      this.scene.pause()
-    }
-    socket.on('campaign:resolved', onResolved)
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => socket.off('campaign:resolved', onResolved))
-    socket.emit('campaign:resolve', {
-      difficulty: this.biomeData.difficulty, level: repLevel, campaignComplete: false, mobs,
-    })
+    this.scene.launch('BattleScene', data)
+    this.scene.pause()
   }
 
   public onBattleResult(result: BattleResult) {

@@ -27,7 +27,13 @@ interface CraftResult {
   success: boolean
   score: number
   total: number
-  item?: { name: string; icon: string; rarity: string }
+  item?: {
+    name: string
+    icon: string
+    rarity: string
+    attributes?: { type: string; value: number }[]
+    potion?: { effect: 'heal' | 'mana' | 'restore'; power: number }
+  }
   message: string
 }
 
@@ -298,23 +304,52 @@ export class CraftScene extends Phaser.Scene {
   private renderResult() {
     const cx = GAME_WIDTH / 2
     const r = this.lastResult
-    const title = r?.success ? 'Weapon Forged!' : 'Craft Failed'
-    this.content.add(this.label(cx, 150, title, '26px', r?.success ? '#ffd54f' : '#ef9a9a', true).setOrigin(0.5))
+    const title = r?.success ? 'Item Crafted!' : 'Craft Failed'
+    this.content.add(this.label(cx, 120, title, '26px', r?.success ? '#ffd54f' : '#ef9a9a', true).setOrigin(0.5))
 
+    let y = 178
     if (r?.item) {
-      this.content.add(this.label(cx, 230, r.item.icon, '64px', '#ffffff').setOrigin(0.5))
-      this.content.add(this.label(cx, 295, r.item.name, '20px', RARITY_COLOR[r.item.rarity] ?? '#ffffff', true).setOrigin(0.5))
-      this.content.add(this.label(cx, 322, r.item.rarity.toUpperCase(), '13px', RARITY_COLOR[r.item.rarity] ?? '#ffffff').setOrigin(0.5))
-    }
-    if (r) {
-      this.content.add(this.label(cx, 375, `Score: ${r.score} / ${r.total}`, '16px', '#d7ccc8').setOrigin(0.5))
-      this.content.add(this.label(cx, 405, r.message, '14px', '#bcaaa4').setOrigin(0.5).setWordWrapWidth(700))
+      const rarCol = RARITY_COLOR[r.item.rarity] ?? '#ffffff'
+      this.content.add(this.label(cx, y, r.item.icon, '56px', '#ffffff').setOrigin(0.5)); y += 50
+      this.content.add(this.label(cx, y, r.item.name, '20px', rarCol, true).setOrigin(0.5)); y += 25
+      this.content.add(this.label(cx, y, r.item.rarity.toUpperCase(), '12px', rarCol).setOrigin(0.5)); y += 26
+
+      // Rolled stats — gear attributes, or a potion's effect.
+      const lines = this.statLines(r.item)
+      for (const ln of lines) {
+        this.content.add(this.label(cx, y, ln, '14px', '#9be7ff', true).setOrigin(0.5)); y += 19
+      }
+      if (!lines.length) {
+        this.content.add(this.label(cx, y, 'No bonuses', '13px', '#8d6e63').setOrigin(0.5)); y += 19
+      }
+      y += 8
+    } else {
+      y = 300
     }
 
-    this.content.add(this.button(cx - 270, 470, 250, 52, 'Forge Again', true, () => {
+    if (r) {
+      this.content.add(this.label(cx, y, `Score: ${r.score} / ${r.total}`, '15px', '#d7ccc8').setOrigin(0.5)); y += 24
+      this.content.add(this.label(cx, y, r.message, '13px', '#bcaaa4').setOrigin(0.5).setWordWrapWidth(700))
+    }
+
+    this.content.add(this.button(cx - 270, 478, 250, 52, 'Craft Again', true, () => {
       this.state = 'select'; this.feedback.setText(''); this.socket?.emit('materials:get'); this.render()
     }))
-    this.content.add(this.button(cx + 20, 470, 250, 52, 'Leave', true, () => this.closeScene()))
+    this.content.add(this.button(cx + 20, 478, 250, 52, 'Leave', true, () => this.closeScene()))
+  }
+
+  /** Human-readable stat lines for a crafted item (gear attributes or potion effect). */
+  private statLines(item: NonNullable<CraftResult['item']>): string[] {
+    if (item.potion) {
+      const what = item.potion.effect === 'restore' ? 'HP & MP'
+        : item.potion.effect === 'mana' ? 'MP' : 'HP'
+      return [`Restores ${item.potion.power} ${what}`]
+    }
+    return (item.attributes ?? []).map((a) => `+${a.value} ${this.attrLabel(a.type)}`)
+  }
+
+  private attrLabel(type: string): string {
+    return type.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
   }
 
   // ── Small UI helpers ─────────────────────────────────────────────────────────

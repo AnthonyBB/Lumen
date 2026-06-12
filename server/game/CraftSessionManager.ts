@@ -65,8 +65,17 @@ export interface CraftResult {
   success: boolean;
   score: number;
   total: number;
-  /** Present only on success — the freshly forged item (already in the bag). */
-  item?: { name: string; icon: string; rarity: Rarity };
+  /** Present only on success — the freshly forged item (already in the bag),
+   *  including its rolled stats so the result screen can show them. */
+  item?: {
+    name: string;
+    icon: string;
+    rarity: Rarity;
+    /** Rolled gear attributes (absent on potions). */
+    attributes?: { type: string; value: number }[];
+    /** Potion effect (absent on gear). */
+    potion?: { effect: 'heal' | 'mana' | 'restore'; power: number };
+  };
   /** A short server message for the result screen. */
   message: string;
 }
@@ -274,7 +283,13 @@ export class CraftSessionManager {
       success: true,
       score,
       total,
-      item: { name: item.label, icon: item.inv.icon, rarity: item.inv.rarity },
+      item: {
+        name: item.label,
+        icon: item.inv.icon,
+        rarity: item.inv.rarity,
+        attributes: item.inv.attributes,
+        potion: item.inv.potion,
+      },
       message: accuracy >= 0.8
         ? `Masterwork! ${item.success}`
         : `${item.success} A cleaner quiz would yield an even finer result.`,

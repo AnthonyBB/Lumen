@@ -149,6 +149,8 @@ export class EquipmentScene extends Phaser.Scene {
 
   private slotContainerMap: Map<SlotKey, Phaser.GameObjects.Container> = new Map()
   private connectorGfx: Phaser.GameObjects.Graphics | null = null
+  /** Floating tooltip shown while hovering an equipped slot. */
+  private slotTooltip: Phaser.GameObjects.Container | null = null
   private inventoryContainer!: Phaser.GameObjects.Container
   private statsContainer!:     Phaser.GameObjects.Container
   private feedbackText!:       Phaser.GameObjects.Text
@@ -510,6 +512,7 @@ export class EquipmentScene extends Phaser.Scene {
   // ── Equipment Slots ───────────────────────────────────────────────────────────
 
   private buildSlots() {
+    this.hideSlotTooltip()
     this.slotContainerMap.forEach(c => c.destroy())
     this.slotContainerMap.clear()
 
@@ -560,12 +563,16 @@ export class EquipmentScene extends Phaser.Scene {
 
     hit.on('pointerover', () => {
       this.drawSlotGfx(gfx, this.equipped[slotKey] ?? null, true)
+      const it = this.equipped[slotKey]
+      if (it) this.showSlotTooltip(it, slotKey, cx, cy)
     })
     hit.on('pointerout', () => {
       this.drawSlotGfx(gfx, this.equipped[slotKey] ?? null, false)
+      this.hideSlotTooltip()
     })
     hit.on('pointerdown', () => {
       // Request only — the server validates and pushes the updated inventory
+      this.hideSlotTooltip()
       if (!this.equipped[slotKey]) return
       if (!this.socket?.connected) {
         this.showFeedback('Not connected to the server.')
@@ -577,6 +584,51 @@ export class EquipmentScene extends Phaser.Scene {
     container.add(hit)
 
     this.slotContainerMap.set(slotKey, container)
+  }
+
+  /** Floating popup with an equipped item's name, rarity, slot and bonuses. */
+  private showSlotTooltip(item: ClientInventoryItem, slotKey: SlotKey, cx: number, cy: number) {
+    this.hideSlotTooltip()
+
+    const rarHex = RARITY_COLOR[item.rarity].toString(16).padStart(6, '0')
+    const rarName = item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1)
+    const bonuses = (item.attributes && item.attributes.length)
+      ? item.attributes.map(a => `+${a.value} ${this.attrLabel(a.type)}`)
+      : ['No bonuses']
+
+    const rows: { text: string; color: string; size: number; bold?: boolean }[] = [
+      { text: `${item.icon}  ${item.name}`, color: '#ffffff', size: 14, bold: true },
+      { text: `${rarName}  ·  ${SLOT_LABELS[slotKey]}`, color: `#${rarHex}`, size: 11 },
+      ...bonuses.map(b => ({ text: b, color: '#9be7ff', size: 12 })),
+    ]
+
+    const padX = 12, padY = 10, gap = 4
+    const texts = rows.map(r => this.add.text(0, 0, r.text, {
+      fontSize: `${r.size}px`, fontFamily: 'Arial, sans-serif',
+      color: r.color, fontStyle: r.bold ? 'bold' : 'normal',
+    }))
+    const w = Math.max(...texts.map(t => t.width)) + padX * 2
+    const h = texts.reduce((s, t) => s + t.height, 0) + gap * (texts.length - 1) + padY * 2
+
+    // Position above the slot, clamped on-screen; flip below if it would clip the top.
+    let tx = Phaser.Math.Clamp(cx - w / 2, 8, GAME_WIDTH - w - 8)
+    let ty = cy - SLOT_SIZE / 2 - h - 10
+    if (ty < 8) ty = cy + SLOT_SIZE / 2 + 10
+
+    const c = this.add.container(0, 0).setDepth(300)
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0c0c1c, 0.97).fillRoundedRect(tx, ty, w, h, 8)
+    bg.lineStyle(1, 0x4a4a7a, 1).strokeRoundedRect(tx, ty, w, h, 8)
+    c.add(bg)
+    let yy = ty + padY
+    texts.forEach(t => { t.setPosition(tx + padX, yy); c.add(t); yy += t.height + gap })
+
+    this.slotTooltip = c
+  }
+
+  private hideSlotTooltip() {
+    this.slotTooltip?.destroy()
+    this.slotTooltip = null
   }
 
   private drawSlotGfx(

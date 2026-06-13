@@ -9,10 +9,11 @@
 
 import Phaser from 'phaser'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
+import { Sfx } from '../systems/Sfx'
 import type { BiomeScene } from './BiomeScene'
 import type { BattleResult } from './BattleScene'
 
-interface UnitSnapshot { id: string; name: string; side: 'ally' | 'enemy'; hp: number; maxHp: number }
+interface UnitSnapshot { id: string; name: string; side: 'ally' | 'enemy'; hp: number; maxHp: number; boss?: boolean }
 
 // Mirror of the server resolver's BattleEvent union.
 type BattleEvent =
@@ -118,16 +119,17 @@ export class PartyBattleScene extends Phaser.Scene {
   private makeUnit(s: UnitSnapshot, x: number, y: number) {
     const c = this.add.container(x, y).setDepth(5)
     const ally = s.side === 'ally'
+    const boss = !!s.boss
     const w = 168, h = 88
     const panel = this.add.graphics()
-    panel.fillStyle(ally ? 0x182142 : 0x3a1620, 0.9).fillRoundedRect(-w / 2, -h / 2, w, h, 10)
-    panel.lineStyle(2, ally ? 0x5a78d0 : 0xc05858, 0.9).strokeRoundedRect(-w / 2, -h / 2, w, h, 10)
+    panel.fillStyle(ally ? 0x182142 : boss ? 0x42261c : 0x3a1620, 0.9).fillRoundedRect(-w / 2, -h / 2, w, h, 10)
+    panel.lineStyle(boss ? 3 : 2, ally ? 0x5a78d0 : boss ? 0xffd54f : 0xc05858, boss ? 1 : 0.9).strokeRoundedRect(-w / 2, -h / 2, w, h, 10)
     c.add(panel)
 
-    const glyph = this.add.text(-w / 2 + 22, -h / 2 + 22, ally ? '🛡️' : '👹', { fontSize: '26px' }).setOrigin(0.5)
+    const glyph = this.add.text(-w / 2 + 22, -h / 2 + 22, ally ? '🛡️' : boss ? '👑' : '👹', { fontSize: boss ? '32px' : '26px' }).setOrigin(0.5)
     c.add(glyph)
     c.add(this.add.text(-w / 2 + 44, -h / 2 + 14, this.trunc(s.name, 12), {
-      fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      fontSize: '13px', fontFamily: 'Georgia, serif', color: boss ? '#ffd54f' : '#ffffff', fontStyle: 'bold',
     }).setOrigin(0, 0.5))
 
     const hpBar = this.add.graphics()
@@ -198,7 +200,10 @@ export class PartyBattleScene extends Phaser.Scene {
         if (!u) break
         u.hp = e.hp
         this.drawHp(u)
-        if (!silent) this.floatText(u, `-${e.amount}`, '#ff6464')
+        if (!silent) {
+          this.floatText(u, `-${e.amount}`, '#ff6464')
+          Sfx.play(u.side === 'ally' ? 'hitPlayer' : 'hitEnemy')
+        }
         break
       }
       case 'heal': {
@@ -206,7 +211,7 @@ export class PartyBattleScene extends Phaser.Scene {
         if (!u) break
         u.hp = e.hp
         this.drawHp(u)
-        if (!silent) this.floatText(u, `+${e.amount}`, '#66ff99')
+        if (!silent) { this.floatText(u, `+${e.amount}`, '#66ff99'); Sfx.play('heal') }
         break
       }
       case 'defend': {
@@ -224,6 +229,7 @@ export class PartyBattleScene extends Phaser.Scene {
         break
       }
       case 'end':
+        if (!silent) Sfx.play(e.victory ? 'victory' : 'defeat')
         this.showEnd(e.victory)
         break
     }
@@ -311,7 +317,10 @@ export class PartyBattleScene extends Phaser.Scene {
   }
 
   private finish(victory: boolean) {
-    const result: BattleResult = { victory, playerHp: 0, xpGained: this.rewards.xpPerCharacter }
+    // playerHp:-1 ⇒ party combat (BiomeScene's single HP bar is vestigial).
+    // xpGained:0 — per-character XP was already granted server-side by
+    // campaign:resolve, so the campaign victory screen must not re-award it.
+    const result: BattleResult = { victory, playerHp: -1, xpGained: 0 }
     const biome = this.scene.get('BiomeScene') as BiomeScene
     this.scene.stop()
     this.scene.resume('BiomeScene')

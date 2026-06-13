@@ -14,7 +14,8 @@
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import type { BattleSceneData, BattleResult, MobDef } from './BattleScene'
+import type { BattleResult, MobDef } from './BattleScene'
+import type { ClientCombatant, PartyManualData } from './PartyManualBattleScene'
 import {
   RL_WATER, RL_WATER2, RL_GRASS, RL_GRASS2, RL_GRASS_PEBBLES, RL_GRASS_LUSH,
   RL_DIRT, RL_DIRT2, RL_SNOW, RL_SNOW2, RL_SAND, RL_SAND2,
@@ -29,7 +30,7 @@ import {
   CPD_BLADES, CPD_SPECKS, CPD_TUFTS, CPD_MOUNDS,
   ROAD, ROAD_GRASS_TINT,
 } from '../data/tileFrames'
-import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob } from '../data/mobs'
+import { MOBS_BY_BIOME, DIFFICULTIES, type Difficulty, spawnMob, bossForBiome, type MobArchetype } from '../data/mobs'
 import { StatsStore } from '../systems/StatsStore'
 
 // ── World dimensions ────────────────────────────────────────────────────────
@@ -51,6 +52,9 @@ interface BiomeSceneData {
   biome: string
   difficulty: Difficulty
   location: string
+  /** 'manual' = hand-play (PartyManualBattleScene); 'auto' = strategy loadout
+   *  fights and is animated live (PartyBattleScene). Defaults to 'manual'. */
+  mode?: 'manual' | 'auto'
   returnX?: number
   returnY?: number
 }
@@ -261,24 +265,40 @@ export class BiomeScene extends Phaser.Scene {
         // up to the maximum (last) so every mode opens gently and builds up.
         const t = totalEncounters <= 1 ? 1 : encIdx / (totalEncounters - 1)
         const count = Math.max(1, Math.round(Phaser.Math.Linear(minMobs, maxMobs, t)))
-        node.mobs = Array.from({ length: count }, () => {
-          const level = this.rng.integerInRange(sliceLo, sliceHi)
-          if (arch) {
-            const inst = spawnMob(arch.id, level)
+
+        // Build one mob from `arch` at the given level (legacy generic fallback
+        // if this biome has no bestiary entry).
+        const makeMob = (a: MobArchetype | null, level: number): MobDef => {
+          if (a) {
+            const inst = spawnMob(a.id, level)
             return {
               name: inst.name, level: inst.level, maxHp: inst.maxHp,
               attack: inst.attack, defense: inst.defense, speed: inst.speed,
-              frame: inst.frame, tint: inst.tint,
+              frame: inst.frame, tint: inst.tint, boss: inst.boss,
             }
           }
-          // Legacy fallback (no bestiary entry): generic enemy stats.
           return {
             name: 'Enemy', level, maxHp: 20 + level * 6,
             attack: 4 + Math.round(level * 1.2), defense: level,
             speed: 10 + Math.round(level * 0.5),
             frame: TD_MONSTERS[cfg.pool][encIdx % TD_MONSTERS[cfg.pool].length],
           }
-        })
+        }
+
+        // The FINAL encounter is a boss fight: the biome's boss (at the top of
+        // the band) leads, flanked by a couple of normal minions.
+        const boss = encIdx === totalEncounters - 1 ? bossForBiome(biome) : null
+        if (boss) {
+          const minionCount = Math.min(2, Math.max(0, count - 1))
+          node.mobs = [
+            makeMob(boss, sliceHi),
+            ...Array.from({ length: minionCount }, () =>
+              makeMob(arch, this.rng.integerInRange(sliceLo, sliceHi))),
+          ]
+        } else {
+          node.mobs = Array.from({ length: count }, () =>
+            makeMob(arch, this.rng.integerInRange(sliceLo, sliceHi)))
+        }
       }
       return node
     })
@@ -542,31 +562,83 @@ export class BiomeScene extends Phaser.Scene {
   }
 
   private launchBattle(node: PathNode) {
+    // Two ways to fight a campaign, chosen at start (BiomeSceneData.mode):
+    //  • 'manual' — hand-play every character's turn (PartyManualBattleScene).
+    //  • 'auto'   — the party's STRATEGY loadout fights; the server resolves it
+    //    (campaign:resolve) and PartyBattleScene animates it so you can watch
+    //    your strategy play out live.
+    // Either way you both play and learn the tactics you bake into your loadout.
     const encNodes = this.pathNodes.filter(n => n.type === 'encounter')
     const encIdx   = encNodes.findIndex(n => n === node)
+    const mobs     = node.mobs ?? []
+    for (const m of mobs) this.maxEnemyLevel = Math.max(this.maxEnemyLevel, m.level)
+    const level = mobs.reduce((mx, m) => Math.max(mx, m.level), 1)
+    const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
 
-    const data: BattleSceneData = {
-      biome:           this.biomeData.biome,
-      difficulty:      this.biomeData.difficulty,
-      mobs:            node.mobs ?? [],
-      encounterIndex:  encIdx,
-      totalEncounters: encNodes.length,
-      playerHp:        this.playerHp,
-      playerMaxHp:     this.playerMaxHp,
+    if (this.biomeData.mode === 'auto') { this.launchAutoBattle(mobs, level, socket); return }
+
+    // Manual: the client only has the ACTIVE character's stats, so fetch the
+    // whole party's combat data (party:combat_data) before launching.
+    const launch = (allies: ClientCombatant[]) => {
+      const data: PartyManualData = {
+        allies,
+        mobs,
+        difficulty:       this.biomeData.difficulty,
+        level,
+        campaignComplete: encIdx === encNodes.length - 1,
+        biome:            this.biomeData.biome,
+        encounterIndex:   encIdx,
+        totalEncounters:  encNodes.length,
+      }
+      this.scene.launch('PartyManualBattleScene', data)
+      this.scene.pause()
     }
-    for (const m of node.mobs ?? []) this.maxEnemyLevel = Math.max(this.maxEnemyLevel, m.level)
+    if (socket) {
+      socket.once('party:combat_data', (d: { allies?: ClientCombatant[] }) => launch(d?.allies ?? []))
+      socket.emit('party:combat_data')
+    } else {
+      launch([])
+    }
+  }
 
-    this.scene.launch('BattleScene', data)
-    this.scene.pause()
+  /** Auto mode: the server resolves the encounter from the party's strategy
+   *  loadout and returns an event log; PartyBattleScene animates it. Per-encounter
+   *  rewards are granted server-side (campaign:resolve with campaignComplete=false);
+   *  the campaign-completion bonus stays on showVictoryScreen, matching manual. */
+  private launchAutoBattle(mobs: MobDef[], level: number, socket?: Socket) {
+    if (!socket) { this.onBattleResult({ victory: true, playerHp: -1, xpGained: 0 }); return }
+    const onResolved = (data: {
+      events?: unknown[]; victory?: boolean
+      rewards?: { xpPerCharacter: number; silver: number; items: { name: string; icon: string; rarity: string }[] }
+    }) => {
+      socket.off('campaign:resolved', onResolved)
+      this.scene.launch('PartyBattleScene', {
+        events: data.events ?? [],
+        victory: data.victory ?? false,
+        rewards: data.rewards ?? { xpPerCharacter: 0, silver: 0, items: [] },
+      })
+      this.scene.pause()
+    }
+    socket.once('campaign:resolved', onResolved)
+    socket.emit('campaign:resolve', {
+      difficulty: this.biomeData.difficulty,
+      level,
+      campaignComplete: false,
+      mobs: mobs.map(m => ({ name: m.name, maxHp: m.maxHp, attack: m.attack, defense: m.defense, speed: m.speed, level: m.level, boss: m.boss })),
+    })
   }
 
   public onBattleResult(result: BattleResult) {
     if (!result.victory) { this.showDefeatOverlay(); return }
 
-    this.playerHp       = result.playerHp
-    // Health regen between battles — recover some HP before the next encounter.
-    if (this.healthRegen > 0) {
-      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.healthRegen))
+    // playerHp < 0 is the party-combat sentinel: each ally tracks its own HP and
+    // resets per encounter, so the BiomeScene's single HP bar is left unchanged.
+    if (result.playerHp >= 0) {
+      this.playerHp = result.playerHp
+      // Health regen between battles — recover some HP before the next encounter.
+      if (this.healthRegen > 0) {
+        this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.healthRegen))
+      }
     }
     this.totalXpGained += result.xpGained
     this.encountersCleared++

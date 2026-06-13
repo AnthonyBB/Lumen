@@ -15,7 +15,9 @@
  *  - Call loadInventory(userId) when a player connects to restore saved state.
  */
 
-import type { PlayerInventory, InventoryItem, EquipmentSlotKey } from '../types/index.js';
+import type {
+  PlayerInventory, InventorySnapshot, InventoryItem, EquipmentSlotKey, EquipmentSlots,
+} from '../types/index.js';
 import { getStarterItems, getGeneratedStarterItems } from './ItemDatabase.js';
 import { isDbConnected } from '../db/connection.js';
 import { PlayerInventoryModel } from '../db/models/PlayerInventoryModel.js';
@@ -54,10 +56,13 @@ export class InventoryManager {
     PlayerInventoryModel.findOneAndUpdate(
       { userId: dbUserId },
       {
-        items:     inv.items,
-        equipment: inv.equipment,
-        gold:      inv.gold,
-        updatedAt: new Date(),
+        items:                inv.items,
+        equipmentByCharacter: inv.equipmentByCharacter,
+        // Keep any not-yet-migrated flat equipment so a logout before first
+        // access doesn't lose gear.
+        equipment:            inv.legacyEquipment ?? {},
+        gold:                 inv.gold,
+        updatedAt:            new Date(),
       },
       { upsert: true, new: true },
     )
@@ -102,18 +107,38 @@ export class InventoryManager {
         !!it && it.itemType.startsWith('eq_');
 
       const items = ((doc.items as InventoryItem[]) ?? []).filter((it) => !isLegacyGear(it));
-      const rawEquip = (doc.equipment as PlayerInventory['equipment']) ?? {};
-      const equipment: PlayerInventory['equipment'] = {};
-      for (const [slot, it] of Object.entries(rawEquip)) {
-        if (!isLegacyGear(it as InventoryItem)) {
-          (equipment as Record<string, InventoryItem | undefined>)[slot] = it as InventoryItem;
+
+      /** Drop legacy `eq_` gear out of a slot map. */
+      const cleanSlots = (raw: Record<string, unknown> | undefined): EquipmentSlots => {
+        const out: EquipmentSlots = {};
+        for (const [slot, it] of Object.entries(raw ?? {})) {
+          if (!isLegacyGear(it as InventoryItem)) {
+            (out as Record<string, InventoryItem | undefined>)[slot] = it as InventoryItem;
+          }
         }
+        return out;
+      };
+
+      // Per-character equipment if the save already has it; otherwise stash the
+      // old flat equipment as `legacyEquipment` to migrate on first access.
+      const storedByChar = (doc as { equipmentByCharacter?: Record<string, Record<string, unknown>> })
+        .equipmentByCharacter;
+      const equipmentByCharacter: Record<string, EquipmentSlots> = {};
+      let legacyEquipment: EquipmentSlots | undefined;
+      if (storedByChar && Object.keys(storedByChar).length > 0) {
+        for (const [charId, slots] of Object.entries(storedByChar)) {
+          equipmentByCharacter[charId] = cleanSlots(slots);
+        }
+      } else {
+        const flat = cleanSlots(doc.equipment as Record<string, unknown> | undefined);
+        if (Object.keys(flat).length > 0) legacyEquipment = flat;
       }
 
       const inventory: PlayerInventory = {
         playerId:  storeKey,
         items,
-        equipment,
+        equipmentByCharacter,
+        legacyEquipment,
         gold:      (doc.gold as number) ?? 0,
       };
 
@@ -145,7 +170,7 @@ export class InventoryManager {
       // so the new attribute-bonus system is demonstrable on first join.  This
       // is the first-join-only path, so the generated grant never duplicates.
       items:     [...getStarterItems(), ...getGeneratedStarterItems()],
-      equipment: {},
+      equipmentByCharacter: {},
       gold:      0,
     };
     this.inventories.set(playerId, inventory);
@@ -168,6 +193,44 @@ export class InventoryManager {
 
   getInventory(playerId: string): PlayerInventory | null {
     return this.inventories.get(playerId) ?? null;
+  }
+
+  /**
+   * The equipped slots for a specific character. The first access for a player
+   * MIGRATES any pre-roster flat equipment into this character's slots (the
+   * active character on join), then clears the legacy field. Returns a live,
+   * mutable reference owned by the inventory.
+   */
+  equipmentFor(playerId: string, characterId: string): EquipmentSlots {
+    const inv = this.inventories.get(playerId);
+    if (!inv || !characterId) return {};
+    let slots = inv.equipmentByCharacter[characterId];
+    if (!slots) {
+      // Migrate legacy flat equipment onto the first character that asks for it.
+      slots = inv.legacyEquipment ?? {};
+      inv.equipmentByCharacter[characterId] = slots;
+      if (inv.legacyEquipment) {
+        inv.legacyEquipment = undefined;
+        this.persistInventory(playerId);
+      }
+    }
+    return slots;
+  }
+
+  /**
+   * The client-facing snapshot for one character: the shared bag + that
+   * character's equipped gear. This is what `inventory:data` / `inventory:updated`
+   * carry (the client only ever sees the active character's equipment).
+   */
+  getSnapshot(playerId: string, characterId: string): InventorySnapshot | null {
+    const inv = this.inventories.get(playerId);
+    if (!inv) return null;
+    return {
+      playerId: inv.playerId,
+      items: inv.items,
+      equipment: this.equipmentFor(playerId, characterId),
+      gold: inv.gold,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -244,9 +307,15 @@ export class InventoryManager {
     if (!inv) return null;
     const bagItem = inv.items.find((i) => i.id === itemId);
     if (bagItem) return bagItem;
-    for (const slot of Object.keys(inv.equipment) as EquipmentSlotKey[]) {
-      const it = inv.equipment[slot];
-      if (it && it.id === itemId) return it;
+    // Item ids are globally unique, so search every character's slots (and any
+    // not-yet-migrated legacy equipment).
+    const slotMaps = [...Object.values(inv.equipmentByCharacter)];
+    if (inv.legacyEquipment) slotMaps.push(inv.legacyEquipment);
+    for (const slots of slotMaps) {
+      for (const slot of Object.keys(slots) as EquipmentSlotKey[]) {
+        const it = slots[slot];
+        if (it && it.id === itemId) return it;
+      }
     }
     return null;
   }
@@ -277,21 +346,27 @@ export class InventoryManager {
    * equipmentGen, not ItemDatabase.  Ownership is still verified here: the
    * item instance must exist in the player's bag.
    */
-  equipGeneratedItem(playerId: string, itemId: string, slot: EquipmentSlotKey): boolean {
+  equipGeneratedItem(
+    playerId: string,
+    characterId: string,
+    itemId: string,
+    slot: EquipmentSlotKey,
+  ): boolean {
     const inv = this.inventories.get(playerId);
-    if (!inv) return false;
+    if (!inv || !characterId) return false;
 
     const itemIdx = inv.items.findIndex((i) => i.id === itemId);
     if (itemIdx === -1) return false;
 
     const item = inv.items[itemIdx];
+    const equipment = this.equipmentFor(playerId, characterId);
 
-    // Unequip current occupant back to bag
-    if (inv.equipment[slot]) {
-      inv.items.push(inv.equipment[slot]!);
+    // Unequip current occupant back to the shared bag.
+    if (equipment[slot]) {
+      inv.items.push(equipment[slot]!);
     }
 
-    inv.equipment[slot] = item;
+    equipment[slot] = item;
     inv.items.splice(itemIdx, 1);
 
     this.persistInventory(playerId);
@@ -304,15 +379,16 @@ export class InventoryManager {
    * The caller (the `equipment:unequip` socket handler) validates that `slot`
    * is a known EquipmentSlotKey before calling.
    */
-  unequipItem(playerId: string, slot: EquipmentSlotKey): boolean {
+  unequipItem(playerId: string, characterId: string, slot: EquipmentSlotKey): boolean {
     const inv = this.inventories.get(playerId);
-    if (!inv) return false;
+    if (!inv || !characterId) return false;
 
-    const item = inv.equipment[slot];
+    const equipment = this.equipmentFor(playerId, characterId);
+    const item = equipment[slot];
     if (!item) return false;
 
     inv.items.push(item);
-    delete inv.equipment[slot];
+    delete equipment[slot];
 
     this.persistInventory(playerId);
     return true;

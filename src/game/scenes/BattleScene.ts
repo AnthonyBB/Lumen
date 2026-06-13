@@ -18,7 +18,7 @@ import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { BASIC_ATTACK } from '../data/skills'
 import type { Skill } from '../data/skills'
-import { SKILL_MAP } from '../data/skillTrees'
+import { SKILL_MAP, skillRankMultiplier } from '../data/skillTrees'
 import { StatsStore } from '../systems/StatsStore'
 import { InventoryStore, type ClientInventoryItem } from '../systems/InventoryStore'
 import { RankStore } from '../systems/RankStore'
@@ -42,6 +42,8 @@ export interface MobDef {
   /** Optional tiny_dungeon frame chosen by BiomeScene so the map marker and
    *  battle enemy show the same creature. Falls back to the difficulty pool. */
   frame?: number
+  /** Campaign boss — rendered bigger with a special aura in the battle scenes. */
+  boss?: boolean
 }
 
 export interface BattleSceneData {
@@ -100,7 +102,7 @@ const STAT_ABBR: Record<string, string> = { attack: 'atk', defense: 'def', speed
  *  scaled — see docs/ADVENTURE_RANKS_DESIGN.md §1. */
 const SCALED_EFFECT_TYPES = new Set(['damage', 'aoe', 'heal', 'dot', 'bleed', 'poison', 'shield', 'hot'])
 
-function toBattleSkill(cs: CombatSkill, spellMult = 1): Skill {
+export function toBattleSkill(cs: CombatSkill, spellMult = 1): Skill {
   // Scale the flat damage/heal magnitudes by the player's current rank into a
   // COPY — never mutate the shared SKILL_MAP definitions.
   const effects = spellMult === 1 ? cs.effects : cs.effects.map(e =>
@@ -615,16 +617,18 @@ export class BattleScene extends Phaser.Scene {
    * on battle start; the fresh server response replaces it moments later.
    */
   private loadOwnedSkills() {
-    const cached = (this.registry.get('unlockedSkillIds') as string[]) ?? []
+    const cached = (this.registry.get('skillRanks') as Record<string, number>) ?? {}
     this.applyOwnedSkills(cached)
 
     const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
     if (!socket) return
 
-    const onUnlocks = (data: { unlockedSkills?: string[] }) => {
-      const ids = data.unlockedSkills ?? []
-      this.registry.set('unlockedSkillIds', ids)
-      this.applyOwnedSkills(ids)
+    const onUnlocks = (data: { skillRanks?: Record<string, number>; unlockedSkills?: string[] }) => {
+      // Prefer skillRanks; fall back to a rank-1 map from unlockedSkills.
+      const ranks = data.skillRanks
+        ?? Object.fromEntries((data.unlockedSkills ?? []).map(id => [id, 1]))
+      this.registry.set('skillRanks', ranks)
+      this.applyOwnedSkills(ranks)
       // Rebuild now unless the player is mid-target-selection; resetSkillButtons
       // runs every turn anyway, so the update lands next turn at the latest.
       if (this.phase !== 'target_select') this.resetSkillButtons()
@@ -636,13 +640,16 @@ export class BattleScene extends Phaser.Scene {
     socket.emit('shop:get_unlocks')
   }
 
-  private applyOwnedSkills(ids: string[]) {
-    const owned = ids
+  private applyOwnedSkills(ranks: Record<string, number>) {
+    const owned = Object.keys(ranks)
+      .filter(id => (ranks[id] ?? 0) >= 1)
       .map(id => SKILL_MAP[id])
       .filter((s): s is CombatSkill => !!s)
       .sort((a, b) => a.tier - b.tier)
-    // Spell magnitudes scale with the player's current rank (M(currentRank)).
-    this.battleSkills = [this.basicAttackSkill, ...owned.map(s => toBattleSkill(s, this.rankMult))]
+    // Magnitudes scale with the player's adventure rank (M(currentRank)) AND the
+    // skill's own purchased rank.
+    this.battleSkills = [this.basicAttackSkill, ...owned.map(s =>
+      toBattleSkill(s, this.rankMult * skillRankMultiplier(ranks[s.id] ?? 1)))]
   }
 
   /** Basic Attack with the equipped weapon's level-scaled damage range (or the

@@ -41,6 +41,9 @@ import type {
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
 import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { resolveBattle } from '../game/combat/resolver.js';
+import { buildAllyCombatant, buildEnemyCombatant, type MobInput } from '../game/combat/adapter.js';
+import { resolveIdle } from '../game/combat/idle.js';
 import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
@@ -63,9 +66,12 @@ import {
   QUIZ_COMPLETE_SKILL_SHARDS,
   GRADE_COMPLETE_SKILL_SHARDS,
   GRADE_COMPLETE_COMBAT_SHARDS,
+  MAX_SKILL_RANK,
+  skillRankLevelGate,
+  skillRankCost,
 } from '../game/PlayerManager.js';
 import { QUIZ_PASS_THRESHOLD } from '../game/LearningSessionManager.js';
-import { SKILL_TREES, type CombatSkill } from '../game/data/skillTrees.js';
+import { SKILL_TREES, SKILL_CLASSES, type CombatSkill, type SkillClass } from '../game/data/skillTrees.js';
 import { STRATEGIES, type CombatStrategy } from '../game/data/combatStrategies.js';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +87,16 @@ const SKILL_MAP: ReadonlyMap<string, CombatSkill> = new Map(
 const SKILL_PRICE_BY_TIER: Record<1 | 2 | 3 | 4 | 5, number> = {
   1: 1, 2: 2, 3: 3, 4: 5, 5: 8,
 };
+
+/** Free starting team size — the first team of 4 is frictionless; beyond that
+ *  costs Recruit Tokens. See CHARACTERS_DESIGN.md §2. */
+const FREE_ROSTER_SIZE = 4;
+/** Generous hard cap on roster size (bounds abuse). */
+const MAX_ROSTER = 50;
+/** Recruit-Token cost of the NEXT character given the current roster size: free
+ *  up to FREE_ROSTER_SIZE, then escalating 1, 2, 3, … (triangular). */
+const recruitCostFor = (ownedCount: number): number =>
+  ownedCount < FREE_ROSTER_SIZE ? 0 : ownedCount - FREE_ROSTER_SIZE + 1;
 
 /** strategyId → strategy. */
 const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
@@ -159,6 +175,7 @@ export function registerHandlers(
     playerManager,
     learningSessionManager,
     craftSessionManager,
+    studySessionManager,
     inventoryManager,
     chestManager,
   } = game;
@@ -180,10 +197,16 @@ export function registerHandlers(
     return player;
   };
 
+  /** The active character's id (the roster member current ops target). */
+  const activeCharId = (): string => playerManager.getActiveCharacter(socket.id)?.id ?? '';
+
+  /** The active character's inventory snapshot (shared bag + its equipment). */
+  const activeSnapshot = () => inventoryManager.getSnapshot(socket.id, activeCharId());
+
   /** Push the player's current inventory so HUD counters refresh. */
   const pushInventoryUpdate = (): void => {
-    const inventory = inventoryManager.getInventory(socket.id);
-    if (inventory) socket.emit('inventory:updated', inventory);
+    const snapshot = activeSnapshot();
+    if (snapshot) socket.emit('inventory:updated', snapshot);
   };
 
   /**
@@ -192,8 +215,7 @@ export function registerHandlers(
    * Server-authoritative — the client only renders this; it never sends stats.
    */
   const pushStats = (): void => {
-    const inventory = inventoryManager.getInventory(socket.id);
-    const equipment = inventory?.equipment ?? {};
+    const equipment = inventoryManager.equipmentFor(socket.id, activeCharId());
     const payload = playerManager.applyDerivedStats(socket.id, equipment);
     if (payload) socket.emit('stats:update', payload);
   };
@@ -206,6 +228,29 @@ export function registerHandlers(
       combatShards: playerManager.getCombatShards(socket.id),
       silver: playerManager.getSilver(socket.id),
     });
+  };
+
+  /** Push the idle deployment status. */
+  const pushIdle = (): void => {
+    const idle = playerManager.getIdle(socket.id);
+    socket.emit('idle:status', {
+      assigned: !!idle,
+      biome: idle?.biome ?? null,
+      difficulty: idle?.difficulty ?? null,
+      intervalMinutes: playerManager.getHaste(socket.id).intervalMinutes,
+    });
+  };
+
+  /** Credit any idle battles owed since the last access, push the summary, and
+   *  refresh the affected state. Safe to call on login and on idle screen open. */
+  const settleIdle = (): void => {
+    const summary = resolveIdle(playerManager, inventoryManager, socket.id);
+    if (summary && summary.battles > 0) {
+      socket.emit('idle:summary', summary);
+      pushStats();
+      pushCurrency();
+      pushInventoryUpdate();
+    }
   };
 
   // ── players:get_online ────────────────────────────────────────────────────
@@ -243,6 +288,177 @@ export function registerHandlers(
     if (!requireJoinedPlayer('You must join before setting your rank.')) return;
     playerManager.setAdventureRank(socket.id, payload.rankId);
     pushAdventureRank();
+  });
+
+  // ── Roster (multi-character) ──────────────────────────────────────────────
+  //
+  // The account owns a roster of characters; one is active (drives the
+  // Character/Equipment screens, solo combat, and the town avatar). Switching
+  // active re-pushes the per-character views. Creating is FREE up to the
+  // starting team of FREE_ROSTER_SIZE; beyond that needs recruitment (Recruit
+  // Tokens — a later stage). See docs/CHARACTERS_DESIGN.md §2.
+  const buildRoster = () => ({
+    characters: playerManager.getCharacters(socket.id).map((c) => ({
+      id: c.id, name: c.name, class: c.class, level: c.level, xp: c.xp,
+    })),
+    activeCharacterId: playerManager.getActiveCharacter(socket.id)?.id ?? '',
+    party: playerManager.getParty(socket.id),
+    freeSlots: Math.max(0, FREE_ROSTER_SIZE - playerManager.getCharacters(socket.id).length),
+    recruitTokens: playerManager.getRecruitTokens(socket.id),
+    recruitCost: recruitCostFor(playerManager.getCharacters(socket.id).length),
+    maxRoster: MAX_ROSTER,
+  });
+  const pushRoster = (): void => { socket.emit('roster:data', buildRoster()); };
+
+  socket.on('roster:get', () => {
+    if (!requireJoinedPlayer('You must join before viewing your roster.')) return;
+    pushRoster();
+  });
+
+  socket.on('roster:set_active', (payload: { characterId?: unknown }) => {
+    if (typeof payload?.characterId !== 'string') {
+      socket.emit('error', { message: 'Invalid character id.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    if (!playerManager.setActiveCharacter(socket.id, payload.characterId)) {
+      socket.emit('error', { message: 'That character is not in your roster.' });
+      return;
+    }
+    playerManager.persistProgress(socket.id);
+    // Refresh everything that is per-character for the newly active character.
+    pushRoster();
+    pushStats();
+    pushInventoryUpdate();
+    pushCurrency(); // Skill Shards are per-character
+  });
+
+  socket.on('party:set', (payload: { party?: unknown }) => {
+    if (!Array.isArray(payload?.party) || !payload.party.every((id) => typeof id === 'string')) {
+      socket.emit('error', { message: 'Invalid party payload.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    playerManager.setParty(socket.id, payload.party as string[]);
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+  });
+
+  socket.on('roster:create', (payload: { name?: unknown; class?: unknown }) => {
+    if (typeof payload?.name !== 'string' || typeof payload?.class !== 'string') {
+      socket.emit('error', { message: 'Invalid character payload.' });
+      return;
+    }
+    const player = requireJoinedPlayer('You must join before recruiting.');
+    if (!player) return;
+    if (!SKILL_CLASSES.includes(payload.class as SkillClass)) {
+      socket.emit('error', { message: 'Unknown class.' });
+      return;
+    }
+    const owned = playerManager.getCharacters(socket.id).length;
+    if (owned >= MAX_ROSTER) {
+      socket.emit('error', { message: 'Your roster is full.' });
+      return;
+    }
+    // The first FREE_ROSTER_SIZE are free; beyond that costs Recruit Tokens.
+    const cost = recruitCostFor(owned);
+    if (cost > 0 && !playerManager.spendRecruitTokens(socket.id, cost)) {
+      socket.emit('error', {
+        message: `Recruiting costs ${cost} Recruit Token${cost !== 1 ? 's' : ''} — clear campaigns to earn more!`,
+      });
+      return;
+    }
+    const res = playerManager.createCharacter(socket.id, payload.name, payload.class);
+    if ('error' in res) {
+      // Refund the tokens if creation failed for a bad name, etc.
+      if (cost > 0) playerManager.addRecruitTokens(socket.id, cost);
+      socket.emit('error', { message: res.error });
+      return;
+    }
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+    console.log(`[roster] ${player.username} recruited ${res.character.name} (${res.character.class})${cost > 0 ? ` for ${cost} token(s)` : ''}`);
+  });
+
+  // ── Study-to-Haste — the account-wide test that speeds up idle combat (§3) ──
+  const pushHaste = (): void => { socket.emit('haste:data', playerManager.getHaste(socket.id)); };
+
+  socket.on('haste:get', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    pushHaste();
+  });
+
+  socket.on('study:start', () => {
+    if (!requireJoinedPlayer('You must join before studying.')) return;
+    const res = studySessionManager.start(socket.id);
+    if ('error' in res) { socket.emit('error', { message: res.error }); return; }
+    socket.emit('study:started', { sessionId: res.session.sessionId, firstQuestion: res.firstQuestion });
+  });
+
+  socket.on('study:answer', (payload: { sessionId?: unknown; questionId?: unknown; answerIndex?: unknown }) => {
+    if (typeof payload?.sessionId !== 'string' || typeof payload?.questionId !== 'string' ||
+        !isSafeNumber(payload?.answerIndex, 0, 3)) {
+      socket.emit('error', { message: 'Invalid study answer payload.' });
+      return;
+    }
+    const result = studySessionManager.submitAnswer(
+      payload.sessionId, socket.id, payload.questionId, Math.floor(payload.answerIndex as number),
+    );
+    if ('error' in result) { socket.emit('error', { message: result.error }); return; }
+    socket.emit('study:answer_result', result);
+    if (result.sessionComplete) pushHaste(); // a passed test changed the interval
+  });
+
+  // ── party:combat_data — the party's combat units for MANUAL live combat ─────
+  //
+  // The client only has the ACTIVE character's stats; for a hand-played party
+  // fight it needs every party member's combat data. Server-authoritative: stats
+  // are derived here (rank-scaled gear, etc.); the client builds battle units +
+  // skill bars from this and runs the interactive fight.
+  socket.on('party:combat_data', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    const currentRank = playerManager.getAdventureRank(socket.id);
+    const characters = playerManager.getCharacters(socket.id);
+    const allies = playerManager.getParty(socket.id)
+      .map((id) => {
+        const ch = characters.find((c) => c.id === id);
+        if (!ch) return null;
+        const c = buildAllyCombatant(ch, inventoryManager.equipmentFor(socket.id, id), currentRank);
+        return {
+          id: ch.id, name: ch.name, class: ch.class, level: ch.level,
+          maxHp: c.maxHp, attack: c.attack, defense: c.defense, speed: c.speed,
+          maxMana: c.maxMana, healing: c.healingPower, basicAttack: c.basicAttack,
+          skillRanks: { ...ch.skillRanks }, strategyLoadout: [...ch.strategyLoadout],
+        };
+      })
+      .filter((a): a is NonNullable<typeof a> => !!a);
+    socket.emit('party:combat_data', { allies });
+  });
+
+  // ── Idle / auto-battle (§6/§7) ─────────────────────────────────────────────
+  socket.on('idle:get', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle();
+    pushIdle();
+  });
+
+  socket.on('idle:assign', (payload: { biome?: unknown; difficulty?: unknown }) => {
+    if (typeof payload?.difficulty !== 'string' || !(DIFFICULTIES as string[]).includes(payload.difficulty)) {
+      socket.emit('error', { message: 'Unknown campaign difficulty.' });
+      return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle(); // credit the prior deployment before redeploying
+    const biome = typeof payload?.biome === 'string' ? payload.biome.slice(0, 32) : 'Campaign';
+    playerManager.assignIdle(socket.id, biome, payload.difficulty);
+    pushIdle();
+  });
+
+  socket.on('idle:clear', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle();
+    playerManager.clearIdle(socket.id);
+    pushIdle();
   });
 
   // ── stats:get — Character / Equipment screens request the stat breakdown ──
@@ -366,12 +582,26 @@ export function registerHandlers(
 
     // Push the freshly-loaded inventory + shard balances so HUD counters render
     // immediately — the client's get requests can race this async join handler.
-    const joinInventory = inventoryManager.getInventory(socket.id);
+    const joinInventory = activeSnapshot();
     if (joinInventory) socket.emit('inventory:data', joinInventory);
     pushCurrency();
     // Derive Max HP from attributes + gear and push the stats breakdown so the
     // Character / Equipment screens render the moment the player joins.
     pushStats();
+
+    // Push the rank / roster / haste views too. The client fires their `*:get`
+    // requests synchronously on connect, BEFORE this async join finishes creating
+    // the in-memory player record — so those gets hit requireJoinedPlayer() and
+    // bail with no data (e.g. the Adventure Rank dropdown would stay stuck at
+    // "—"). Re-pushing here guarantees they render once the join completes.
+    pushAdventureRank();
+    pushRoster();
+    pushHaste();
+
+    // Credit any idle battles the deployed team fought while the player was away,
+    // and push the current deployment status.
+    settleIdle();
+    pushIdle();
 
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {
@@ -527,18 +757,190 @@ export function registerHandlers(
         }
         if (skillAward > 0) playerManager.addShards(socket.id, 'skill', skillAward);
         if (combatAward > 0) playerManager.addShards(socket.id, 'combat', combatAward);
+
+        // Recruit Tokens — every campaign clear grants 1 (the steady source for
+        // recruiting characters beyond the free team; see CHARACTERS_DESIGN.md §2).
+        const tokenAward = 1;
+        playerManager.addRecruitTokens(socket.id, tokenAward);
+        items.push({ name: `Recruit Token ×${tokenAward}`, icon: '🎟️', rarity: 'rare' });
+
         playerManager.recordCampaignCompletion(socket.id);
 
         if (skillAward > 0) items.push({ name: `Skill Shard ×${skillAward}`, icon: '🔷', rarity: 'rare' });
         if (combatAward > 0) items.push({ name: `Combat Shard ×${combatAward}`, icon: '🔶', rarity: 'epic' });
-        if (skillAward > 0 || combatAward > 0) {
-          pushCurrency(); // refresh the HUD shard counters
-          console.log(`[shards] ${player.username} campaign reward: +${skillAward} skill, +${combatAward} combat${firstEver ? ' (first clear bonus)' : ''}`);
-        }
+        pushCurrency(); // refresh the HUD currency counters
+        pushRoster(); // refresh the roster panel's token balance
+        console.log(`[campaign] ${player.username} cleared a campaign: +${tokenAward} token, +${skillAward} skill, +${combatAward} combat${firstEver ? ' (first clear bonus)' : ''}`);
       }
 
       socket.emit('combat:loot', { campaignComplete, items, richVein, catalystRarity });
     }
+  });
+
+  // ── campaign:resolve — autonomous party combat (server-authoritative) ──────
+  //
+  // The client sends the encounter (the campaign's mobs); the SERVER builds the
+  // party from the roster, runs the deterministic resolver, grants per-character
+  // rewards, and returns the event log for the client to ANIMATE. The client
+  // never decides the outcome or the rewards (docs/CHARACTERS_DESIGN.md §5).
+  socket.on('campaign:resolve', (payload: {
+    difficulty?: unknown; level?: unknown; campaignComplete?: unknown; mobs?: unknown;
+  }) => {
+    const player = requireJoinedPlayer('You must join before fighting.');
+    if (!player) return;
+
+    const diff: Difficulty | null =
+      typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
+        ? (payload.difficulty as Difficulty) : null;
+    if (!diff) { socket.emit('error', { message: 'Unknown campaign difficulty.' }); return; }
+
+    if (!Array.isArray(payload?.mobs) || payload.mobs.length === 0 || payload.mobs.length > 8) {
+      socket.emit('error', { message: 'Invalid encounter.' }); return;
+    }
+    const rawMobs = payload.mobs as Record<string, unknown>[];
+    const num = (v: unknown, lo: number, hi: number, dflt: number) =>
+      isSafeNumber(v, lo, hi) ? Math.floor(v as number) : dflt;
+    const mobs: MobInput[] = rawMobs.map((m, i) => ({
+      id: `e${i}`,
+      name: typeof m?.name === 'string' ? m.name.slice(0, 24) : 'Enemy',
+      maxHp: num(m?.maxHp, 1, 100000, 30),
+      attack: num(m?.attack, 1, 5000, 5),
+      defense: num(m?.defense, 0, 5000, 0),
+      speed: num(m?.speed, 1, 1000, 10),
+      boss: m?.boss === true,
+    }));
+    const mobLevels = rawMobs.map((m) => num(m?.level, 1, 100, 1));
+    const campaignComplete = payload?.campaignComplete === true;
+
+    const currentRank = playerManager.getAdventureRank(socket.id);
+
+    // Build the party (server-authoritative — from the roster + per-char gear).
+    const characters = playerManager.getCharacters(socket.id);
+    const allies = playerManager.getParty(socket.id)
+      .map((id) => {
+        const ch = characters.find((c) => c.id === id);
+        if (!ch) return null;
+        return buildAllyCombatant(ch, inventoryManager.equipmentFor(socket.id, id), currentRank);
+      })
+      .filter((c): c is NonNullable<typeof c> => !!c);
+    if (allies.length === 0) { socket.emit('error', { message: 'Your party is empty.' }); return; }
+
+    const enemies = mobs.map((m) => buildEnemyCombatant(m, currentRank));
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const { events, outcome } = resolveBattle({ allies, enemies, seed });
+
+    const levelUps: { id: string; newLevel: number }[] = [];
+    const rewards = { xpPerCharacter: 0, silver: 0, items: [] as { name: string; icon: string; rarity: string }[] };
+
+    if (outcome.victory) {
+      // Per-character XP — every ally in the team levels individually.
+      const encounterXp = Math.min(500, mobLevels.reduce((s, lvl) => s + (10 + lvl * 2), 0));
+      rewards.xpPerCharacter = encounterXp;
+      const activeId = playerManager.getActiveCharacter(socket.id)?.id;
+      for (const ally of allies) {
+        const res = playerManager.addXpToCharacter(socket.id, ally.id, encounterXp);
+        if (res?.leveledUp) {
+          levelUps.push({ id: ally.id, newLevel: res.newLevel });
+          // Reuse the existing celebration when it's the active character.
+          if (ally.id === activeId) {
+            socket.emit('player:xp_updated', { newXp: res.newXp, newLevel: res.newLevel, leveledUp: true, xpAwarded: encounterXp });
+          }
+        }
+      }
+
+      // Account-wide rewards: silver + materials (+ campaign shard bonus).
+      const repLevel = Math.max(1, ...mobLevels);
+      const silver = Math.min(5000, mobLevels.reduce((s, lvl) => s + Math.round(lvl * 1.5), 0));
+      if (silver > 0) playerManager.addSilver(socket.id, silver);
+      rewards.silver = silver;
+
+      const rankMult = rankMultiplier(currentRank);
+      const { drops } = rollMaterials(repLevel, diff, campaignComplete, rankMult);
+      if (drops.length) playerManager.grantMaterials(socket.id, drops);
+      const tierRarity = (t: number): string =>
+        t >= 7 ? 'legendary' : t >= 6 ? 'epic' : t >= 5 ? 'rare' : t >= 3 ? 'uncommon' : 'common';
+      rewards.items = drops.map((d) => {
+        const mat = MATERIALS[d.materialId];
+        const rarity = mat?.family === 'catalyst' ? (mat.rarityGate ?? 'rare') : tierRarity(mat?.tier ?? 1);
+        return { name: `${mat?.name ?? d.materialId} ×${d.qty}`, icon: mat?.icon ?? '📦', rarity };
+      });
+
+      if (campaignComplete) {
+        const firstEver = playerManager.getCampaignsCompleted(socket.id) === 0;
+        let skillAward = 0, combatAward = 0;
+        if (firstEver) { skillAward = 2; combatAward = 1; }
+        else {
+          const di = Math.max(0, (DIFFICULTIES as string[]).indexOf(diff));
+          if (Math.random() < 0.12 + di * 0.03) skillAward = Math.round(rankMult);
+          if (Math.random() < 0.04 + di * 0.015) combatAward = Math.round(rankMult);
+        }
+        if (skillAward > 0) { playerManager.addShards(socket.id, 'skill', skillAward); rewards.items.push({ name: `Skill Shard ×${skillAward}`, icon: '🔷', rarity: 'rare' }); }
+        if (combatAward > 0) { playerManager.addShards(socket.id, 'combat', combatAward); rewards.items.push({ name: `Combat Shard ×${combatAward}`, icon: '🔶', rarity: 'epic' }); }
+        playerManager.recordCampaignCompletion(socket.id);
+      }
+
+      playerManager.persistProgress(socket.id);
+      pushStats(); pushCurrency(); pushInventoryUpdate();
+    }
+
+    socket.emit('campaign:resolved', {
+      events, victory: outcome.victory, rounds: outcome.rounds, levelUps, rewards,
+    });
+  });
+
+  // ── campaign:report — MANUAL party combat per-encounter rewards ────────────
+  //
+  // Live combat is hand-played client-side (PartyManualBattleScene). On a win
+  // the client reports the encounter; the server grants the PER-CHARACTER XP to
+  // every party member plus silver + per-encounter materials. Like all live
+  // combat the outcome is client-reported, so rewards are derived only from the
+  // (capped) difficulty/level/mob-count — never from client-supplied amounts.
+  // The CAMPAIGN-COMPLETION bonus (shards/tokens/campaign materials) still flows
+  // through player:award_xp(campaignComplete=true) from BiomeScene's victory
+  // screen, so this handler only ever grants per-encounter rewards.
+  socket.on('campaign:report', (payload: {
+    difficulty?: unknown; level?: unknown; mobCount?: unknown; victory?: unknown;
+  }) => {
+    const player = requireJoinedPlayer('You must join before fighting.');
+    if (!player) return;
+    if (payload?.victory !== true) return; // losses grant nothing
+
+    const diff: Difficulty | null =
+      typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
+        ? (payload.difficulty as Difficulty) : null;
+    if (!diff) { socket.emit('error', { message: 'Unknown campaign difficulty.' }); return; }
+
+    const level = isSafeNumber(payload?.level, 1, 100) ? Math.floor(payload.level as number) : 1;
+    const mobCount = isSafeNumber(payload?.mobCount, 1, 12) ? Math.floor(payload.mobCount as number) : 1;
+    const currentRank = playerManager.getAdventureRank(socket.id);
+
+    // Per-character XP — every ally in the party levels individually (mirrors the
+    // autonomous resolver's encounter XP, capped).
+    const encounterXp = Math.min(500, mobCount * (10 + level * 2));
+    const activeId = playerManager.getActiveCharacter(socket.id)?.id;
+    const levelUps: { id: string; newLevel: number }[] = [];
+    for (const id of playerManager.getParty(socket.id)) {
+      const res = playerManager.addXpToCharacter(socket.id, id, encounterXp);
+      if (!res) continue;
+      if (res.leveledUp) levelUps.push({ id, newLevel: res.newLevel });
+      if (id === activeId) {
+        socket.emit('player:xp_updated', {
+          newXp: res.newXp, newLevel: res.newLevel, leveledUp: res.leveledUp, xpAwarded: encounterXp,
+        });
+      }
+    }
+
+    // Account-wide: silver + per-encounter materials (campaignComplete=false — the
+    // campaign bonus is granted separately by player:award_xp on campaign clear).
+    const silver = Math.min(5000, mobCount * Math.round(level * 1.5));
+    if (silver > 0) playerManager.addSilver(socket.id, silver);
+    const rankMult = rankMultiplier(currentRank);
+    const { drops } = rollMaterials(level, diff, false, rankMult);
+    if (drops.length) playerManager.grantMaterials(socket.id, drops);
+
+    playerManager.persistProgress(socket.id);
+    pushStats(); pushCurrency(); pushInventoryUpdate(); pushRoster();
+    socket.emit('campaign:report_result', { levelUps });
   });
 
   // ── learning:start ───────────────────────────────────────────────────────
@@ -721,11 +1123,11 @@ export function registerHandlers(
     pushCurrency();
 
     // Let the HUD refresh XP / level after the quiz wraps up.
-    const player = playerManager.getPlayer(socket.id);
-    if (player) {
+    const activeChar = playerManager.getActiveCharacter(socket.id);
+    if (activeChar) {
       socket.emit('player:xp_updated', {
-        newXp: player.xp,
-        newLevel: player.level,
+        newXp: activeChar.xp,
+        newLevel: activeChar.level,
         leveledUp: false,
         xpAwarded: 0,
       });
@@ -895,13 +1297,13 @@ export function registerHandlers(
 
   // ── inventory:get ────────────────────────────────────────────────────────
   socket.on('inventory:get', () => {
-    const inventory = inventoryManager.getInventory(socket.id);
-    if (!inventory) {
+    const snapshot = activeSnapshot();
+    if (!snapshot) {
       socket.emit('error', { message: 'Inventory not found. Have you joined yet?' });
       return;
     }
     // Safe to send: stats come from the server; correctIndex is never in inventory data.
-    socket.emit('inventory:data', inventory);
+    socket.emit('inventory:data', snapshot);
   });
 
   // NOTE: the legacy `inventory:equip` / `inventory:unequip` handlers were
@@ -953,11 +1355,12 @@ export function registerHandlers(
     let label: string;
 
     if (bagItem.equipSlot) {
-      // XP gate — enforced server-side; player.xp is server-authoritative.
+      // XP gate — enforced server-side against the ACTIVE character's XP.
       const need = bagItem.xpRequired ?? 0;
-      if (player.xp < need) {
+      const charXp = playerManager.getActiveCharacter(socket.id)?.xp ?? 0;
+      if (charXp < need) {
         socket.emit('error', {
-          message: `You need ${need} XP to equip ${bagItem.name} (you have ${player.xp}). Keep adventuring!`,
+          message: `You need ${need} XP to equip ${bagItem.name} (you have ${charXp}). Keep adventuring!`,
         });
         return;
       }
@@ -973,7 +1376,7 @@ export function registerHandlers(
       label = bagItem.name;
     }
 
-    const success = inventoryManager.equipGeneratedItem(socket.id, payload.itemId, slotKey);
+    const success = inventoryManager.equipGeneratedItem(socket.id, activeCharId(), payload.itemId, slotKey);
     if (!success) {
       socket.emit('error', { message: 'Could not equip that item.' });
       return;
@@ -1005,7 +1408,7 @@ export function registerHandlers(
     const player = requireJoinedPlayer('You must join before unequipping items.');
     if (!player) return;
 
-    if (!inventoryManager.unequipItem(socket.id, payload.slot)) {
+    if (!inventoryManager.unequipItem(socket.id, activeCharId(), payload.slot)) {
       socket.emit('error', { message: 'That slot is empty.' });
       return;
     }
@@ -1022,13 +1425,15 @@ export function registerHandlers(
 
   // ── Shop helpers ─────────────────────────────────────────────────────────
 
-  /** Build the unlock/balance snapshot sent to shop UIs. */
+  /** Build the unlock/balance snapshot sent to shop UIs. Skills + the strategy
+   *  loadout are per the ACTIVE character; strategy catalog + learning are account-wide. */
   const buildUnlocksPayload = (player: Player): ShopUnlocksPayload => ({
-    unlockedSkills: [...player.unlockedSkills],
+    unlockedSkills: playerManager.getUnlockedSkills(socket.id),
+    skillRanks: playerManager.getSkillRanks(socket.id),
     unlockedStrategies: [...player.unlockedStrategies],
     skillShards: playerManager.getSkillShards(socket.id),
     combatShards: playerManager.getCombatShards(socket.id),
-    strategyLoadout: [...player.strategyLoadout],
+    strategyLoadout: playerManager.getStrategyLoadout(socket.id),
     subjectGrades: { ...player.subjectGrades },
     topicPasses: { ...player.topicPasses },
   });
@@ -1067,29 +1472,46 @@ export function registerHandlers(
       return;
     }
 
-    if (player.unlockedSkills.includes(skill.id)) {
-      socket.emit('error', { message: 'You already know that skill.' });
+    // Buying advances the skill by ONE rank (rank 0 = unowned → 1 = first
+    // unlock). Ranks are gated by the active character's level and cost more per
+    // rank (see docs/CHARACTERS_DESIGN.md §4).
+    const currentRank = playerManager.getSkillRank(socket.id, skill.id);
+    const nextRank = currentRank + 1;
+    if (nextRank > MAX_SKILL_RANK) {
+      socket.emit('error', { message: `${skill.name} is already at max rank (${MAX_SKILL_RANK}).` });
       return;
     }
 
-    const missingPrereq = skill.requires.find((req) => !player.unlockedSkills.includes(req));
-    if (missingPrereq) {
-      const prereq = SKILL_MAP.get(missingPrereq);
+    // Prerequisites are only required to FIRST unlock a skill (rank 0 → 1).
+    if (currentRank === 0) {
+      const ownedSkills = playerManager.getUnlockedSkills(socket.id);
+      const missingPrereq = skill.requires.find((req) => !ownedSkills.includes(req));
+      if (missingPrereq) {
+        const prereq = SKILL_MAP.get(missingPrereq);
+        socket.emit('error', { message: `You must learn ${prereq?.name ?? missingPrereq} first.` });
+        return;
+      }
+    }
+
+    // Level gate for this rank.
+    const charLevel = playerManager.getActiveCharacter(socket.id)?.level ?? 1;
+    const reqLevel = skillRankLevelGate(nextRank);
+    if (charLevel < reqLevel) {
       socket.emit('error', {
-        message: `You must learn ${prereq?.name ?? missingPrereq} first.`,
+        message: `${skill.name} rank ${nextRank} needs character level ${reqLevel} (you are ${charLevel}).`,
       });
       return;
     }
 
-    const price = SKILL_PRICE_BY_TIER[skill.tier];
+    const price = skillRankCost(SKILL_PRICE_BY_TIER[skill.tier], nextRank);
     if (!playerManager.spendShards(socket.id, 'skill', price)) {
       socket.emit('error', {
-        message: `Not enough Skill Shards — ${skill.name} costs ${price} 🔷. Answer more questions to earn shards!`,
+        message: `Not enough Skill Shards — rank ${nextRank} of ${skill.name} costs ${price} 🔷. Earn more by answering questions!`,
       });
       return;
     }
 
-    playerManager.unlockSkill(socket.id, skill.id);
+    playerManager.setSkillRank(socket.id, skill.id, nextRank);
     playerManager.persistProgress(socket.id);
 
     socket.emit('shop:skill_purchased', {
@@ -1098,7 +1520,7 @@ export function registerHandlers(
     });
     pushCurrency();
 
-    console.log(`[shop] ${player.username} bought skill ${skill.id} for ${price} skill shard(s)`);
+    console.log(`[shop] ${player.username} bought ${skill.id} rank ${nextRank} for ${price} skill shard(s)`);
   });
 
   // ── shop:buy_strategy ────────────────────────────────────────────────────
@@ -1206,7 +1628,7 @@ export function registerHandlers(
       return;
     }
 
-    const inventory = inventoryManager.getInventory(socket.id);
+    const inventory = activeSnapshot();
     if (!inventory) {
       socket.emit('error', { message: 'You must join before opening a chest.' });
       return;
@@ -1266,7 +1688,7 @@ export function registerHandlers(
       return;
     }
 
-    const updatedInventory = inventoryManager.getInventory(socket.id)!;
+    const updatedInventory = activeSnapshot()!;
     const updatedChest = chestManager.getChest(payload.chestId)!;
     socket.emit('chest:updated', { chest: updatedChest, inventory: updatedInventory });
   });
@@ -1295,7 +1717,7 @@ export function registerHandlers(
       }
       socket.emit('chest:updated', {
         chest: chestManager.getChest(payload.chestId)!,
-        inventory: inventoryManager.getInventory(socket.id)!,
+        inventory: activeSnapshot()!,
       });
     } else {
       if (!inventoryManager.deleteItem(socket.id, payload.itemId)) {

@@ -14,45 +14,100 @@ export interface PlayerPosition {
 }
 
 /** Full player record stored on the server (never sent entirely to clients). */
-export interface Player {
-  id: string;           // socket ID
-  username: string;
+/**
+ * A single playable character in an account's roster (see
+ * docs/CHARACTERS_DESIGN.md §1). Per-character state: level/xp/hp, its class,
+ * its purchased skills, its Skill-Shard balance, its attribute allocation, and
+ * its own strategy loadout. The account (Player) owns the shared bag, materials,
+ * silver, Combat Shards, strategy *catalog*, learning progress, and rank.
+ */
+export interface Character {
+  id: string;            // stable uuid (persisted)
+  /** Display name for this character (distinct from the account username). */
+  name: string;
+  /** Class id (a skill class, e.g. 'sword', 'cleric'). Not yet
+   *  restriction-enforced — skill class-locking lands with rankable skills. */
+  class: string;
   level: number;
   xp: number;
   hp: number;
   maxHp: number;
+  /** skillId → rank (1..MAX_SKILL_RANK) this character has purchased (persisted).
+   *  Absent key = not owned. Ranks are bought with Skill Shards and gated by the
+   *  character's level (see docs/CHARACTERS_DESIGN.md §4). */
+  skillRanks: Record<string, number>;
+  /** This character's ordered strategy loadout (persisted, owned-strategy ids
+   *  only; first entry is checked first in combat). Built from the account-wide
+   *  strategy catalog (Player.unlockedStrategies). */
+  strategyLoadout: string[];
+  /** This character's Skill Shard balance (persisted) — earned from its own
+   *  battles, spent on its own skills. */
+  skillShards: number;
+  /** Points allocated per attribute for this character (persisted).
+   *  Total earned = level*3; a base attribute = 5 + attributePoints[attr]. */
+  attributePoints: Record<AttributeKey, number>;
+}
+
+export interface Player {
+  id: string;           // socket ID
+  username: string;     // account name
   zone: string;
   position: PlayerPosition;
   lastMessageAt: number; // unix ms — used for chat rate-limiting
-  /** Current grade per subject (persisted), 1..12, or 13 (MASTERED_GRADE) when
-   *  all 12 grades of a subject are complete. Subjects progress independently. */
+  /** The account's roster of characters. Always has at least one. */
+  characters: Character[];
+  /** Which character is currently active (drives the town avatar and the
+   *  Character/Equipment screens). */
+  activeCharacterId: string;
+  /** The campaign party — an ordered list of up to 4 owned character ids that
+   *  fight together (see docs/CHARACTERS_DESIGN.md §5). Always has ≥1 entry. */
+  party: string[];
+  /** Current grade per subject (persisted, ACCOUNT-wide), 1..12, or 13
+   *  (MASTERED_GRADE) when all 12 grades of a subject are complete. */
   subjectGrades: Record<Subject, number>;
-  /** Adventure rank id (persisted) — gates which curriculum grade band the
-   *  player is served questions from. See game/data/adventureRanks.ts. */
+  /** Adventure rank id (persisted, ACCOUNT-wide) — gates which curriculum grade
+   *  band the player is served questions from. See game/data/adventureRanks.ts. */
   adventureRank: string;
-  /** topicId → number of quiz passes (persisted), 0..3. A topic is COMPLETE at 3. */
+  /** topicId → number of quiz passes (persisted, ACCOUNT-wide), 0..3. */
   topicPasses: Record<string, number>;
-  /** Skill ids purchased with Skill Shards (persisted). */
-  unlockedSkills: string[];
-  /** Combat strategy ids purchased with Combat Shards (persisted). */
+  /** Combat strategy ids unlocked with Combat Shards (persisted, ACCOUNT-wide
+   *  catalog). Each character configures its own loadout from this catalog. */
   unlockedStrategies: string[];
-  /** Ordered strategy loadout arranged at the Teacher (persisted, max 10,
-   *  owned ids only — first entry is checked first in combat). */
-  strategyLoadout: string[];
-  /** Skill Shard balance (persisted) — a tracked currency, NOT a bag item. */
-  skillShards: number;
-  /** Combat Shard balance (persisted) — a tracked currency, NOT a bag item. */
+  /** Combat Shard balance (persisted, ACCOUNT-wide) — buys strategy unlocks. */
   combatShards: number;
-  /** Silver balance (persisted) — money for buying/selling items at the Market. */
+  /** Silver balance (persisted, ACCOUNT-wide). */
   silver: number;
-  /** Crafting material counts (persisted): material id → quantity. */
+  /** Crafting material counts (persisted, ACCOUNT-wide shared bag stash). */
   materials: Record<string, number>;
-  /** How many campaigns this player has completed (persisted). Drives the
-   *  one-time first-campaign shard bonus. */
+  /** How many campaigns this account has completed (persisted). */
   campaignsCompleted: number;
-  /** Points the player has allocated per character attribute (persisted).
-   *  Total earned points = level*3; a base attribute = 5 + attributePoints[attr]. */
-  attributePoints: Record<AttributeKey, number>;
+  /** Recruit Tokens (persisted, ACCOUNT-wide) — spent to recruit new characters. */
+  recruitTokens: number;
+  /** Study-to-Haste stacks (persisted, ACCOUNT-wide). Each passed study test adds
+   *  one; they reduce the automated-battle interval and expire on rolling 3-day
+   *  clocks (see docs/CHARACTERS_DESIGN.md §3). */
+  hasteStacks: HasteStack[];
+  /** The team's idle campaign assignment, or null when not deployed. Resolved
+   *  lazily on access (see docs/CHARACTERS_DESIGN.md §6/§7). */
+  idle: IdleAssignment | null;
+}
+
+/** A team deployed to fight a campaign automatically while the player is away. */
+export interface IdleAssignment {
+  /** Campaign biome (for display). */
+  biome: string;
+  /** Campaign difficulty (a Difficulty key). */
+  difficulty: string;
+  /** Unix ms up to which idle battles have already been credited. */
+  lastResolvedAt: number;
+}
+
+/** One Study-to-Haste stack: a timed interval reduction. */
+export interface HasteStack {
+  /** Unix ms when this stack expires (earned time + 3 days). */
+  expiresAt: number;
+  /** Minutes shaved off the automated-battle interval (score-scaled, ≤30). */
+  minutes: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +353,11 @@ export interface LearningCompletePayload {
 
 /** Sent in response to `shop:get_unlocks` and after successful purchases. */
 export interface ShopUnlocksPayload {
+  /** Owned skill ids (rank ≥ 1) — derived from skillRanks for older clients. */
   unlockedSkills: string[];
+  /** skillId → current rank (1..MAX_SKILL_RANK). The authoritative per-character
+   *  skill state (see docs/CHARACTERS_DESIGN.md §4). */
+  skillRanks: Record<string, number>;
   unlockedStrategies: string[];
   skillShards: number;
   combatShards: number;
@@ -411,6 +470,21 @@ export interface EquipmentSlots {
 }
 
 export interface PlayerInventory {
+  playerId: string;
+  /** The shared, ACCOUNT-wide item bag. */
+  items: InventoryItem[];
+  /** Equipment per character (characterId → equipped slots). The bag is shared
+   *  across the roster; equipment is per-character (see docs/CHARACTERS_DESIGN.md §1). */
+  equipmentByCharacter: Record<string, EquipmentSlots>;
+  /** Flat equipment loaded from a pre-roster save, migrated into the active
+   *  character's slots on first access then cleared. */
+  legacyEquipment?: EquipmentSlots;
+  gold: number;
+}
+
+/** The client-facing inventory projection (a single character's equipment plus
+ *  the shared bag) — what `inventory:data` / `inventory:updated` carry. */
+export interface InventorySnapshot {
   playerId: string;
   items: InventoryItem[];
   equipment: EquipmentSlots;

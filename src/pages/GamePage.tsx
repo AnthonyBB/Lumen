@@ -4,10 +4,14 @@ import { io, Socket } from 'socket.io-client'
 import { gameConfig } from '../game/config'
 import ContentModePrompt from '../components/ContentModePrompt'
 import LevelUpCelebration from '../components/LevelUpCelebration'
+import RosterPanel, { type RosterData } from '../components/RosterPanel'
+import StudyPanel, { type HasteData } from '../components/StudyPanel'
+import IdlePanel, { type IdleStatus } from '../components/IdlePanel'
 import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
 import { RankStore } from '../game/systems/RankStore'
+import { Sfx } from '../game/systems/Sfx'
 import { API_BASE } from '../config'
 
 interface GamePageProps {
@@ -25,6 +29,25 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   // The level to celebrate (null = no celebration showing). Keyed remount on
   // change lets back-to-back level-ups each replay the animation.
   const [celebrateLevel, setCelebrateLevel] = useState<number | null>(null)
+  const [roster, setRoster] = useState<RosterData | null>(null)
+  const [rosterOpen, setRosterOpen] = useState(false)
+  // When the roster panel is opened from the in-world Mercenary Guild, jump it
+  // straight to the recruit form.
+  const [rosterRecruit, setRosterRecruit] = useState(false)
+  const [muted, setMuted] = useState(Sfx.isMuted)
+  const [haste, setHaste] = useState<HasteData | null>(null)
+  const [studyOpen, setStudyOpen] = useState(false)
+  const [idleStatus, setIdleStatus] = useState<IdleStatus | null>(null)
+  const [idleOpen, setIdleOpen] = useState(false)
+  const [idleSummary, setIdleSummary] = useState<{
+    battles: number; wins: number; losses: number; xpPerCharacter: number; silver: number
+    items: { name: string; icon: string; rarity: string }[]
+  } | null>(null)
+
+  const emit = (event: string, payload?: unknown) => {
+    const sock = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
+    sock?.emit(event, payload)
+  }
 
   /** Change the player's adventure rank — the grade band their questions are
    *  drawn from. Any rank is allowed (not age-gated). */
@@ -59,6 +82,11 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       if (d?.leveledUp && typeof d.newLevel === 'number') setCelebrateLevel(d.newLevel)
     })
 
+    s.on('roster:data', (d: RosterData) => setRoster(d))
+    s.on('haste:data', (d: HasteData) => setHaste(d))
+    s.on('idle:status', (d: IdleStatus) => setIdleStatus(d))
+    s.on('idle:summary', (d: typeof idleSummary) => { if (d && d.battles > 0) setIdleSummary(d) })
+
     s.on('connect', () => {
       // (Re)join on every connect — including reconnects after a server
       // restart. Without this the server has no player record for the socket
@@ -67,6 +95,9 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
       s.emit('player:join', { username: user?.username ?? '' })
       s.emit('players:get_online')
       s.emit('adventureRank:get')
+      s.emit('roster:get')
+      s.emit('haste:get')
+      s.emit('idle:get')
       // Bind the inventory store to this (possibly new) socket so the HUD
       // shard counters receive inventory:data / inventory:updated pushes.
       InventoryStore.init(s)
@@ -111,6 +142,15 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
     }
   }, [needsContentMode])
 
+  // Bridge: the in-world Mercenary Guild (Phaser) asks React to open the roster
+  // panel on its recruit step. Phaser can't toggle React state directly, so it
+  // dispatches a window event we listen for here.
+  useEffect(() => {
+    const open = () => { setRosterRecruit(true); setRosterOpen(true) }
+    window.addEventListener('lumen:open-roster', open)
+    return () => window.removeEventListener('lumen:open-roster', open)
+  }, [])
+
   // --- Content mode not yet chosen: show blocking prompt ---
   if (needsContentMode) {
     return (
@@ -132,23 +172,95 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
         />
       )}
 
+      {/* Roster panel (view/select/recruit characters) */}
+      {rosterOpen && roster && (
+        <RosterPanel
+          roster={roster}
+          onSetActive={(id) => emit('roster:set_active', { characterId: id })}
+          onSetParty={(party) => emit('party:set', { party })}
+          onCreate={(name, cls) => emit('roster:create', { name, class: cls })}
+          onClose={() => { setRosterOpen(false); setRosterRecruit(false) }}
+          startRecruiting={rosterRecruit}
+        />
+      )}
+
+      {/* Study-to-Haste panel */}
+      {studyOpen && haste && (
+        <StudyPanel haste={haste} onClose={() => setStudyOpen(false)} />
+      )}
+
+      {/* Idle campaigns panel */}
+      {idleOpen && idleStatus && (
+        <IdlePanel status={idleStatus} onClose={() => setIdleOpen(false)} />
+      )}
+
+      {/* "While you were away" idle summary (shown on login) */}
+      {idleSummary && (
+        <div className="fixed inset-0 z-[58] flex items-center justify-center bg-black/70 p-4" onClick={() => setIdleSummary(null)}>
+          <div className="w-full max-w-md rounded-2xl border border-lumen-gold/40 bg-lumen-dark p-6 text-center shadow-2xl shadow-purple-900/40" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-display text-2xl text-lumen-gold">While you were away…</h2>
+            <p className="mt-2 text-sm text-gray-300">
+              Your team fought <span className="text-lumen-gold">{idleSummary.battles}</span> battles
+              ({idleSummary.wins} won, {idleSummary.losses} lost)
+            </p>
+            {idleSummary.xpPerCharacter > 0 && (
+              <p className="mt-3 font-display text-lg text-green-300">+{idleSummary.xpPerCharacter} XP to each fighter</p>
+            )}
+            {idleSummary.silver > 0 && <p className="text-sm text-amber-200">+{idleSummary.silver} 🪙 silver</p>}
+            {idleSummary.items.length > 0 && (
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                {idleSummary.items.slice(0, 10).map((it, i) => (
+                  <span key={i} className="rounded-lg bg-white/5 px-2 py-1 text-xs text-gray-200">{it.icon} {it.name}</span>
+                ))}
+              </div>
+            )}
+            <button onClick={() => setIdleSummary(null)} className="mt-5 rounded-lg bg-lumen-gold/90 px-6 py-2 font-display font-bold text-lumen-dark hover:bg-lumen-gold">Collect</button>
+          </div>
+        </div>
+      )}
+
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
-        <div
-          id="game-container"
-          className="relative w-full max-w-[1280px] aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-purple-900/30"
-        />
+        <div className="relative w-full max-w-[1280px]">
+          <div
+            id="game-container"
+            className="w-full aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-purple-900/30"
+          />
+          {/* Sound mute toggle */}
+          <button
+            onClick={() => {
+              const m = Sfx.toggleMuted()
+              setMuted(m)
+              if (!m) Sfx.play('click')
+            }}
+            title={muted ? 'Unmute sound' : 'Mute sound'}
+            aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+            className="absolute top-3 right-3 z-10 rounded-lg border border-white/15 bg-black/55 px-2.5 py-1.5 text-lg leading-none text-gray-200 backdrop-blur hover:bg-black/75"
+          >
+            {muted ? '🔇' : '🔊'}
+          </button>
+        </div>
       </div>
 
       {/* HUD */}
       <div className="px-4 pb-6 max-w-[1280px] mx-auto w-full">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Player</p>
-            <p className="font-display text-lg text-lumen-gold">
-              {user?.username ?? '— awaiting login —'}
+          <button
+            onClick={() => { if (roster) { setRosterRecruit(false); setRosterOpen(true) } }}
+            disabled={!roster}
+            className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
+          >
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">
+              Roster{roster ? ` · ${roster.characters.length}` : ''}
             </p>
-          </div>
+            <p className="font-display text-lg text-lumen-gold truncate">
+              {(() => {
+                const active = roster?.characters.find((c) => c.id === roster.activeCharacterId)
+                return active ? active.name : user?.username ?? '— awaiting login —'
+              })()}
+            </p>
+            {roster && <p className="text-[10px] text-gray-500 mt-0.5">Tap to manage characters</p>}
+          </button>
           <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
             <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Players Online</p>
             <p className="font-display text-lg text-lumen-gold">
@@ -180,6 +292,30 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
             </select>
             <p className="text-[10px] text-gray-500 mt-1">Sets the grade level of your questions.</p>
           </div>
+          <button
+            onClick={() => haste && setStudyOpen(true)}
+            disabled={!haste}
+            className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
+          >
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Study Hall</p>
+            <p className="font-display text-lg text-lumen-gold">
+              {haste
+                ? `Battle every ${Math.floor(haste.intervalMinutes / 60) > 0 ? `${Math.floor(haste.intervalMinutes / 60)}h` : ''}${haste.intervalMinutes % 60 > 0 ? ` ${haste.intervalMinutes % 60}m` : (Math.floor(haste.intervalMinutes / 60) > 0 ? '' : '0m')}`.trim()
+                : '—'}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-1">Study to speed up idle battles.</p>
+          </button>
+          <button
+            onClick={() => idleStatus && setIdleOpen(true)}
+            disabled={!idleStatus}
+            className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
+          >
+            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Idle Camps</p>
+            <p className="font-display text-lg text-lumen-gold truncate">
+              {idleStatus?.assigned ? `${idleStatus.biome}` : 'Not deployed'}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-1">Send a team to fight while away.</p>
+          </button>
         </div>
       </div>
     </div>

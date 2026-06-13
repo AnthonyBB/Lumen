@@ -42,6 +42,9 @@ export interface MobArchetype {
   speed: number            // drives combat initiative
   /** Caster-flavored mobs derive attack from intelligence instead of strength. */
   caster?: boolean
+  /** Campaign BOSS — never appears in the random pool; spawned only as the final
+   *  encounter of a campaign, with boosted stats and a bigger/special look. */
+  boss?: boolean
   biomes: string[]         // which of the 8 biomes it appears in
   tier: MobTier            // which biome-location difficulty it spawns at
 }
@@ -56,6 +59,7 @@ export interface MobInstance {
   speed: number
   frame: number
   tint: number
+  boss?: boolean
 }
 
 // ── Level bands per biome-location difficulty ───────────────────────────────
@@ -469,6 +473,196 @@ export const MOB_ARCHETYPES: MobArchetype[] = [
     strength: 9, constitution: 8, dexterity: 5, intelligence: 6, spirit: 4, speed: 4,
     biomes: ['Ocean'], tier: 'hard',
   },
+
+  // ══ More creatures (added variety across the campaigns) ══════════════════════
+  // Desert
+  {
+    id: 'desert_jackal', name: 'Desert Jackal',
+    description: 'A lean jackal that lopes across the dunes in hungry packs.',
+    frame: TD_HOODED, tint: 0xd8b870,
+    strength: 4, constitution: 3, dexterity: 7, intelligence: 3, spirit: 3, speed: 8,
+    biomes: ['Desert'], tier: 'easy',
+  },
+  {
+    id: 'scarab_swarm', name: 'Scarab Swarm',
+    description: 'A glittering cloud of beetles that scuttles over everything.',
+    frame: TD_CRITTER, tint: 0xc8a838,
+    strength: 4, constitution: 5, dexterity: 6, intelligence: 2, spirit: 2, speed: 5,
+    biomes: ['Desert'], tier: 'medium',
+  },
+  // Pine Forest
+  {
+    id: 'bramble_slime', name: 'Bramble Slime',
+    description: 'A dark green blob bristling with snapped-off thorns.',
+    frame: TD_SLIME, tint: 0x4f7a3a,
+    strength: 3, constitution: 8, dexterity: 2, intelligence: 1, spirit: 2, speed: 2,
+    biomes: ['Pine Forest'], tier: 'easy',
+  },
+  {
+    id: 'pine_owl', name: 'Pine Owl',
+    description: 'A silent owl that swoops between the high branches at dusk.',
+    frame: TD_BAT, tint: 0xa89478,
+    strength: 4, constitution: 3, dexterity: 8, intelligence: 5, spirit: 4, speed: 8,
+    biomes: ['Pine Forest'], tier: 'medium',
+  },
+  // Deciduous Forest (was thin — round it out)
+  {
+    id: 'red_fox', name: 'Red Fox',
+    description: 'A clever fox that darts through the autumn leaves.',
+    frame: TD_HOODED, tint: 0xd87a3a,
+    strength: 3, constitution: 3, dexterity: 7, intelligence: 4, spirit: 3, speed: 8,
+    biomes: ['Deciduous Forest'], tier: 'easy',
+  },
+  {
+    id: 'leaf_sprite', name: 'Leaf Sprite',
+    description: 'A tiny rustling spirit made of swirling fallen leaves.',
+    frame: TD_GHOST, tint: 0xcaa24a,
+    strength: 1, constitution: 2, dexterity: 5, intelligence: 7, spirit: 7, speed: 6,
+    caster: true,
+    biomes: ['Deciduous Forest'], tier: 'easy',
+  },
+  {
+    id: 'bark_spider', name: 'Bark Spider',
+    description: 'A bark-patterned spider you never notice until it moves.',
+    frame: TD_SPIDER, tint: 0x9c7a4a,
+    strength: 4, constitution: 4, dexterity: 7, intelligence: 3, spirit: 2, speed: 6,
+    biomes: ['Deciduous Forest'], tier: 'medium',
+  },
+  // Swamp
+  {
+    id: 'gnat_swarm', name: 'Gnat Swarm',
+    description: 'A buzzing haze of biting gnats that never quite leaves you alone.',
+    frame: TD_BAT, tint: 0x8fae66,
+    strength: 2, constitution: 2, dexterity: 8, intelligence: 2, spirit: 2, speed: 9,
+    biomes: ['Swamp'], tier: 'easy',
+  },
+  {
+    id: 'bog_leech', name: 'Bog Leech',
+    description: 'A fat dark-red leech that drops from the reeds with a plop.',
+    frame: TD_SLIME, tint: 0x8a3340,
+    strength: 5, constitution: 7, dexterity: 3, intelligence: 2, spirit: 2, speed: 2,
+    biomes: ['Swamp'], tier: 'medium',
+  },
+  // Snow
+  {
+    id: 'icicle_sprite', name: 'Icicle Sprite',
+    description: 'A glinting sliver of living frost that chimes as it floats.',
+    frame: TD_GHOST, tint: 0xddf0ff,
+    strength: 1, constitution: 2, dexterity: 5, intelligence: 7, spirit: 7, speed: 6,
+    caster: true,
+    biomes: ['Snow'], tier: 'easy',
+  },
+  {
+    id: 'snow_wolf', name: 'Snow Wolf',
+    description: 'A white wolf that blends into the blizzard until it strikes.',
+    frame: TD_HOODED, tint: 0xeaf2ff,
+    strength: 6, constitution: 4, dexterity: 7, intelligence: 3, spirit: 3, speed: 8,
+    biomes: ['Snow'], tier: 'medium',
+  },
+  // Grassland
+  {
+    id: 'bee_swarm', name: 'Bee Swarm',
+    description: 'A grumpy swarm of bees defending one very important flower.',
+    frame: TD_BAT, tint: 0xe8c84a,
+    strength: 3, constitution: 2, dexterity: 8, intelligence: 2, spirit: 2, speed: 9,
+    biomes: ['Grassland'], tier: 'easy',
+  },
+  {
+    id: 'grass_snake', name: 'Grass Snake',
+    description: 'A green snake that ripples through the tall grass like a wave.',
+    frame: TD_CRITTER, tint: 0x88bb55,
+    strength: 5, constitution: 4, dexterity: 7, intelligence: 3, spirit: 2, speed: 7,
+    biomes: ['Grassland'], tier: 'medium',
+  },
+  // Tropical Rainforest
+  {
+    id: 'toucan', name: 'Rowdy Toucan',
+    description: 'A loud rainbow-billed bird that dive-bombs anyone too close.',
+    frame: TD_BAT, tint: 0xff8a3a,
+    strength: 3, constitution: 3, dexterity: 7, intelligence: 4, spirit: 3, speed: 8,
+    biomes: ['Tropical Rainforest'], tier: 'easy',
+  },
+  {
+    id: 'river_piranha', name: 'River Piranha',
+    description: 'A toothy fish that thrashes up the shallows in a feeding frenzy.',
+    frame: TD_CRITTER, tint: 0xcc4a4a,
+    strength: 6, constitution: 4, dexterity: 7, intelligence: 2, spirit: 2, speed: 7,
+    biomes: ['Tropical Rainforest'], tier: 'medium',
+  },
+  // Ocean
+  {
+    id: 'barnacle_beast', name: 'Barnacle Beast',
+    description: 'A lump of living barnacles that clamps onto passing hulls.',
+    frame: TD_CRAB, tint: 0x88aabb,
+    strength: 4, constitution: 8, dexterity: 3, intelligence: 2, spirit: 2, speed: 2,
+    biomes: ['Ocean'], tier: 'easy',
+  },
+  {
+    id: 'electric_eel', name: 'Electric Eel',
+    description: 'A sleek eel that crackles with a tingly blue charge.',
+    frame: TD_CRITTER, tint: 0x55c8ee,
+    strength: 4, constitution: 4, dexterity: 6, intelligence: 7, spirit: 4, speed: 6,
+    caster: true,
+    biomes: ['Ocean'], tier: 'medium',
+  },
+
+  // ══ Campaign BOSSES (final-encounter only — boosted stats + special look) ════
+  {
+    id: 'boss_dune_colossus', name: 'Dune Colossus',
+    description: 'A mountainous sand-wreathed titan that rises to guard the deep desert.',
+    frame: TD_CYCLOPS, tint: 0xe0a838, boss: true,
+    strength: 10, constitution: 10, dexterity: 4, intelligence: 4, spirit: 5, speed: 3,
+    biomes: ['Desert'], tier: 'hard',
+  },
+  {
+    id: 'boss_elder_treant', name: 'Elder Treant',
+    description: 'The ancient heart-tree of the pinewood, awake and deeply unamused.',
+    frame: TD_CYCLOPS, tint: 0x5aa05a, boss: true,
+    strength: 10, constitution: 11, dexterity: 3, intelligence: 5, spirit: 6, speed: 2,
+    biomes: ['Pine Forest'], tier: 'hard',
+  },
+  {
+    id: 'boss_great_stag', name: 'The Great Stag',
+    description: 'A towering antlered guardian crowned with golden autumn leaves.',
+    frame: TD_CYCLOPS, tint: 0xc88a44, boss: true,
+    strength: 10, constitution: 9, dexterity: 6, intelligence: 5, spirit: 7, speed: 6,
+    biomes: ['Deciduous Forest'], tier: 'hard',
+  },
+  {
+    id: 'boss_bog_behemoth', name: 'Bog Behemoth',
+    description: 'A reeking mound of the entire swamp, given one enormous grudge.',
+    frame: TD_CYCLOPS, tint: 0x6f8a3a, boss: true,
+    strength: 11, constitution: 11, dexterity: 3, intelligence: 4, spirit: 4, speed: 2,
+    biomes: ['Swamp'], tier: 'hard',
+  },
+  {
+    id: 'boss_frozen_monarch', name: 'The Frozen Monarch',
+    description: 'A crowned giant of black ice who rules the silent peaks.',
+    frame: TD_CYCLOPS, tint: 0x9fd6ff, boss: true,
+    strength: 10, constitution: 10, dexterity: 4, intelligence: 7, spirit: 7, speed: 4,
+    biomes: ['Snow'], tier: 'hard',
+  },
+  {
+    id: 'boss_warchief_ogre', name: 'Warchief Ogre',
+    description: 'The biggest, meanest ogre on the plains, and he knows it.',
+    frame: TD_CYCLOPS, tint: 0xc86a4a, boss: true,
+    strength: 11, constitution: 10, dexterity: 5, intelligence: 3, spirit: 4, speed: 4,
+    biomes: ['Grassland'], tier: 'hard',
+  },
+  {
+    id: 'boss_jade_serpent', name: 'Jade Serpent King',
+    description: 'A vast emerald serpent coiled through the highest canopy.',
+    frame: TD_HOODED, tint: 0x3ad08a, boss: true,
+    strength: 10, constitution: 9, dexterity: 9, intelligence: 6, spirit: 5, speed: 8,
+    biomes: ['Tropical Rainforest'], tier: 'hard',
+  },
+  {
+    id: 'boss_the_kraken', name: 'The Kraken',
+    description: 'The legendary deep-sea terror, all crushing arms and ancient hunger.',
+    frame: TD_CYCLOPS, tint: 0x7a5ad0, boss: true,
+    strength: 11, constitution: 11, dexterity: 6, intelligence: 7, spirit: 5, speed: 5,
+    biomes: ['Ocean'], tier: 'hard',
+  },
 ]
 
 // ── Lookup tables ───────────────────────────────────────────────────────────
@@ -476,11 +670,23 @@ export const MOB_ARCHETYPES: MobArchetype[] = [
 const ARCHETYPES_BY_ID = new Map(MOB_ARCHETYPES.map(a => [a.id, a]))
 
 export const MOBS_BY_BIOME: Record<string, Record<MobTier, MobArchetype[]>> = {}
+/** Bosses are kept OUT of the random pool and indexed separately per biome — a
+ *  campaign spawns its biome's boss only as the final encounter. */
+export const BOSSES_BY_BIOME: Record<string, MobArchetype[]> = {}
 for (const arch of MOB_ARCHETYPES) {
   for (const biome of arch.biomes) {
-    const byTier = (MOBS_BY_BIOME[biome] ??= { easy: [], medium: [], hard: [] })
-    byTier[arch.tier].push(arch)
+    if (arch.boss) {
+      (BOSSES_BY_BIOME[biome] ??= []).push(arch)
+    } else {
+      const byTier = (MOBS_BY_BIOME[biome] ??= { easy: [], medium: [], hard: [] })
+      byTier[arch.tier].push(arch)
+    }
   }
+}
+
+/** The boss archetype for a biome (or null if none defined). */
+export function bossForBiome(biome: string): MobArchetype | null {
+  return BOSSES_BY_BIOME[biome]?.[0] ?? null
 }
 
 // ── Stat derivation ─────────────────────────────────────────────────────────
@@ -500,16 +706,23 @@ export function spawnMob(archetypeId: string, level: number): MobInstance {
   const lv = Phaser_clamp(Math.round(level), 1, 100)
   const atkWeight = arch.caster ? arch.intelligence : arch.strength
 
+  // Bosses are a single climactic foe, so they're tankier and hit harder than a
+  // normal mob of the same level (they stand in for a whole encounter's worth).
+  const hpMult  = arch.boss ? 2.6 : 1
+  const atkMult = arch.boss ? 1.35 : 1
+  const defMult = arch.boss ? 1.25 : 1
+
   return {
     archetypeId: arch.id,
     name: arch.name,
     level: lv,
-    maxHp:   Math.max(1, Math.round((20 + lv * 6)   * (arch.constitution / 5))),
-    attack:  Math.max(1, Math.round((4  + lv * 1.2) * (atkWeight / 5))),
-    defense: Math.max(0, Math.round((2  + lv * 0.8) * ((arch.constitution + arch.strength) / 10))),
+    maxHp:   Math.max(1, Math.round((20 + lv * 6)   * (arch.constitution / 5) * hpMult)),
+    attack:  Math.max(1, Math.round((4  + lv * 1.2) * (atkWeight / 5) * atkMult)),
+    defense: Math.max(0, Math.round((2  + lv * 0.8) * ((arch.constitution + arch.strength) / 10) * defMult)),
     speed:   Math.max(1, Math.round((10 + lv * 0.5) * (arch.speed / 5))),
     frame: arch.frame,
     tint:  arch.tint,
+    boss:  arch.boss,
   }
 }
 

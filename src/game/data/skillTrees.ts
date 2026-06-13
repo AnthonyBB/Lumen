@@ -2,6 +2,29 @@
 // skillTrees.ts — 13-class combat skill tree definitions
 // ============================================================
 
+export const SKILL_CLASSES = [
+  'fire_mage', 'ice_mage', 'lightning_mage',
+  'sword', 'spear', 'axe', 'hammer',
+  'monk', 'paladin', 'assassin', 'cleric', 'shaman', 'bard',
+] as const
+
+// ── Skill ranks (mirror server/game/PlayerManager.ts — keep in sync) ─────────
+export const MAX_SKILL_RANK = 5
+/** Each rank above 1 adds this to a skill's flat magnitudes (rank 5 = 1.8×). */
+export const SKILL_RANK_BONUS = 0.2
+/** Character level required to buy a given rank (1/4/7/10/13 for ranks 1..5). */
+export function skillRankLevelGate(rank: number): number {
+  return 1 + (Math.max(1, rank) - 1) * 3
+}
+/** Skill-Shard cost to buy `rank` at the given tier price (tierPrice × rank). */
+export function skillRankCost(tierPrice: number, rank: number): number {
+  return Math.max(1, tierPrice) * Math.max(1, rank)
+}
+/** Combat power multiplier for a skill at `rank` (rank 0/1 = 1×). */
+export function skillRankMultiplier(rank: number): number {
+  return 1 + Math.max(0, rank - 1) * SKILL_RANK_BONUS
+}
+
 export type SkillClass =
   | 'fire_mage' | 'ice_mage' | 'lightning_mage'
   | 'sword' | 'spear' | 'axe' | 'hammer'

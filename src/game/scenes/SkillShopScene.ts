@@ -13,7 +13,11 @@ import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
 import { addLeaveButton } from '../ui/leaveButton'
-import { SKILL_TREES, type CombatSkill, type SkillTreeDef } from '../data/skillTrees'
+import {
+  SKILL_TREES, MAX_SKILL_RANK, skillRankCost, skillRankLevelGate,
+  type CombatSkill, type SkillTreeDef,
+} from '../data/skillTrees'
+import { StatsStore } from '../systems/StatsStore'
 
 const COLOR_BG         = 0x0d0d1a
 const COLOR_PANEL      = 0x12122a
@@ -45,6 +49,7 @@ const PATH_LABEL: Record<CombatSkill['path'], string> = {
 
 interface ShopUnlocks {
   unlockedSkills: string[]
+  skillRanks?: Record<string, number>
   unlockedStrategies: string[]
   skillShards: number
   combatShards: number
@@ -54,6 +59,7 @@ export class SkillShopScene extends Phaser.Scene {
   private socket: Socket | null = null
   private selectedTree: SkillTreeDef = SKILL_TREES[0]
   private unlockedSkills: Set<string> = new Set()
+  private skillRanks: Record<string, number> = {}
   private skillShards = 0
 
   private classContainer!: Phaser.GameObjects.Container
@@ -143,6 +149,8 @@ export class SkillShopScene extends Phaser.Scene {
 
   private applyUnlocks(data: ShopUnlocks) {
     this.unlockedSkills = new Set(data.unlockedSkills ?? [])
+    this.skillRanks = data.skillRanks
+      ?? Object.fromEntries((data.unlockedSkills ?? []).map(id => [id, 1]))
     this.skillShards = data.skillShards ?? 0
     this.headerBalanceText.setText(`🔷 Skill Shards:  ${this.skillShards}`)
     this.drawSkillList()
@@ -312,11 +320,18 @@ export class SkillShopScene extends Phaser.Scene {
   }
 
   private drawSkillRow(skill: CombatSkill, x: number, y: number, w: number, h: number) {
-    const owned = this.unlockedSkills.has(skill.id)
-    const missingPrereqs = skill.requires.filter(r => !this.unlockedSkills.has(r))
+    const rank = this.skillRanks[skill.id] ?? 0
+    const owned = rank >= 1
+    const atMax = rank >= MAX_SKILL_RANK
+    const missingPrereqs = owned ? [] : skill.requires.filter(r => (this.skillRanks[r] ?? 0) < 1)
     const locked = !owned && missingPrereqs.length > 0
-    const price = SKILL_PRICE_BY_TIER[skill.tier]
+    const nextRank = rank + 1
+    const price = skillRankCost(SKILL_PRICE_BY_TIER[skill.tier], nextRank)
+    const reqLevel = skillRankLevelGate(nextRank)
+    const charLevel = StatsStore.get()?.level ?? 1
+    const levelOk = charLevel >= reqLevel
     const affordable = this.skillShards >= price
+    const canBuy = affordable && levelOk
 
     const bg = this.add.graphics()
     bg.fillStyle(owned ? 0x0e2a1a : locked ? 0x14142a : COLOR_PANEL_ALT, 1)
@@ -336,8 +351,9 @@ export class SkillShopScene extends Phaser.Scene {
       fontStyle: 'bold',
     }).setOrigin(0, 0.5))
 
-    this.skillListContainer.add(this.add.text(x + 46, y + 33, `Tier ${skill.tier}  ·  ${PATH_LABEL[skill.path]}`, {
-      fontSize: '10px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_DIM,
+    const rankTag = owned ? `  ·  Rank ${rank}/${MAX_SKILL_RANK}` : ''
+    this.skillListContainer.add(this.add.text(x + 46, y + 33, `Tier ${skill.tier}  ·  ${PATH_LABEL[skill.path]}${rankTag}`, {
+      fontSize: '10px', fontFamily: 'Arial, sans-serif', color: owned ? '#7fd6a0' : COLOR_TEXT_DIM,
     }).setOrigin(0, 0.5))
 
     const desc = skill.description.length > 78 ? skill.description.slice(0, 78) + '…' : skill.description
@@ -346,9 +362,9 @@ export class SkillShopScene extends Phaser.Scene {
       color: locked ? '#555577' : COLOR_TEXT_GRAY,
     }).setOrigin(0, 0.5))
 
-    // Right side: owned badge / locked hint / buy button
-    if (owned) {
-      this.skillListContainer.add(this.add.text(x + w - 14, y + h / 2, '✓ LEARNED', {
+    // Right side: maxed badge / locked hint / buy-or-upgrade button
+    if (atMax) {
+      this.skillListContainer.add(this.add.text(x + w - 14, y + h / 2, `✓ MAX  ·  Rank ${MAX_SKILL_RANK}`, {
         fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#88ffaa',
         backgroundColor: '#0a2a1a', padding: { x: 8, y: 5 }, fontStyle: 'bold',
       }).setOrigin(1, 0.5))
@@ -369,30 +385,44 @@ export class SkillShopScene extends Phaser.Scene {
       return
     }
 
-    // Purchasable — Buy button
-    const btnW = 110, btnH = 32
+    // Purchasable — Buy (first unlock) or Upgrade (next rank) button.
+    const btnW = 120, btnH = 32
     const bx = x + w - btnW - 12
     const by = y + (h - btnH) / 2
+
+    // Level gate not met → show a hint instead of an active button.
+    if (!levelOk) {
+      this.skillListContainer.add(this.add.text(x + w - 14, y + h / 2 - 9,
+        `${owned ? `Rank ${nextRank}` : 'Unlock'}  ·  ${price} 🔷`, {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#777799', fontStyle: 'bold',
+      }).setOrigin(1, 0.5))
+      this.skillListContainer.add(this.add.text(x + w - 14, y + h / 2 + 10, `🔒 Needs Level ${reqLevel}`, {
+        fontSize: '10px', fontFamily: 'Arial, sans-serif', color: COLOR_TEXT_DIM,
+      }).setOrigin(1, 0.5))
+      return
+    }
+
     const btnBg = this.add.graphics()
     const drawBtn = (hover = false) => {
       btnBg.clear()
-      btnBg.fillStyle(affordable ? (hover ? 0x2a3a1a : 0x1a2a1a) : 0x2a1a1a, 1)
+      btnBg.fillStyle(canBuy ? (hover ? 0x2a3a1a : 0x1a2a1a) : 0x2a1a1a, 1)
       btnBg.fillRoundedRect(bx, by, btnW, btnH, 7)
-      btnBg.lineStyle(2, affordable ? (hover ? 0x88dd44 : 0x44aa44) : 0x664444, 1)
+      btnBg.lineStyle(2, canBuy ? (hover ? 0x88dd44 : 0x44aa44) : 0x664444, 1)
       btnBg.strokeRoundedRect(bx, by, btnW, btnH, 7)
     }
     drawBtn()
     this.skillListContainer.add(btnBg)
 
-    const btnText = this.add.text(bx + btnW / 2, by + btnH / 2, `Buy  ${price} 🔷`, {
-      fontSize: '13px', fontFamily: 'Arial, sans-serif',
-      color: affordable ? '#aaffaa' : '#cc7766', fontStyle: 'bold',
+    const label = owned ? `Rank ${nextRank}  ${price} 🔷` : `Buy  ${price} 🔷`
+    const btnText = this.add.text(bx + btnW / 2, by + btnH / 2, label, {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif',
+      color: canBuy ? '#aaffaa' : '#cc7766', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true })
     btnText.on('pointerover', () => drawBtn(true))
     btnText.on('pointerout',  () => drawBtn(false))
     btnText.on('pointerdown', () => {
-      // The server re-validates everything (existence, prerequisites,
-      // ownership, balance) — this emit is just a request.
+      // The server re-validates everything (existence, prerequisites, level,
+      // ownership, balance) — this emit is just a request to buy the NEXT rank.
       if (!this.socket?.connected) {
         this.showFeedback('Not connected to the server.', '#ff8866')
         return

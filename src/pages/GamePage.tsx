@@ -11,6 +11,7 @@ import { forceLogout, type AuthUser } from '../hooks/useAuth'
 import { InventoryStore } from '../game/systems/InventoryStore'
 import { StatsStore } from '../game/systems/StatsStore'
 import { RankStore } from '../game/systems/RankStore'
+import { Sfx } from '../game/systems/Sfx'
 import { API_BASE } from '../config'
 
 interface GamePageProps {
@@ -30,6 +31,10 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   const [celebrateLevel, setCelebrateLevel] = useState<number | null>(null)
   const [roster, setRoster] = useState<RosterData | null>(null)
   const [rosterOpen, setRosterOpen] = useState(false)
+  // When the roster panel is opened from the in-world Mercenary Guild, jump it
+  // straight to the recruit form.
+  const [rosterRecruit, setRosterRecruit] = useState(false)
+  const [muted, setMuted] = useState(Sfx.isMuted)
   const [haste, setHaste] = useState<HasteData | null>(null)
   const [studyOpen, setStudyOpen] = useState(false)
   const [idleStatus, setIdleStatus] = useState<IdleStatus | null>(null)
@@ -137,6 +142,15 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
     }
   }, [needsContentMode])
 
+  // Bridge: the in-world Mercenary Guild (Phaser) asks React to open the roster
+  // panel on its recruit step. Phaser can't toggle React state directly, so it
+  // dispatches a window event we listen for here.
+  useEffect(() => {
+    const open = () => { setRosterRecruit(true); setRosterOpen(true) }
+    window.addEventListener('lumen:open-roster', open)
+    return () => window.removeEventListener('lumen:open-roster', open)
+  }, [])
+
   // --- Content mode not yet chosen: show blocking prompt ---
   if (needsContentMode) {
     return (
@@ -165,7 +179,8 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
           onSetActive={(id) => emit('roster:set_active', { characterId: id })}
           onSetParty={(party) => emit('party:set', { party })}
           onCreate={(name, cls) => emit('roster:create', { name, class: cls })}
-          onClose={() => setRosterOpen(false)}
+          onClose={() => { setRosterOpen(false); setRosterRecruit(false) }}
+          startRecruiting={rosterRecruit}
         />
       )}
 
@@ -206,17 +221,32 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
 
       {/* Game canvas */}
       <div className="flex flex-1 items-center justify-center p-4">
-        <div
-          id="game-container"
-          className="relative w-full max-w-[1280px] aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-purple-900/30"
-        />
+        <div className="relative w-full max-w-[1280px]">
+          <div
+            id="game-container"
+            className="w-full aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-purple-900/30"
+          />
+          {/* Sound mute toggle */}
+          <button
+            onClick={() => {
+              const m = Sfx.toggleMuted()
+              setMuted(m)
+              if (!m) Sfx.play('click')
+            }}
+            title={muted ? 'Unmute sound' : 'Mute sound'}
+            aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+            className="absolute top-3 right-3 z-10 rounded-lg border border-white/15 bg-black/55 px-2.5 py-1.5 text-lg leading-none text-gray-200 backdrop-blur hover:bg-black/75"
+          >
+            {muted ? '🔇' : '🔊'}
+          </button>
+        </div>
       </div>
 
       {/* HUD */}
       <div className="px-4 pb-6 max-w-[1280px] mx-auto w-full">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <button
-            onClick={() => roster && setRosterOpen(true)}
+            onClick={() => { if (roster) { setRosterRecruit(false); setRosterOpen(true) } }}
             disabled={!roster}
             className="rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:border-lumen-gold/40 hover:bg-white/10 disabled:cursor-default"
           >

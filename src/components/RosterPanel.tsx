@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { SKILL_CLASSES } from '../game/data/skillTrees'
+import { Sfx } from '../game/systems/Sfx'
 
 /**
  * Roster panel — view your characters, switch the active one, and recruit new
@@ -35,6 +36,8 @@ interface Props {
   onSetParty: (party: string[]) => void
   onCreate: (name: string, cls: string) => void
   onClose: () => void
+  /** Open straight to the recruit form (e.g. from the Mercenary Guild). */
+  startRecruiting?: boolean
 }
 
 /** 'fire_mage' → 'Fire Mage' */
@@ -42,8 +45,8 @@ export function classLabel(cls: string): string {
   return cls.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 }
 
-export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate, onClose }: Props) {
-  const [recruiting, setRecruiting] = useState(false)
+export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate, onClose, startRecruiting }: Props) {
+  const [recruiting, setRecruiting] = useState(!!startRecruiting)
   const [name, setName] = useState('')
   const [cls, setCls] = useState<string>(SKILL_CLASSES[3]) // 'sword' — a friendly default
   const atMaxRoster = roster.characters.length >= roster.maxRoster
@@ -65,6 +68,7 @@ export default function RosterPanel({ roster, onSetActive, onSetParty, onCreate,
   const submit = () => {
     if (name.trim().length < 2) return
     onCreate(name.trim(), cls)
+    Sfx.play('recruit')
     setName('')
     setRecruiting(false)
   }

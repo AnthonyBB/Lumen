@@ -8,6 +8,7 @@ import { NpcDialog } from '../objects/NpcDialog'
 import { TOWN_NPCS } from '../data/townNpcs'
 import { DIFFICULTIES, DIFFICULTY_ORDER, type Difficulty } from '../data/mobs'
 import { AnimalManager } from '../systems/AnimalManager'
+import { Sfx } from '../systems/Sfx'
 import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD, ROAD_GRASS_TINT } from '../data/tileFrames'
 
 interface BuildingEntry {
@@ -75,6 +76,10 @@ export class WorldScene extends Phaser.Scene {
   private characterOpen = false
   private biomeMenuOpen = false
   private biomeMenuContainer: Phaser.GameObjects.Container | null = null
+  // Combat mode chosen at campaign start: hand-play every turn ('manual') or
+  // watch the party's strategy loadout fight autonomously ('auto'). Persists
+  // across menu opens within a session.
+  private campaignMode: 'manual' | 'auto' = 'manual'
 
   // Chest
   private chestPos = { x: 1280, y: 1220 }
@@ -247,6 +252,8 @@ export class WorldScene extends Phaser.Scene {
       { label: 'The Forge',       x: 1290, y: 1700, w: 200, h: 170 },
       { label: 'The Armory',      x: 895,  y: 1010, w: 200, h: 170 },
       { label: 'Alchemy Lab',     x: 620,  y: 1640, w: 200, h: 170 },
+      // Hire new party members here (the in-world home of recruitment).
+      { label: 'Mercenary Guild', x: 1130, y: 760,  w: 200, h: 170 },
     ]
 
     this.buildings = []
@@ -691,6 +698,7 @@ export class WorldScene extends Phaser.Scene {
     // whole blacksmith BUILDING, which reads as a second house), so it uses a
     // drawn anvil-and-brazier object instead of a sprite.
     if (label === 'The Forge') { this.emblemForge(x, y); return }
+    if (label === 'Mercenary Guild') { this.emblemMercenary(x, y); return }
 
     // The rest are real CraftPix props. [textureKey, target on-screen width].
     const EMBLEMS: Record<string, [string, number]> = {
@@ -710,6 +718,26 @@ export class WorldScene extends Phaser.Scene {
     if (!this.textures.exists(key)) return   // art missing — skip rather than crash
     const img = this.add.image(x, y, key).setDepth(3).setOrigin(0.5, 0.82)
     img.setScale(targetW / img.width)        // uniform scale preserves aspect ratio
+  }
+
+  /** Mercenary Guild: a sword planted point-down with a round shield leaning
+   *  against it — "warriors for hire" — drawn (no matching prop in the library). */
+  private emblemMercenary(x: number, y: number) {
+    const g = this.add.graphics().setDepth(3)
+    g.fillStyle(0x000000, 0.18); g.fillEllipse(x, y + 14, 92, 30)        // ground shadow
+    // Planted sword (blade sunk into the dirt, hilt up).
+    g.fillStyle(0xb9c2cc, 1); g.fillRect(x - 3, y - 40, 6, 44)           // blade
+    g.fillStyle(0x8a929c, 1); g.fillTriangle(x - 3, y + 4, x + 3, y + 4, x, y + 12) // buried tip
+    g.fillStyle(0x6b4a2a, 1); g.fillRect(x - 11, y - 44, 22, 6)          // crossguard
+    g.fillStyle(0x3a2a18, 1); g.fillRect(x - 2, y - 56, 4, 12)           // grip
+    g.fillStyle(0xd4a830, 1); g.fillCircle(x, y - 58, 4)                 // pommel
+    // Round shield leaning at the base.
+    g.fillStyle(0x7a3b2a, 1); g.fillCircle(x + 30, y - 2, 18)            // shield body
+    g.lineStyle(3, 0x9c5a3a, 1); g.strokeCircle(x + 30, y - 2, 18)       // rim
+    g.fillStyle(0xd4a830, 1); g.fillCircle(x + 30, y - 2, 5)             // boss
+    // Small banner pole behind for a guild touch.
+    g.fillStyle(0x5a4632, 1); g.fillRect(x - 40, y - 50, 4, 54)         // pole
+    g.fillStyle(0x9c2b2b, 1); g.fillTriangle(x - 36, y - 50, x - 36, y - 28, x - 18, y - 39) // pennant
   }
 
   /** Forge: a drawn anvil beside a glowing coal brazier (no anvil prop exists). */
@@ -895,6 +923,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.biomeMenuOpen) return
     this.biomeMenuOpen = true
     this.player.setVelocity(0, 0)
+    Sfx.play('menu')
 
     const color = BIOME_COLORS[biomeName] ?? 0xffd700
     const locations: FiveLocations = BIOME_LOCATIONS[biomeName]
@@ -933,11 +962,15 @@ export class WorldScene extends Phaser.Scene {
     divider.lineBetween(-panelW / 2 + 20, -panelH / 2 + 52, panelW / 2 - 20, -panelH / 2 + 52)
     container.add(divider)
 
+    // Combat-mode toggle: hand-play every turn, or watch the party's strategy
+    // loadout fight autonomously (so you can both play AND see your strategy live).
+    this.drawModeToggle(container, -232, color)
+
     // Difficulty buttons — one per mode, easiest → hardest, accents + level
     // bands pulled from the shared DIFFICULTIES config. Per-biome flavour names
     // only exist for the first few modes, so fall back to the difficulty label.
-    const firstY = -210
-    const stepY = 44
+    const firstY = -190
+    const stepY = 42
     DIFFICULTY_ORDER.forEach((diff, i) => {
       const cfg = DIFFICULTIES[diff]
       const loc = locations[i] ?? cfg.label
@@ -968,6 +1001,48 @@ export class WorldScene extends Phaser.Scene {
     container.add(cancelText)
 
     this.biomeMenuContainer = container
+  }
+
+  /** Two-pill segmented control choosing how the campaign's battles play out. */
+  private drawModeToggle(container: Phaser.GameObjects.Container, y: number, color: number) {
+    container.add(this.add.text(0, y - 22, 'COMBAT MODE', {
+      fontSize: '10px', fontFamily: 'Arial', color: '#9aa0c0', fontStyle: 'bold',
+    }).setOrigin(0.5))
+
+    const hint = this.add.text(0, y + 20, '', {
+      fontSize: '10px', fontFamily: 'Arial', color: '#777a9a',
+    }).setOrigin(0.5)
+    container.add(hint)
+
+    const pillW = 168, pillH = 28
+    const defs: { mode: 'manual' | 'auto'; x: number; label: string }[] = [
+      { mode: 'manual', x: -90, label: '⚔ Manual' },
+      { mode: 'auto', x: 90, label: '⚙ Strategy' },
+    ]
+    const pills = defs.map(def => {
+      const bg = this.add.graphics(); container.add(bg)
+      const txt = this.add.text(def.x, y, def.label, {
+        fontSize: '14px', fontFamily: 'Georgia, serif', fontStyle: 'bold',
+      }).setOrigin(0.5); container.add(txt)
+      const zone = this.add.zone(def.x - pillW / 2, y - pillH / 2, pillW, pillH).setOrigin(0)
+        .setInteractive({ useHandCursor: true })
+      zone.on('pointerdown', () => { this.campaignMode = def.mode; paint(); Sfx.play('click') })
+      container.add(zone)
+      return { ...def, bg, txt }
+    })
+    const paint = () => {
+      for (const p of pills) {
+        const sel = p.mode === this.campaignMode
+        p.bg.clear()
+        p.bg.fillStyle(sel ? 0x2a2a5a : 0x14142e, 1).fillRoundedRect(p.x - pillW / 2, y - pillH / 2, pillW, pillH, 8)
+        p.bg.lineStyle(sel ? 2 : 1, sel ? color : 0x44446a, sel ? 1 : 0.7).strokeRoundedRect(p.x - pillW / 2, y - pillH / 2, pillW, pillH, 8)
+        p.txt.setColor(sel ? '#ffd700' : '#9aa0c0')
+      }
+      hint.setText(this.campaignMode === 'auto'
+        ? 'Your strategy loadout fights — watch it play out.'
+        : 'Hand-play every character each turn.')
+    }
+    paint()
   }
 
   private createBiomeButton(
@@ -1027,12 +1102,14 @@ export class WorldScene extends Phaser.Scene {
       btnBg.strokeRoundedRect(-bw / 2, by, bw, bh, 8)
     })
     hitZone.on('pointerdown', () => {
+      Sfx.play('click')
       this.closeBiomeMenu()
       this.scene.stop('UIScene')
       this.scene.start('BiomeScene', {
         biome: biomeName,
         difficulty,
         location: locationName,
+        mode: this.campaignMode,
         returnX: this.player.x,
         returnY: this.player.y,
       })
@@ -1137,8 +1214,18 @@ export class WorldScene extends Phaser.Scene {
         this.openBiomeMenu(this.nearBiomeGate.name)
       }
     } else if (nearBuilding && !this.popupOpen) {
-      this.promptText.setText('Press E to enter').setVisible(true)
+      this.promptText
+        .setText(nearBuilding.label === 'Mercenary Guild' ? 'Press E to hire mercenaries' : 'Press E to enter')
+        .setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        Sfx.play('menu')
+        if (nearBuilding.label === 'Mercenary Guild') {
+          // Recruitment lives in the React roster panel; ask it to open on its
+          // recruit step (Phaser can't toggle React state directly).
+          this.player.setVelocity(0, 0)
+          window.dispatchEvent(new CustomEvent('lumen:open-roster'))
+          return
+        }
         if (nearBuilding.label === 'Combat Strategy') {
           this.player.setVelocity(0, 0)
           this.scene.stop('UIScene')

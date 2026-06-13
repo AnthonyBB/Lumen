@@ -112,7 +112,7 @@ export class ClassroomScene extends Phaser.Scene {
   private resultsPanel!: Phaser.GameObjects.Container
 
   // Server-authoritative progression snapshot (fetched via shop:unlocks on open).
-  private subjectGrades: Record<Subject, number> = { math: 1, science: 1, history: 1, language: 1 }
+  private subjectGrades: Record<Subject, number> = { math: 1, science: 1, history: 1, language: 1, geography: 1, technology: 1, arts: 1, health: 1 }
   private topicPasses: Record<string, number> = {}
 
   // Topic modal navigation: null = subject-select view; a subject = its topic list.

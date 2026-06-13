@@ -1,4 +1,4 @@
-export type Subject = 'math' | 'science' | 'history' | 'language'
+export type Subject = 'math' | 'science' | 'history' | 'language' | 'geography' | 'technology' | 'arts' | 'health'
 export type Difficulty = 'easy' | 'medium' | 'hard'
 
 export interface Question {

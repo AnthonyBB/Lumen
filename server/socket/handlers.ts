@@ -43,7 +43,7 @@ import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
 import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
 import { resolveBattle } from '../game/combat/resolver.js';
 import { buildAllyCombatant, buildEnemyCombatant, type MobInput } from '../game/combat/adapter.js';
-import { resolveIdle } from '../game/combat/idle.js';
+import { resolveIdle, peekBattlesOwed } from '../game/combat/idle.js';
 import { MATERIALS } from '../game/data/materials.js';
 import { getItemSlot, createItem } from '../game/ItemDatabase.js';
 import {
@@ -69,7 +69,11 @@ import {
   MAX_SKILL_RANK,
   skillRankLevelGate,
   skillRankCost,
+  deriveCombatStats,
+  characterPower,
+  levelForXp,
 } from '../game/PlayerManager.js';
+import { requiredLevelFor } from '../game/data/equipmentGen.js';
 import { QUIZ_PASS_THRESHOLD } from '../game/LearningSessionManager.js';
 import { SKILL_TREES, SKILL_CLASSES, type CombatSkill, type SkillClass } from '../game/data/skillTrees.js';
 import { STRATEGIES, type CombatStrategy } from '../game/data/combatStrategies.js';
@@ -230,17 +234,6 @@ export function registerHandlers(
     });
   };
 
-  /** Push the idle deployment status. */
-  const pushIdle = (): void => {
-    const idle = playerManager.getIdle(socket.id);
-    socket.emit('idle:status', {
-      assigned: !!idle,
-      biome: idle?.biome ?? null,
-      difficulty: idle?.difficulty ?? null,
-      intervalMinutes: playerManager.getHaste(socket.id).intervalMinutes,
-    });
-  };
-
   /** Credit any idle battles owed since the last access, push the summary, and
    *  refresh the affected state. Safe to call on login and on idle screen open. */
   const settleIdle = (): void => {
@@ -250,6 +243,7 @@ export function registerHandlers(
       pushStats();
       pushCurrency();
       pushInventoryUpdate();
+      pushRoster();   // deployment clocks/XP advanced — refresh the War Spoils view
     }
   };
 
@@ -297,17 +291,39 @@ export function registerHandlers(
   // active re-pushes the per-character views. Creating is FREE up to the
   // starting team of FREE_ROSTER_SIZE; beyond that needs recruitment (Recruit
   // Tokens — a later stage). See docs/CHARACTERS_DESIGN.md §2.
-  const buildRoster = () => ({
-    characters: playerManager.getCharacters(socket.id).map((c) => ({
-      id: c.id, name: c.name, class: c.class, level: c.level, xp: c.xp,
-    })),
-    activeCharacterId: playerManager.getActiveCharacter(socket.id)?.id ?? '',
-    party: playerManager.getParty(socket.id),
-    freeSlots: Math.max(0, FREE_ROSTER_SIZE - playerManager.getCharacters(socket.id).length),
-    recruitTokens: playerManager.getRecruitTokens(socket.id),
-    recruitCost: recruitCostFor(playerManager.getCharacters(socket.id).length),
-    maxRoster: MAX_ROSTER,
-  });
+  const buildRoster = () => {
+    // Power rating is server-authoritative (docs/TEAMS_DESIGN.md §6/§10): derive
+    // each character's combat stats from its gear + attributes, fold in level and
+    // skill-rank investment, and sum members for each team's power.
+    const currentRank = playerManager.getAdventureRank(socket.id);
+    const chars = playerManager.getCharacters(socket.id);
+    const powerById = new Map<string, number>();
+    const characters = chars.map((c) => {
+      const combat = deriveCombatStats(c, inventoryManager.equipmentFor(socket.id, c.id), currentRank);
+      const ranks = Object.values(c.skillRanks).reduce((s, r) => s + (r ?? 0), 0);
+      const power = characterPower(combat, c.level, ranks);
+      powerById.set(c.id, power);
+      return { id: c.id, name: c.name, class: c.class, level: c.level, xp: c.xp, power };
+    });
+    const teams = playerManager.getTeams(socket.id).map((t) => ({
+      id: t.id, name: t.name, crest: t.crest, color: t.color, memberIds: [...t.memberIds],
+      power: t.memberIds.reduce((s, id) => s + (powerById.get(id) ?? 0), 0),
+    }));
+    const deployments = playerManager.getDeployments(socket.id)
+      .map((d) => ({ teamId: d.teamId, biome: d.biome, difficulty: d.difficulty }));
+    return {
+      characters,
+      activeCharacterId: playerManager.getActiveCharacter(socket.id)?.id ?? '',
+      party: playerManager.getParty(socket.id),
+      teams,
+      deployments,
+      idleIntervalMinutes: playerManager.getHaste(socket.id).intervalMinutes,
+      freeSlots: Math.max(0, FREE_ROSTER_SIZE - chars.length),
+      recruitTokens: playerManager.getRecruitTokens(socket.id),
+      recruitCost: recruitCostFor(chars.length),
+      maxRoster: MAX_ROSTER,
+    };
+  };
   const pushRoster = (): void => { socket.emit('roster:data', buildRoster()); };
 
   socket.on('roster:get', () => {
@@ -333,6 +349,50 @@ export function registerHandlers(
     pushCurrency(); // Skill Shards are per-character
   });
 
+  // ── Team sheet (the Character + Equipment screens — show the whole team) ────
+  // Returns each active-team member's FULL stat breakdown AND equipped gear in
+  // one shot, plus the shared bag — all computed server-side (the client only
+  // renders). Reuses computeStats per member without changing who is active.
+  // See docs/TEAMS_DESIGN.md (active team = teams[0]).
+  const pushTeamSheet = (): void => {
+    const currentRank = playerManager.getAdventureRank(socket.id);
+    const chars = playerManager.getCharacters(socket.id);
+    const byId = new Map(chars.map((c) => [c.id, c] as const));
+    const team = playerManager.getTeams(socket.id)[0];
+    const activeId = playerManager.getActiveCharacter(socket.id)?.id ?? '';
+
+    const members = (team?.memberIds ?? [])
+      .map((id) => byId.get(id))
+      .filter((c): c is NonNullable<typeof c> => !!c)
+      .map((c) => {
+        const equipment = inventoryManager.equipmentFor(socket.id, c.id);
+        const result = playerManager.computeStats(socket.id, equipment, c);
+        const combat = deriveCombatStats(c, equipment, currentRank);
+        const ranks = Object.values(c.skillRanks).reduce((s, r) => s + (r ?? 0), 0);
+        return {
+          id: c.id, name: c.name, class: c.class, level: c.level,
+          power: characterPower(combat, c.level, ranks),
+          equipment,
+          stats: result?.payload ?? null,
+        };
+      })
+      .filter((m) => m.stats !== null);
+
+    socket.emit('team:sheet', {
+      teamId: team?.id ?? '',
+      teamName: team?.name ?? 'Party',
+      activeCharacterId: activeId,
+      members,
+      // Shared bag (account-wide) — the Equipment screen equips onto whichever
+      // member is selected; the server validates ownership + the level gate.
+      bag: inventoryManager.getInventory(socket.id)?.items ?? [],
+    });
+  };
+  socket.on('team:get_sheet', () => {
+    if (!requireJoinedPlayer('You must join before viewing your team.')) return;
+    pushTeamSheet();
+  });
+
   socket.on('party:set', (payload: { party?: unknown }) => {
     if (!Array.isArray(payload?.party) || !payload.party.every((id) => typeof id === 'string')) {
       socket.emit('error', { message: 'Invalid party payload.' });
@@ -340,6 +400,61 @@ export function registerHandlers(
     }
     if (!requireJoinedPlayer('You must join first.')) return;
     playerManager.setParty(socket.id, payload.party as string[]);
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+  });
+
+  // ── Multi-team management (Squad Builder — see docs/TEAMS_DESIGN.md §4) ──────
+  socket.on('team:create', (payload: { name?: unknown }) => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    const name = typeof payload?.name === 'string' ? payload.name : undefined;
+    const res = playerManager.createTeam(socket.id, name);
+    if ('error' in res) { socket.emit('error', { message: res.error }); return; }
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+  });
+
+  socket.on('team:delete', (payload: { teamId?: unknown }) => {
+    if (typeof payload?.teamId !== 'string') { socket.emit('error', { message: 'Invalid team id.' }); return; }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    if (!playerManager.deleteTeam(socket.id, payload.teamId)) {
+      socket.emit('error', { message: 'Could not delete that team.' });
+      return;
+    }
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+  });
+
+  socket.on('team:rename', (payload: { teamId?: unknown; name?: unknown }) => {
+    if (typeof payload?.teamId !== 'string' || typeof payload?.name !== 'string') {
+      socket.emit('error', { message: 'Invalid team payload.' }); return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    if (!playerManager.renameTeam(socket.id, payload.teamId, payload.name)) {
+      socket.emit('error', { message: 'Could not rename that team.' }); return;
+    }
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+  });
+
+  socket.on('team:set_members', (payload: { teamId?: unknown; memberIds?: unknown }) => {
+    if (typeof payload?.teamId !== 'string' || !Array.isArray(payload?.memberIds)) {
+      socket.emit('error', { message: 'Invalid team members payload.' }); return;
+    }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    if (!playerManager.setTeamMembers(socket.id, payload.teamId, payload.memberIds)) {
+      socket.emit('error', { message: 'Could not update that team.' }); return;
+    }
+    playerManager.persistProgress(socket.id);
+    pushRoster();
+  });
+
+  socket.on('team:set_active', (payload: { teamId?: unknown }) => {
+    if (typeof payload?.teamId !== 'string') { socket.emit('error', { message: 'Invalid team id.' }); return; }
+    if (!requireJoinedPlayer('You must join first.')) return;
+    if (!playerManager.setActiveTeam(socket.id, payload.teamId)) {
+      socket.emit('error', { message: 'Could not set the active team.' }); return;
+    }
     playerManager.persistProgress(socket.id);
     pushRoster();
   });
@@ -435,30 +550,42 @@ export function registerHandlers(
     socket.emit('party:combat_data', { allies });
   });
 
-  // ── Idle / auto-battle (§6/§7) ─────────────────────────────────────────────
-  socket.on('idle:get', () => {
+  // ── War Spoils Table — per-team deployments (TEAMS §5) ──────────────────────
+  // Peek (no crediting) — drives the "spoils ready" badge on entering The Garrison.
+  socket.on('deployments:peek', () => {
     if (!requireJoinedPlayer('You must join first.')) return;
-    settleIdle();
-    pushIdle();
+    socket.emit('deployments:peek_result', { battlesOwed: peekBattlesOwed(playerManager, socket.id) });
   });
 
-  socket.on('idle:assign', (payload: { biome?: unknown; difficulty?: unknown }) => {
-    if (typeof payload?.difficulty !== 'string' || !(DIFFICULTIES as string[]).includes(payload.difficulty)) {
-      socket.emit('error', { message: 'Unknown campaign difficulty.' });
+  // Opening the table settles owed battles (open-to-credit) and refreshes state.
+  socket.on('deployments:get', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    settleIdle();
+    pushRoster();
+  });
+
+  socket.on('deployment:assign', (payload: { teamId?: unknown; biome?: unknown; difficulty?: unknown }) => {
+    if (typeof payload?.teamId !== 'string' ||
+        typeof payload?.difficulty !== 'string' || !(DIFFICULTIES as string[]).includes(payload.difficulty)) {
+      socket.emit('error', { message: 'Invalid deployment.' });
       return;
     }
     if (!requireJoinedPlayer('You must join first.')) return;
-    settleIdle(); // credit the prior deployment before redeploying
+    settleIdle(); // credit prior battles before (re)deploying
     const biome = typeof payload?.biome === 'string' ? payload.biome.slice(0, 32) : 'Campaign';
-    playerManager.assignIdle(socket.id, biome, payload.difficulty);
-    pushIdle();
+    if (!playerManager.assignDeployment(socket.id, payload.teamId, biome, payload.difficulty)) {
+      socket.emit('error', { message: 'Could not deploy that team.' });
+      return;
+    }
+    pushRoster();
   });
 
-  socket.on('idle:clear', () => {
+  socket.on('deployment:recall', (payload: { teamId?: unknown }) => {
+    if (typeof payload?.teamId !== 'string') { socket.emit('error', { message: 'Invalid team id.' }); return; }
     if (!requireJoinedPlayer('You must join first.')) return;
-    settleIdle();
-    playerManager.clearIdle(socket.id);
-    pushIdle();
+    settleIdle(); // credit owed battles before recalling
+    playerManager.recallDeployment(socket.id, payload.teamId);
+    pushRoster();
   });
 
   // ── stats:get — Character / Equipment screens request the stat breakdown ──
@@ -471,33 +598,8 @@ export function registerHandlers(
     pushStats();
   })
 
-  // ── character:allocate — spend one allocation point into an attribute ─────
-  //
-  // Server-authoritative validation:
-  //  1. The player must exist (joined).
-  //  2. `attribute` must be one of the five known attributes.
-  //  3. The player must have an unspent point (level*3 − sum(allocated) > 0).
-  // On success the point is recorded, persisted, and the recomputed stats
-  // (with the new derived Max HP) are pushed.
-  socket.on('character:allocate', (payload: CharacterAllocatePayload) => {
-    const player = requireJoinedPlayer('You must join before allocating points.');
-    if (!player) return;
-
-    const attribute = payload?.attribute;
-    if (typeof attribute !== 'string' || !(ATTRIBUTE_KEYS as readonly string[]).includes(attribute)) {
-      socket.emit('error', { message: 'Invalid attribute.' });
-      return;
-    }
-
-    if (!playerManager.allocatePoint(socket.id, attribute as AttributeKey)) {
-      socket.emit('error', { message: 'You have no unspent points to allocate.' });
-      return;
-    }
-
-    playerManager.persistProgress(socket.id);
-    pushStats();
-    console.log(`[allocate] ${player.username} put a point into ${attribute}`);
-  })
+  // (Attribute allocation removed — attributes now auto-scale by class + level,
+  //  see server/game/data/classStats.ts. No 'character:allocate' handler.)
 
   // ── zone:get ──────────────────────────────────────────────────────────────
   // Current zone roster on demand. WorldScene is created after the join ack
@@ -598,10 +700,9 @@ export function registerHandlers(
     pushRoster();
     pushHaste();
 
-    // Credit any idle battles the deployed team fought while the player was away,
-    // and push the current deployment status.
+    // Credit any idle battles the deployed teams fought while the player was away
+    // (settleIdle re-pushes the roster with the updated deployments when it does).
     settleIdle();
-    pushIdle();
 
     // Tell everyone else in the zone about the new arrival
     socket.to(player.zone).emit('zone:players', {
@@ -827,7 +928,7 @@ export function registerHandlers(
 
     const enemies = mobs.map((m) => buildEnemyCombatant(m, currentRank));
     const seed = (Math.random() * 0xffffffff) >>> 0;
-    const { events, outcome } = resolveBattle({ allies, enemies, seed });
+    const { events, outcome } = resolveBattle({ allies, enemies, seed, rankMult: rankMultiplier(currentRank) });
 
     const levelUps: { id: string; newLevel: number }[] = [];
     const rewards = { xpPerCharacter: 0, silver: 0, items: [] as { name: string; icon: string; rarity: string }[] };
@@ -1332,6 +1433,16 @@ export function registerHandlers(
     const player = requireJoinedPlayer('You must join before equipping items.');
     if (!player) return;
 
+    // Resolve the TARGET character (defaults to active). Must be an owned roster
+    // member — the client may equip onto any team member from the Equipment screen.
+    const targetId = typeof payload.characterId === 'string' && payload.characterId
+      ? payload.characterId : activeCharId();
+    const targetChar = playerManager.getCharacters(socket.id).find((c) => c.id === targetId);
+    if (!targetChar) {
+      socket.emit('error', { message: 'That character is not in your roster.' });
+      return;
+    }
+
     const inv = inventoryManager.getInventory(socket.id);
     if (!inv) {
       socket.emit('error', { message: 'Inventory not found.' });
@@ -1355,12 +1466,16 @@ export function registerHandlers(
     let label: string;
 
     if (bagItem.equipSlot) {
-      // XP gate — enforced server-side against the ACTIVE character's XP.
-      const need = bagItem.xpRequired ?? 0;
-      const charXp = playerManager.getActiveCharacter(socket.id)?.xp ?? 0;
-      if (charXp < need) {
+      // LEVEL gate — enforced server-side against the ACTIVE character's level so
+      // a new hero can't equip powerful gear. New gear carries `requiredLevel`
+      // (tier + rarity); legacy items fall back to the level implied by their old
+      // xpRequired.
+      const reqLevel = bagItem.requiredLevel
+        ?? (bagItem.craftTier ? requiredLevelFor(bagItem.craftTier, bagItem.rarity) : levelForXp(bagItem.xpRequired ?? 0));
+      const charLevel = targetChar.level;
+      if (charLevel < reqLevel) {
         socket.emit('error', {
-          message: `You need ${need} XP to equip ${bagItem.name} (you have ${charXp}). Keep adventuring!`,
+          message: `${bagItem.name} requires level ${reqLevel} (${targetChar.name} is level ${charLevel}). Level up or equip it on a stronger hero.`,
         });
         return;
       }
@@ -1376,17 +1491,20 @@ export function registerHandlers(
       label = bagItem.name;
     }
 
-    const success = inventoryManager.equipGeneratedItem(socket.id, activeCharId(), payload.itemId, slotKey);
+    const success = inventoryManager.equipGeneratedItem(socket.id, targetId, payload.itemId, slotKey);
     if (!success) {
       socket.emit('error', { message: 'Could not equip that item.' });
       return;
     }
 
     pushInventoryUpdate();
-    // Recompute derived stats (Max HP can change) and push the breakdown.
+    // Recompute the active character's derived stats (Max HP can change) and push
+    // the breakdown; refresh the team sheet so the Equipment screen reflects the
+    // change for whichever member was edited.
     pushStats();
+    pushTeamSheet();
     console.log(
-      `[equip] ${player.username} equipped ${label} in ${slotKey}`,
+      `[equip] ${player.username} equipped ${label} in ${slotKey} on ${targetChar.name}`,
     );
   });
 
@@ -1408,15 +1526,24 @@ export function registerHandlers(
     const player = requireJoinedPlayer('You must join before unequipping items.');
     if (!player) return;
 
-    if (!inventoryManager.unequipItem(socket.id, activeCharId(), payload.slot)) {
+    // Target character (defaults to active); must be an owned roster member.
+    const targetId = typeof payload.characterId === 'string' && payload.characterId
+      ? payload.characterId : activeCharId();
+    if (!playerManager.getCharacters(socket.id).some((c) => c.id === targetId)) {
+      socket.emit('error', { message: 'That character is not in your roster.' });
+      return;
+    }
+
+    if (!inventoryManager.unequipItem(socket.id, targetId, payload.slot)) {
       socket.emit('error', { message: 'That slot is empty.' });
       return;
     }
 
     pushInventoryUpdate();
-    // Recompute derived stats (Max HP can drop) and push the breakdown.
+    // Recompute active stats + refresh the team sheet for the Equipment screen.
     pushStats();
-    console.log(`[equip] ${player.username} unequipped slot ${payload.slot}`);
+    pushTeamSheet();
+    console.log(`[equip] ${player.username} unequipped slot ${payload.slot} on ${targetId}`);
   });
 
   // NOTE: the old `inventory:add_shard` handler was removed.  Shards are now

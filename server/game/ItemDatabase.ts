@@ -239,6 +239,7 @@ export function getGeneratedStarterItems(): InventoryItem[] {
       equipSlot: rolled.slot,
       attributes: rolled.attributes,
       xpRequired: rolled.xpRequired,
+      requiredLevel: rolled.requiredLevel,
       baseDamage: rolled.baseDamage,
       baseDefense: rolled.baseDefense,
       // Starter gear is forged at the lowest rank — no power bonus when carried up.

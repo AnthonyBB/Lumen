@@ -10,8 +10,10 @@
 import type {
   Player,
   Character,
+  Team,
   HasteStack,
   IdleAssignment,
+  Deployment,
   PublicPlayer,
   Subject,
   AttributeKey,
@@ -23,12 +25,14 @@ import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { randomUUID } from 'crypto';
 import { PlayerProgress } from '../db/models/PlayerProgressModel.js';
 import { MASTERED_GRADE, TOPICS_BY_SUBJECT_GRADE } from './data/curriculum.js';
+import { classScaledAttr } from './data/classStats.js';
 import {
   type AdventureRankId,
   DEFAULT_RANK_ID,
   normaliseRankId,
   gradeBandForRank,
   effectiveRankMultiplier,
+  rankMultiplier,
 } from './data/adventureRanks.js';
 import type { AttributeType } from './data/equipmentGen.js';
 
@@ -47,11 +51,11 @@ const INITIAL_STATS = {
   position: { x: 400, y: 300 },
 };
 
-const SUBJECTS: Subject[] = ['math', 'science', 'history', 'language'];
+const SUBJECTS: Subject[] = ['math', 'science', 'history', 'language', 'geography', 'technology', 'arts', 'health'];
 
 /** Default per-subject grade map: every subject starts at grade 1. */
 function defaultSubjectGrades(): Record<Subject, number> {
-  return { math: 1, science: 1, history: 1, language: 1 };
+  return { math: 1, science: 1, history: 1, language: 1, geography: 1, technology: 1, arts: 1, health: 1 };
 }
 
 /** Sanitise a loaded subjectGrades map, clamping to 1..13 and filling gaps. */
@@ -83,6 +87,15 @@ export const LEVEL_CAP = 50;
 
 /** Max characters in a campaign party (see docs/CHARACTERS_DESIGN.md §5). */
 export const MAX_PARTY_SIZE = 4;
+
+/** Max saved teams per account (UI/storage sanity cap, NOT a progression gate —
+ *  see docs/TEAMS_DESIGN.md §4). */
+export const MAX_TEAMS = 12;
+
+/** Defaults for a freshly-created / migrated team. */
+const DEFAULT_TEAM_NAME = 'Main Squad';
+const DEFAULT_TEAM_CREST = 'shield';
+const DEFAULT_TEAM_COLOR = '#ffd700';
 
 // ── Study-to-Haste (see docs/CHARACTERS_DESIGN.md §3) ───────────────────────
 /** Default automated-battle interval (minutes). */
@@ -261,6 +274,68 @@ function sanitiseParty(ids: unknown, characters: Character[], activeId: string):
   return out.filter((id) => id);
 }
 
+/** Build a fresh team from member ids. */
+function newTeam(memberIds: string[], name: string = DEFAULT_TEAM_NAME): Team {
+  return {
+    id: randomUUID(),
+    name,
+    crest: DEFAULT_TEAM_CREST,
+    color: DEFAULT_TEAM_COLOR,
+    memberIds: [...memberIds],
+  };
+}
+
+/** Clean a saved-team list: owned ids only, exclusive across teams (a character
+ *  is on at most one team — docs/TEAMS_DESIGN.md §2), each capped at
+ *  MAX_PARTY_SIZE, team count capped at MAX_TEAMS. Guarantees ≥1 team whose first
+ *  entry (the active party) is non-empty, so getParty() always returns ≥1. */
+function sanitiseTeams(raw: unknown, characters: Character[], activeId: string): Team[] {
+  const owned = new Set(characters.map((c) => c.id));
+  const claimed = new Set<string>();
+  const cleanMembers = (ids: unknown): string[] => {
+    const out: string[] = [];
+    if (Array.isArray(ids)) {
+      for (const id of ids) {
+        if (typeof id === 'string' && owned.has(id) && !claimed.has(id)) {
+          claimed.add(id);
+          out.push(id);
+          if (out.length >= MAX_PARTY_SIZE) break;
+        }
+      }
+    }
+    return out;
+  };
+
+  const teams: Team[] = [];
+  if (Array.isArray(raw)) {
+    for (const t of raw as Partial<Team>[]) {
+      if (teams.length >= MAX_TEAMS) break;
+      teams.push({
+        id: typeof t?.id === 'string' && t.id ? t.id : randomUUID(),
+        name: typeof t?.name === 'string' && t.name.trim() ? t.name.trim().slice(0, 24) : DEFAULT_TEAM_NAME,
+        crest: typeof t?.crest === 'string' && t.crest ? t.crest : DEFAULT_TEAM_CREST,
+        color: typeof t?.color === 'string' && t.color ? t.color : DEFAULT_TEAM_COLOR,
+        memberIds: cleanMembers(t?.memberIds),
+      });
+    }
+  }
+
+  if (teams.length === 0) teams.push(newTeam([]));
+  // The first team is the campaign party — keep it non-empty (the ≥1 invariant
+  // getParty() depends on), pulling the fallback off another team if needed.
+  if (teams[0].memberIds.length === 0) {
+    const fallback = owned.has(activeId) ? activeId : (characters[0]?.id ?? '');
+    if (fallback) {
+      for (let i = 1; i < teams.length; i++) {
+        const idx = teams[i].memberIds.indexOf(fallback);
+        if (idx >= 0) teams[i].memberIds.splice(idx, 1);
+      }
+      teams[0].memberIds.push(fallback);
+    }
+  }
+  return teams;
+}
+
 /** Gear contributions folded out of a character's equipped slots. */
 export interface GearFold {
   attrGear: Record<AttributeKey, number>;
@@ -319,18 +394,36 @@ export function deriveCombatStats(
   character: Character, equipment: EquipmentSlots, currentRank: string,
 ): DerivedCombatStats {
   const { attrGear, gear } = foldEquipment(equipment, currentRank);
-  const A = (k: AttributeKey) => ATTRIBUTE_BASE + (character.attributePoints[k] ?? 0) + attrGear[k];
-  const STR = A('strength'), CON = A('constitution'), DEX = A('dexterity');
-  const INT = A('intelligence'), SPI = A('spirit');
+  // Rank is a uniform "zoom": the character's INNATE power (flat base + class
+  // attributes) scales by M(currentRank), mirroring the ×M scaling on mobs,
+  // skills and the damage-mitigation constant so a rank-appropriate fight is
+  // identical at every rank (docs/ADVENTURE_RANKS_DESIGN.md). Gear's baseDefense
+  // already carries M(min(craftRank,currentRank)) via foldEquipment; gear affix
+  // attributes are added flat. Attribute→stat coefficients are the ×0.6 set.
+  const m = rankMultiplier(currentRank);
+  const b = (k: AttributeKey) => classScaledAttr(character.class, k, character.level);
+  const bSTR = b('strength'), bCON = b('constitution'), bDEX = b('dexterity');
+  const bINT = b('intelligence'), bSPI = b('spirit');
   return {
-    maxHp: Math.round(50 + CON * 10 + gear.hp),
-    attack: Math.round(5 + STR * 2 + gear.attack + gear.damage_bonus),
-    magic: Math.round(5 + INT * 2 + gear.magic_damage + gear.damage_bonus),
-    defense: Math.round(STR * 2 + gear.defense),
-    speed: Math.round(10 + DEX * 2),
-    healing: Math.round(SPI * 2 + gear.healing_bonus),
-    maxMana: Math.round(20 + SPI * 8),
+    maxHp: Math.round((50 + bCON * 6) * m + attrGear.constitution * 6 + gear.hp),
+    attack: Math.round((5 + bSTR * 1.2) * m + attrGear.strength * 1.2 + gear.attack + gear.damage_bonus),
+    magic: Math.round((5 + bINT * 1.2) * m + attrGear.intelligence * 1.2 + gear.magic_damage + gear.damage_bonus),
+    defense: Math.round((bSTR * 1.2) * m + attrGear.strength * 1.2 + gear.defense),
+    speed: Math.round((10 + bDEX * 1.2) * m + attrGear.dexterity * 1.2),
+    healing: Math.round((bSPI * 1.2) * m + attrGear.spirit * 1.2 + gear.healing_bonus),
+    maxMana: Math.round((20 + bSPI * 5) * m + attrGear.spirit * 5),
   };
+}
+
+/** A single, transparent power rating for a character — server-authoritative
+ *  (docs/TEAMS_DESIGN.md §6). Combines combat output, survivability, level, and
+ *  skill-rank investment. Exact weights are tunable (see §11). */
+export function characterPower(
+  combat: DerivedCombatStats, level: number, skillRankSum: number,
+): number {
+  const offense = combat.attack + combat.magic + combat.healing;
+  const survival = combat.defense + combat.maxHp * 0.1;
+  return Math.round(level * 5 + offense + survival + combat.speed + skillRankSum * 4);
 }
 
 /** Sanitise persisted haste stacks: keep unexpired, valid entries (clamp minutes),
@@ -357,6 +450,29 @@ function sanitiseIdle(raw: unknown): IdleAssignment | null {
   };
 }
 
+/** Sanitise persisted deployments: keep entries whose team still exists, one per
+ *  team, with valid fields. Drops deployments for deleted teams. (TEAMS §5/§8.) */
+function sanitiseDeployments(raw: unknown, teams: Team[]): Deployment[] {
+  const teamIds = new Set(teams.map((t) => t.id));
+  const seen = new Set<string>();
+  const out: Deployment[] = [];
+  if (Array.isArray(raw)) {
+    for (const d of raw as Partial<Deployment>[]) {
+      if (typeof d?.teamId === 'string' && teamIds.has(d.teamId) && !seen.has(d.teamId) &&
+          typeof d?.biome === 'string' && typeof d?.difficulty === 'string') {
+        seen.add(d.teamId);
+        out.push({
+          teamId: d.teamId,
+          biome: d.biome,
+          difficulty: d.difficulty,
+          lastResolvedAt: typeof d.lastResolvedAt === 'number' ? d.lastResolvedAt : Date.now(),
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -374,7 +490,7 @@ export const TOPIC_PASSES_TO_COMPLETE = 3;
 export interface LoadedProgress {
   characters: Character[];
   activeCharacterId: string;
-  party: string[];
+  teams: Team[];
   subjectGrades: Record<Subject, number>;
   adventureRank: AdventureRankId;
   /** True when a rank was already persisted (so join should NOT overwrite it
@@ -388,7 +504,7 @@ export interface LoadedProgress {
   campaignsCompleted: number;
   recruitTokens: number;
   hasteStacks: HasteStack[];
-  idle: IdleAssignment | null;
+  deployments: Deployment[];
 }
 
 /** Skill shards granted for completing any quiz (effort reward, every test). */
@@ -445,7 +561,7 @@ export class PlayerManager {
       lastMessageAt: 0,
       characters: [starter],
       activeCharacterId: starter.id,
-      party: [starter.id],
+      teams: [newTeam([starter.id])],
       subjectGrades: defaultSubjectGrades(),
       adventureRank: DEFAULT_RANK_ID,
       topicPasses: {},
@@ -456,7 +572,7 @@ export class PlayerManager {
       campaignsCompleted: 0,
       recruitTokens: 0,
       hasteStacks: [],
-      idle: null,
+      deployments: [],
     };
 
     this.players.set(socketId, player);
@@ -527,19 +643,114 @@ export class PlayerManager {
     return true;
   }
 
-  /** The campaign party (ordered owned character ids, always ≥1). */
+  /** All saved teams (teams[0] is the active campaign party). */
+  getTeams(socketId: string): Team[] {
+    return this.players.get(socketId)?.teams ?? [];
+  }
+
+  /** The campaign party (ordered owned character ids, always ≥1) — teams[0]. */
   getParty(socketId: string): string[] {
     const player = this.players.get(socketId);
     if (!player) return [];
-    return sanitiseParty(player.party, player.characters, player.activeCharacterId);
+    return sanitiseParty(player.teams[0]?.memberIds, player.characters, player.activeCharacterId);
   }
 
-  /** Replace the campaign party (ordered ids). Owned ids only, deduped, capped at
-   *  MAX_PARTY_SIZE, never empty. Returns false only for an unknown player. */
+  /** Replace the campaign party (the first team's members). Owned ids only,
+   *  deduped, capped at MAX_PARTY_SIZE, never empty; removes those ids from any
+   *  other team (exclusive membership §2). Returns false for an unknown player. */
   setParty(socketId: string, ids: string[]): boolean {
     const player = this.players.get(socketId);
     if (!player) return false;
-    player.party = sanitiseParty(ids, player.characters, player.activeCharacterId);
+    const members = sanitiseParty(ids, player.characters, player.activeCharacterId);
+    if (player.teams.length === 0) player.teams.push(newTeam(members));
+    else player.teams[0].memberIds = members;
+    const set = new Set(members);
+    for (let i = 1; i < player.teams.length; i++) {
+      player.teams[i].memberIds = player.teams[i].memberIds.filter((id) => !set.has(id));
+    }
+    return true;
+  }
+
+  /** Find a team by id within a player's roster. */
+  private teamById(player: Player, teamId: string): Team | undefined {
+    return player.teams.find((t) => t.id === teamId);
+  }
+
+  /** Create a new (empty) team. Returns the team, or an error at the cap.
+   *  Persistence is the caller's responsibility (mirrors setParty). */
+  createTeam(socketId: string, name?: string): { team: Team } | { error: string } {
+    const player = this.players.get(socketId);
+    if (!player) return { error: 'You must join first.' };
+    if (player.teams.length >= MAX_TEAMS) {
+      return { error: 'You have reached the maximum number of teams.' };
+    }
+    const nm = (name ?? '').trim().slice(0, 24) || `Team ${player.teams.length + 1}`;
+    const team = newTeam([], nm);
+    player.teams.push(team);
+    return { team };
+  }
+
+  /** Delete a team (never the last one). Re-sanitises so teams[0] stays valid. */
+  deleteTeam(socketId: string, teamId: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player || player.teams.length <= 1) return false;
+    const idx = player.teams.findIndex((t) => t.id === teamId);
+    if (idx < 0) return false;
+    player.teams.splice(idx, 1);
+    player.teams = sanitiseTeams(player.teams, player.characters, player.activeCharacterId);
+    return true;
+  }
+
+  /** Rename a team (1..24 chars after trim). */
+  renameTeam(socketId: string, teamId: string, name: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    const team = this.teamById(player, teamId);
+    if (!team) return false;
+    const nm = name.trim().slice(0, 24);
+    if (!nm) return false;
+    team.name = nm;
+    return true;
+  }
+
+  /** Set one team's members: owned ids only, deduped, capped at MAX_PARTY_SIZE,
+   *  and EXCLUSIVE — the ids are pulled off every other team (§2). getParty()'s
+   *  own fallback keeps the active party ≥1 even if the active team is emptied. */
+  setTeamMembers(socketId: string, teamId: string, ids: unknown): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    const team = this.teamById(player, teamId);
+    if (!team) return false;
+    const owned = new Set(player.characters.map((c) => c.id));
+    const seen = new Set<string>();
+    const members: string[] = [];
+    if (Array.isArray(ids)) {
+      for (const id of ids) {
+        if (typeof id === 'string' && owned.has(id) && !seen.has(id)) {
+          seen.add(id);
+          members.push(id);
+          if (members.length >= MAX_PARTY_SIZE) break;
+        }
+      }
+    }
+    for (const t of player.teams) {
+      if (t.id !== teamId) t.memberIds = t.memberIds.filter((id) => !seen.has(id));
+    }
+    team.memberIds = members;
+    return true;
+  }
+
+  /** Make a team the active campaign party (move it to index 0 — getParty/idle/
+   *  campaigns read teams[0]). */
+  setActiveTeam(socketId: string, teamId: string): boolean {
+    const player = this.players.get(socketId);
+    if (!player) return false;
+    const idx = player.teams.findIndex((t) => t.id === teamId);
+    if (idx < 0) return false;
+    if (idx > 0) {
+      const [t] = player.teams.splice(idx, 1);
+      player.teams.unshift(t);
+    }
     return true;
   }
 
@@ -633,12 +844,32 @@ export class PlayerManager {
           typeof storedActive === 'string' && characters.some((c) => c.id === storedActive)
             ? storedActive
             : characters[0].id;
+        // Teams: use stored teams if present, else MIGRATE the legacy single
+        // `party` into Team #1 ("Main Squad"). See docs/TEAMS_DESIGN.md §8.
+        const storedTeams = (doc as { teams?: unknown }).teams;
+        const teams = Array.isArray(storedTeams) && storedTeams.length > 0
+          ? sanitiseTeams(storedTeams, characters, activeCharacterId)
+          : sanitiseTeams(
+              [{ name: DEFAULT_TEAM_NAME, memberIds: (doc as { party?: string[] }).party ?? [activeCharacterId] }],
+              characters, activeCharacterId,
+            );
+        // Deployments: stored if present, else MIGRATE a legacy single `idle`
+        // into a deployment for the active team (teams[0]). TEAMS §5/§8.
+        const rawDeployments = (doc as { deployments?: unknown }).deployments;
+        let deployments = sanitiseDeployments(rawDeployments, teams);
+        // Migrate the legacy single `idle` ONLY for pre-deployments docs (field
+        // ABSENT) — not when the player has simply recalled all teams (field []),
+        // which would otherwise resurrect a recalled deployment from stale `idle`.
+        if (deployments.length === 0 && rawDeployments === undefined) {
+          const legacy = sanitiseIdle((doc as { idle?: unknown }).idle);
+          if (legacy && teams[0]) {
+            deployments = [{ teamId: teams[0].id, biome: legacy.biome, difficulty: legacy.difficulty, lastResolvedAt: legacy.lastResolvedAt }];
+          }
+        }
         return {
           characters,
           activeCharacterId,
-          party: sanitiseParty(
-            (doc as { party?: string[] }).party, characters, activeCharacterId,
-          ),
+          teams,
           subjectGrades: normaliseSubjectGrades(doc.subjectGrades),
           adventureRank: normaliseRankId(doc.adventureRank),
           rankPersisted: typeof doc.adventureRank === 'string',
@@ -650,7 +881,7 @@ export class PlayerManager {
           campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
           recruitTokens: Math.max(0, (doc as { recruitTokens?: number }).recruitTokens ?? 0),
           hasteStacks: sanitiseHasteStacks((doc as { hasteStacks?: unknown }).hasteStacks),
-          idle: sanitiseIdle((doc as { idle?: unknown }).idle),
+          deployments,
         };
       }
     } catch (err) {
@@ -660,10 +891,10 @@ export class PlayerManager {
     return {
       characters: [starter],
       activeCharacterId: starter.id,
-      party: [starter.id],
+      teams: [newTeam([starter.id])],
       subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false,
       topicPasses: {}, unlockedStrategies: [], combatShards: 0, silver: 0, materials: {},
-      campaignsCompleted: 0, recruitTokens: 0, hasteStacks: [], idle: null,
+      campaignsCompleted: 0, recruitTokens: 0, hasteStacks: [], deployments: [],
     };
   }
 
@@ -686,7 +917,6 @@ export class PlayerManager {
     player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
     player.recruitTokens = Math.max(0, Math.floor(progress.recruitTokens ?? 0));
     player.hasteStacks = sanitiseHasteStacks(progress.hasteStacks);
-    player.idle = sanitiseIdle(progress.idle);
 
     // Roster — finalise each character: clamp its allocation to its level cap and
     // keep only strategy-loadout entries that are in the account's catalog.
@@ -702,7 +932,9 @@ export class PlayerManager {
       player.characters.some((c) => c.id === progress.activeCharacterId)
         ? progress.activeCharacterId
         : player.characters[0].id;
-    player.party = sanitiseParty(progress.party, player.characters, player.activeCharacterId);
+    player.teams = sanitiseTeams(progress.teams, player.characters, player.activeCharacterId);
+    // Deployments reference team ids, so finalise them after teams are set.
+    player.deployments = sanitiseDeployments(progress.deployments, player.teams);
   }
 
   // -------------------------------------------------------------------------
@@ -768,7 +1000,10 @@ export class PlayerManager {
         // Roster (the new source of truth for per-character state).
         characters: player.characters,
         activeCharacterId: player.activeCharacterId,
-        party: player.party,
+        teams: player.teams,
+        // Legacy mirror of the active party (teams[0]) — kept readable for one
+        // release for rollback safety (docs/TEAMS_DESIGN.md §8).
+        party: player.teams[0]?.memberIds ?? [],
         // Account-wide.
         subjectGrades: player.subjectGrades,
         adventureRank: player.adventureRank,
@@ -780,7 +1015,7 @@ export class PlayerManager {
         campaignsCompleted: player.campaignsCompleted,
         recruitTokens: player.recruitTokens,
         hasteStacks: player.hasteStacks,
-        idle: player.idle,
+        deployments: player.deployments,
         // Legacy mirror of the active character's level/xp — kept so older code
         // paths / dashboards reading the flat fields still see sane values.
         xp: activeChar.xp,
@@ -899,32 +1134,48 @@ export class PlayerManager {
     return true;
   }
 
-  // ── Idle campaign assignment (§6/§7) ─────────────────────────────────────
-  getIdle(socketId: string): IdleAssignment | null {
-    return this.players.get(socketId)?.idle ?? null;
+  // ── Team deployments (idle auto-battle — TEAMS §5, CHARACTERS §6/§7) ──────
+  /** All current deployments (one per deployed team). */
+  getDeployments(socketId: string): Deployment[] {
+    return this.players.get(socketId)?.deployments ?? [];
   }
 
-  /** Deploy the team to a campaign (or re-deploy). Resets the resolve clock. */
-  assignIdle(socketId: string, biome: string, difficulty: string): boolean {
+  /** The deployment for a specific team, or null. */
+  getDeployment(socketId: string, teamId: string): Deployment | null {
+    return this.players.get(socketId)?.deployments.find((d) => d.teamId === teamId) ?? null;
+  }
+
+  /** Deploy a team to a campaign (or re-deploy it). Replaces any existing
+   *  deployment for that team and resets its resolve clock. Returns false for an
+   *  unknown player or team id. Persists. */
+  assignDeployment(socketId: string, teamId: string, biome: string, difficulty: string): boolean {
     const player = this.players.get(socketId);
-    if (!player) return false;
-    player.idle = { biome, difficulty, lastResolvedAt: Date.now() };
+    if (!player || !player.teams.some((t) => t.id === teamId)) return false;
+    const existing = player.deployments.find((d) => d.teamId === teamId);
+    if (existing) {
+      existing.biome = biome; existing.difficulty = difficulty; existing.lastResolvedAt = Date.now();
+    } else {
+      player.deployments.push({ teamId, biome, difficulty, lastResolvedAt: Date.now() });
+    }
     this.persistProgress(socketId);
     return true;
   }
 
-  /** Recall the team (stop idle combat). */
-  clearIdle(socketId: string): void {
+  /** Recall a team (remove its deployment). Returns true if one was removed. */
+  recallDeployment(socketId: string, teamId: string): boolean {
     const player = this.players.get(socketId);
-    if (!player) return;
-    player.idle = null;
+    if (!player) return false;
+    const before = player.deployments.length;
+    player.deployments = player.deployments.filter((d) => d.teamId !== teamId);
+    if (player.deployments.length === before) return false;
     this.persistProgress(socketId);
+    return true;
   }
 
-  /** Advance the idle resolve clock after crediting battles. */
-  setIdleResolvedAt(socketId: string, ts: number): void {
-    const player = this.players.get(socketId);
-    if (player?.idle) { player.idle.lastResolvedAt = ts; this.persistProgress(socketId); }
+  /** Advance a deployment's resolve clock after crediting its battles. Persists. */
+  setDeploymentResolvedAt(socketId: string, teamId: string, ts: number): void {
+    const d = this.players.get(socketId)?.deployments.find((x) => x.teamId === teamId);
+    if (d) { d.lastResolvedAt = ts; this.persistProgress(socketId); }
   }
 
   /** The raw haste stacks (for the idle timeline walk). */
@@ -1170,9 +1421,9 @@ export class PlayerManager {
     return true;
   }
 
-  /** A character's BASE attribute value = ATTRIBUTE_BASE + allocated points. */
+  /** A character's BASE attribute value = class base profile + allocated points. */
   private baseAttribute(ch: Character, attr: AttributeKey): number {
-    return ATTRIBUTE_BASE + (ch.attributePoints[attr] ?? 0);
+    return classScaledAttr(ch.class, attr, ch.level);
   }
 
   /**
@@ -1188,11 +1439,14 @@ export class PlayerManager {
   computeStats(
     socketId: string,
     equipment: EquipmentSlots,
+    character?: Character,
   ): { payload: StatsUpdatePayload; maxHp: number; maxMana: number; manaRegen: number; healthRegen: number } | null {
     const player = this.players.get(socketId);
     if (!player) return null;
-    // Attributes/level come from the ACTIVE character; rank is account-wide.
-    const ch = this.active(player);
+    // Attributes/level come from the given character (default: active); rank is
+    // account-wide. Passing an explicit character lets the team sheet compute any
+    // roster member's stats without changing who is active.
+    const ch = character ?? this.active(player);
 
     // ── Gear contributions (rank-scaled base defense + affixes) ───────────────
     const currentRank = normaliseRankId(player.adventureRank);
@@ -1205,19 +1459,20 @@ export class PlayerManager {
       return { key: k, label: ATTRIBUTE_LABELS[k], base, gear: g, total: base + g };
     });
 
-    // TOTAL attribute values (base + gear) drive the derived formulas.
-    const tot = (k: AttributeKey) => this.baseAttribute(ch, k) + attrGear[k];
-    const STR = tot('strength');
-    const CON = tot('constitution');
-    const DEX = tot('dexterity');
-    const INT = tot('intelligence');
-    const SPI = tot('spirit');
     // Base-only attribute values (gear excluded) for the "base" derived column.
     const bSTR = this.baseAttribute(ch, 'strength');
     const bCON = this.baseAttribute(ch, 'constitution');
     const bDEX = this.baseAttribute(ch, 'dexterity');
     const bINT = this.baseAttribute(ch, 'intelligence');
     const bSPI = this.baseAttribute(ch, 'spirit');
+
+    // Rank "zoom": innate (flat base + class attribute) derived stats scale by
+    // M(currentRank); gear contributions are added un-zoomed (baseDefense
+    // already carries M(min) from foldEquipment, affixes are flat). Coefficients
+    // are the ×0.6 set. Mirrors deriveCombatStats so the Character screen shows
+    // exactly the numbers combat uses.
+    const m = rankMultiplier(currentRank);
+    const zb = (flat: number, battr: number, coef: number) => (flat + battr * coef) * m;
 
     /** Build a derived row; total uses gear-inclusive attrs + gear direct bonus. */
     const derivedRow = (
@@ -1236,60 +1491,68 @@ export class PlayerManager {
     };
 
     const derived: StatRow[] = [
-      // Max HP = 50 + CON*10 + gear hp
+      // Max HP = (50 + CON*6)*M + gear (CON affix + hp)
       derivedRow('maxHp', 'Max HP',
-        50 + bCON * 10,
-        50 + CON * 10 + gear.hp),
-      // Attack Power = 5 + STR*2 + gear attack + gear damage_bonus
+        zb(50, bCON, 6),
+        zb(50, bCON, 6) + attrGear.constitution * 6 + gear.hp),
+      // Attack Power = (5 + STR*1.2)*M + gear (STR affix + attack + damage_bonus)
       derivedRow('attack', 'Attack Power',
-        5 + bSTR * 2,
-        5 + STR * 2 + gear.attack + gear.damage_bonus),
-      // Magic Power = 5 + INT*2 + gear magic-school damage + gear damage_bonus
+        zb(5, bSTR, 1.2),
+        zb(5, bSTR, 1.2) + attrGear.strength * 1.2 + gear.attack + gear.damage_bonus),
+      // Magic Power = (5 + INT*1.2)*M + gear (INT affix + magic-school + damage_bonus)
       derivedRow('magic', 'Magic Power',
-        5 + bINT * 2,
-        5 + INT * 2 + gear.magic_damage + gear.damage_bonus),
-      // Defense = STR*2 + gear defense (scales off Strength)
+        zb(5, bINT, 1.2),
+        zb(5, bINT, 1.2) + attrGear.intelligence * 1.2 + gear.magic_damage + gear.damage_bonus),
+      // Defense = (STR*1.2)*M + gear (STR affix + defense)
       derivedRow('defense', 'Defense',
-        bSTR * 2,
-        STR * 2 + gear.defense),
-      // Speed = 10 + DEX*2
+        zb(0, bSTR, 1.2),
+        zb(0, bSTR, 1.2) + attrGear.strength * 1.2 + gear.defense),
+      // Speed = (10 + DEX*1.2)*M + gear (DEX affix)
       derivedRow('speed', 'Speed',
-        10 + bDEX * 2,
-        10 + DEX * 2),
-      // Healing Power = SPI*2 + gear healing_bonus
+        zb(10, bDEX, 1.2),
+        zb(10, bDEX, 1.2) + attrGear.dexterity * 1.2),
+      // Healing Power = (SPI*1.2)*M + gear (SPI affix + healing_bonus)
       derivedRow('healing', 'Healing Power',
-        bSPI * 2,
-        SPI * 2 + gear.healing_bonus),
-      // Crit Chance % = DEX*0.5 + gear crit_chance
+        zb(0, bSPI, 1.2),
+        zb(0, bSPI, 1.2) + attrGear.spirit * 1.2 + gear.healing_bonus),
+      // Crit Chance % = (DEX*0.3)*M + gear (DEX affix + crit_chance)
       derivedRow('crit', 'Crit Chance',
-        bDEX * 0.5,
-        DEX * 0.5 + gear.crit_chance,
+        zb(0, bDEX, 0.3),
+        zb(0, bDEX, 0.3) + attrGear.dexterity * 0.3 + gear.crit_chance,
         true),
-      // Mana (max) = 20 + SPI*8 — scales off Spirit
+      // Mana (max) = (20 + SPI*5)*M + gear (SPI affix)
       derivedRow('mana', 'Mana',
-        20 + bSPI * 8,
-        20 + SPI * 8),
-      // Mana Regen / turn = 2 + SPI*0.5 + gear mp_regen — scales off Spirit
+        zb(20, bSPI, 5),
+        zb(20, bSPI, 5) + attrGear.spirit * 5),
+      // Mana Regen / turn = (2 + SPI*0.3)*M + gear (SPI affix + mp_regen)
       derivedRow('manaRegen', 'Mana Regen',
-        2 + bSPI * 0.5,
-        2 + SPI * 0.5 + gear.mp_regen),
-      // Health Regen / battle = 3 + CON + gear hp_regen — scales off Constitution
+        zb(2, bSPI, 0.3),
+        zb(2, bSPI, 0.3) + attrGear.spirit * 0.3 + gear.mp_regen),
+      // Health Regen / battle = (3 + CON*0.6)*M + gear (CON affix + hp_regen)
       derivedRow('healthRegen', 'Health Regen',
-        3 + bCON * 1,
-        3 + CON * 1 + gear.hp_regen),
+        zb(3, bCON, 0.6),
+        zb(3, bCON, 0.6) + attrGear.constitution * 0.6 + gear.hp_regen),
     ];
 
-    const maxHp = 50 + CON * 10 + gear.hp;
-    const maxMana = Math.round(20 + SPI * 8);
-    const manaRegen = round1(2 + SPI * 0.5 + gear.mp_regen);
-    const healthRegen = round1(3 + CON * 1 + gear.hp_regen);
+    const maxHp = zb(50, bCON, 6) + attrGear.constitution * 6 + gear.hp;
+    const maxMana = Math.round(zb(20, bSPI, 5) + attrGear.spirit * 5);
+    const manaRegen = round1(zb(2, bSPI, 0.3) + attrGear.spirit * 0.3 + gear.mp_regen);
+    const healthRegen = round1(zb(3, bCON, 0.6) + attrGear.constitution * 0.6 + gear.hp_regen);
+
+    // XP progress for the active character (level threshold curve, capped).
+    const curBase = xpForLevel(ch.level);
+    const nextBase = ch.level >= LEVEL_CAP ? curBase : xpForLevel(ch.level + 1);
 
     return {
       payload: {
         attributes,
         derived,
-        unspentPoints: this.getUnspentPoints(socketId),
+        // Attributes auto-scale by class + level now — players don't allocate.
+        unspentPoints: 0,
         level: ch.level,
+        xp: ch.xp,
+        xpIntoLevel: Math.max(0, ch.xp - curBase),
+        xpForNextLevel: Math.max(0, nextBase - curBase),
       },
       maxHp,
       maxMana,

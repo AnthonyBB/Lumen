@@ -37,6 +37,12 @@ export interface ClientStats {
   derived: ClientStatRow[];
   unspentPoints: number;
   level: number;
+  /** Total accumulated XP for the active character. */
+  xp: number;
+  /** XP earned INTO the current level (0 .. xpForNextLevel). */
+  xpIntoLevel: number;
+  /** XP span of the current level (current→next threshold). 0 at LEVEL_CAP. */
+  xpForNextLevel: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import { TOWN_NPCS } from '../data/townNpcs'
 import { DIFFICULTIES, DIFFICULTY_ORDER, type Difficulty } from '../data/mobs'
 import { AnimalManager } from '../systems/AnimalManager'
 import { Sfx } from '../systems/Sfx'
+import { bindOverlayInputSuspension } from '../systems/overlayInput'
 import { CP_GRASS, CP_GRASS2, CPD_BLADES, CPD_SPECKS, ROAD, ROAD_GRASS_TINT } from '../data/tileFrames'
 
 interface BuildingEntry {
@@ -119,6 +120,8 @@ export class WorldScene extends Phaser.Scene {
   // ── Multiplayer presence ──────────────────────────────────────────────────
   // Other players in the shared 'town' zone, rendered from server pushes only.
   private socket: Socket | null = null
+  /** Biomes that currently have a team deployed (for the portal-menu badge). */
+  private deployedBiomes = new Set<string>()
   private remotePlayers = new Map<string, {
     sprite: Phaser.GameObjects.Sprite
     label: Phaser.GameObjects.Text
@@ -252,8 +255,9 @@ export class WorldScene extends Phaser.Scene {
       { label: 'The Forge',       x: 1290, y: 1700, w: 200, h: 170 },
       { label: 'The Armory',      x: 895,  y: 1010, w: 200, h: 170 },
       { label: 'Alchemy Lab',     x: 620,  y: 1640, w: 200, h: 170 },
-      // Hire new party members here (the in-world home of recruitment).
-      { label: 'Mercenary Guild', x: 1130, y: 760,  w: 200, h: 170 },
+      // The Garrison — recruit/manage heroes, build squads, and deploy teams.
+      // (Recruitment merged in here; the standalone Mercenary Guild is retired.)
+      { label: 'The Garrison', x: 1130, y: 760,  w: 200, h: 170 },
     ]
 
     this.buildings = []
@@ -378,6 +382,11 @@ export class WorldScene extends Phaser.Scene {
     this.cKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.C)
     this.iKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.I)
 
+    // Suspend our keyboard while an input-bearing React overlay (the roster
+    // panel, openable here via HUD buttons) is open, so typed letters reach the
+    // DOM input and E/WASD don't fire interactions/movement under it.
+    bindOverlayInputSuspension(this)
+
     // Proximity prompt (camera-fixed)
     this.promptText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 100, 'Press E to enter', {
       fontSize: '18px',
@@ -428,13 +437,21 @@ export class WorldScene extends Phaser.Scene {
       if (rp) { rp.tx = data.x; rp.ty = data.y }
     }
 
+    // Track which campaigns have a team deployed, to badge the portal menu
+    // (TEAMS §5 — informational only; never blocks entering a campaign).
+    const onRoster = (data: { deployments?: { biome: string }[] }) => {
+      this.deployedBiomes = new Set((data?.deployments ?? []).map((d) => d.biome))
+    }
+
     this.socket.on('zone:players', onZonePlayers)
     this.socket.on('player:joined', onJoined)
     this.socket.on('player:moved', onMoved)
+    this.socket.on('roster:data', onRoster)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.socket?.off('zone:players', onZonePlayers)
       this.socket?.off('player:joined', onJoined)
       this.socket?.off('player:moved', onMoved)
+      this.socket?.off('roster:data', onRoster)
       this.remotePlayers.forEach(rp => { rp.sprite.destroy(); rp.label.destroy() })
       this.remotePlayers.clear()
     })
@@ -442,6 +459,7 @@ export class WorldScene extends Phaser.Scene {
     // The join ack fired before this scene existed — fetch the roster now,
     // and report our real spawn position so others see us where we stand.
     this.socket.emit('zone:get')
+    this.socket.emit('roster:get')
     this.socket.emit('player:move', {
       x: Math.round(this.player.x), y: Math.round(this.player.y), zone: 'town',
     })
@@ -698,7 +716,7 @@ export class WorldScene extends Phaser.Scene {
     // whole blacksmith BUILDING, which reads as a second house), so it uses a
     // drawn anvil-and-brazier object instead of a sprite.
     if (label === 'The Forge') { this.emblemForge(x, y); return }
-    if (label === 'Mercenary Guild') { this.emblemMercenary(x, y); return }
+    if (label === 'The Garrison') { this.emblemGarrison(x, y); return }
 
     // The rest are real CraftPix props. [textureKey, target on-screen width].
     const EMBLEMS: Record<string, [string, number]> = {
@@ -720,9 +738,10 @@ export class WorldScene extends Phaser.Scene {
     img.setScale(targetW / img.width)        // uniform scale preserves aspect ratio
   }
 
-  /** Mercenary Guild: a sword planted point-down with a round shield leaning
-   *  against it — "warriors for hire" — drawn (no matching prop in the library). */
-  private emblemMercenary(x: number, y: number) {
+  /** The Garrison: a sword planted point-down with a round shield leaning
+   *  against it and a banner pole — a martial "muster here" mark (drawn; no
+   *  matching prop in the library). */
+  private emblemGarrison(x: number, y: number) {
     const g = this.add.graphics().setDepth(3)
     g.fillStyle(0x000000, 0.18); g.fillEllipse(x, y + 14, 92, 30)        // ground shadow
     // Planted sword (blade sunk into the dirt, hilt up).
@@ -930,7 +949,7 @@ export class WorldScene extends Phaser.Scene {
       ?? ['Beginner Area', 'Easy Area', 'Medium Area', 'Hard Area', 'Expert Area']
 
     const panelW = 420
-    const panelH = 600
+    const panelH = 640
     const cam = this.cameras.main
     const cx = cam.scrollX + GAME_WIDTH / 2
     const cy = cam.scrollY + GAME_HEIGHT / 2
@@ -964,12 +983,12 @@ export class WorldScene extends Phaser.Scene {
 
     // Combat-mode toggle: hand-play every turn, or watch the party's strategy
     // loadout fight autonomously (so you can both play AND see your strategy live).
-    this.drawModeToggle(container, -232, color)
+    this.drawModeToggle(container, -218, color)
 
     // Difficulty buttons — one per mode, easiest → hardest, accents + level
     // bands pulled from the shared DIFFICULTIES config. Per-biome flavour names
     // only exist for the first few modes, so fall back to the difficulty label.
-    const firstY = -190
+    const firstY = -150
     const stepY = 42
     DIFFICULTY_ORDER.forEach((diff, i) => {
       const cfg = DIFFICULTIES[diff]
@@ -978,6 +997,14 @@ export class WorldScene extends Phaser.Scene {
         container, cfg.icon, loc, diff, biomeName, firstY + i * stepY, color,
       )
     })
+
+    // Deployment badge — informational (TEAMS §5); never blocks the campaign.
+    if (this.deployedBiomes.has(biomeName)) {
+      container.add(this.add.text(0, panelH / 2 - 62, '⚔ A team is deployed to this campaign', {
+        fontSize: '11px', fontFamily: 'Arial', color: '#ffd54f',
+        backgroundColor: '#00000088', padding: { x: 8, y: 3 },
+      }).setOrigin(0.5, 0.5))
+    }
 
     // Cancel button
     const cancelBg = this.add.graphics()
@@ -1005,11 +1032,11 @@ export class WorldScene extends Phaser.Scene {
 
   /** Two-pill segmented control choosing how the campaign's battles play out. */
   private drawModeToggle(container: Phaser.GameObjects.Container, y: number, color: number) {
-    container.add(this.add.text(0, y - 22, 'COMBAT MODE', {
+    container.add(this.add.text(0, y - 28, 'COMBAT MODE', {
       fontSize: '10px', fontFamily: 'Arial', color: '#9aa0c0', fontStyle: 'bold',
     }).setOrigin(0.5))
 
-    const hint = this.add.text(0, y + 20, '', {
+    const hint = this.add.text(0, y + 26, '', {
       fontSize: '10px', fontFamily: 'Arial', color: '#777a9a',
     }).setOrigin(0.5)
     container.add(hint)
@@ -1215,15 +1242,18 @@ export class WorldScene extends Phaser.Scene {
       }
     } else if (nearBuilding && !this.popupOpen) {
       this.promptText
-        .setText(nearBuilding.label === 'Mercenary Guild' ? 'Press E to hire mercenaries' : 'Press E to enter')
+        .setText('Press E to enter')
         .setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         Sfx.play('menu')
-        if (nearBuilding.label === 'Mercenary Guild') {
-          // Recruitment lives in the React roster panel; ask it to open on its
-          // recruit step (Phaser can't toggle React state directly).
+        if (nearBuilding.label === 'The Garrison') {
+          // Walk-in building housing the Barracks Master / Squad Captain / Field
+          // Marshal NPCs (see docs/TEAMS_DESIGN.md §1).
           this.player.setVelocity(0, 0)
-          window.dispatchEvent(new CustomEvent('lumen:open-roster'))
+          this.scene.stop('UIScene')
+          this.scene.start('GarrisonScene', {
+            returnX: nearBuilding.doorX, returnY: nearBuilding.doorY,
+          })
           return
         }
         if (nearBuilding.label === 'Combat Strategy') {

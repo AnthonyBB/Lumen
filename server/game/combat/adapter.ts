@@ -4,8 +4,8 @@
 // Turns a party Character (+ its equipment) and campaign mobs into the resolver's
 // CombatantInputs: derives stats, scales each skill's magnitudes by its rank AND
 // the account's adventure rank, derives the weapon basic attack, and resolves the
-// character's strategy loadout. Mob HP/attack scale by M(currentRank) to match
-// the live combat scaling. Pure — used by both live and idle resolution.
+// character's strategy loadout. Mob HP/attack/defense scale by M(currentRank) to
+// match the live combat scaling. Pure — used by both live and idle resolution.
 // ============================================================
 
 import type { Character, EquipmentSlots, InventoryItem } from '../../types/index.js';
@@ -107,7 +107,7 @@ export function buildEnemyCombatant(mob: MobInput, currentRank: string): Combata
     side: 'enemy',
     maxHp: hp,
     attack: atk,
-    defense: mob.defense ?? 0,
+    defense: Math.round((mob.defense ?? 0) * m),
     speed: mob.speed ?? 10,
     maxMana: 0,
     healingPower: 0,

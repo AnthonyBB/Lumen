@@ -48,6 +48,8 @@ export interface ClientInventoryItem {
   equipSlot?: string;
   attributes?: { type: string; value: number }[];
   xpRequired?: number;
+  /** Minimum character level to equip (tier + rarity). Legacy items omit it. */
+  requiredLevel?: number;
   /** Weapons: level-scaled base damage range (drives the basic attack). */
   baseDamage?: { min: number; max: number };
   /** Armor: level-scaled base defense (adds to the Defense stat). */

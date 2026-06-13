@@ -129,10 +129,11 @@ const CAMPAIGN_PATHS: Record<string, WPDef[]> = {
     [0.14, 0.86, 'S'], [0.86, 0.86, 'W'], [0.86, 0.62, 'E'], [0.14, 0.62, 'W'],
     [0.14, 0.40, 'E'], [0.86, 0.40, 'W'], [0.86, 0.18, 'E'], [0.45, 0.18, 'X'],
   ]),
-  // Wanders sideways and even downward — deliberately NOT a straight climb.
+  // Wanders with the current — wide sweep right, drops back down into deep water,
+  // then climbs with the tide to a northern landing far from the starting shore.
   'Ocean': P([
-    [0.20, 0.40, 'S'], [0.20, 0.74, 'W'], [0.56, 0.74, 'E'], [0.56, 0.46, 'W'],
-    [0.84, 0.46, 'E'], [0.84, 0.78, 'W'], [0.50, 0.78, 'E'], [0.22, 0.78, 'X'],
+    [0.15, 0.85, 'S'], [0.78, 0.85, 'W'], [0.78, 0.55, 'E'], [0.38, 0.55, 'W'],
+    [0.38, 0.78, 'W'], [0.75, 0.78, 'E'], [0.75, 0.25, 'W'], [0.22, 0.25, 'E'], [0.48, 0.10, 'X'],
   ]),
 }
 

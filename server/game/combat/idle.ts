@@ -27,8 +27,9 @@ export interface IdleSummary {
   battles: number;
   wins: number;
   losses: number;
-  /** Total XP granted to EACH party character. */
-  xpPerCharacter: number;
+  /** XP earned by each participating character (one entry per hero that fought,
+   *  highest first). Heroes are exclusive to one team, so each appears once. */
+  xpByCharacter: { name: string; xp: number }[];
   silver: number;
   items: { name: string; icon: string; rarity: string }[];
   /** Current interval (minutes) so the client can show "next battle in …". */
@@ -58,77 +59,99 @@ function tierRarity(t: number): string {
 }
 
 /**
- * Resolve all idle battles owed to the player's deployed team. Grants batched
- * rewards and advances the resolve clock. Returns a summary, or null if no team
- * is deployed / the party is empty / nothing was owed.
+ * Resolve all idle battles owed across EVERY team deployment. Each deployment
+ * fights with its own team's members; XP is granted per-deployment to those
+ * members, while silver + materials are pooled to the account. Advances each
+ * deployment's resolve clock. Returns a combined summary, or null if nothing was
+ * owed / no team is deployed. (TEAMS §5; CHARACTERS_DESIGN §6/§7.)
  */
 export function resolveIdle(
   playerManager: PlayerManager,
   inventoryManager: InventoryManager,
   socketId: string,
 ): IdleSummary | null {
-  const idle = playerManager.getIdle(socketId);
-  if (!idle) return null;
-  if (!(DIFFICULTIES as string[]).includes(idle.difficulty)) return null;
-  const difficulty = idle.difficulty as Difficulty;
+  const deployments = playerManager.getDeployments(socketId);
+  if (deployments.length === 0) return null;
 
   const characters = playerManager.getCharacters(socketId);
-  const allyChars = playerManager.getParty(socketId)
-    .map((id) => characters.find((c) => c.id === id))
-    .filter((c): c is NonNullable<typeof c> => !!c);
-  if (allyChars.length === 0) return null;
-
-  const now = Date.now();
-  const elapsed = now - idle.lastResolvedAt;
-  // Inactivity stop: only credit battles within 14 days of the last resolve.
-  const end = Math.min(now, idle.lastResolvedAt + INACTIVITY_MS);
+  const teams = playerManager.getTeams(socketId);
   const stacks = playerManager.getHasteStacks(socketId);
   const currentRank = playerManager.getAdventureRank(socketId);
   const rankMult = rankMultiplier(currentRank);
-  const encLevel = encounterLevel(difficulty);
+  const now = Date.now();
 
-  let t = idle.lastResolvedAt;
-  let lastBattleT = t;
-  let battles = 0, wins = 0, losses = 0;
-  let totalXp = 0, totalSilver = 0;
+  let totalBattles = 0, totalWins = 0, totalLosses = 0, totalSilver = 0;
   const matTotals: Record<string, number> = {};
+  const xpByChar = new Map<string, { name: string; xp: number }>();
 
-  while (battles < MAX_IDLE_BATTLES) {
-    const next = t + intervalAt(stacks, t) * MINUTE;
-    if (next > end) break;
-    t = next;
-    lastBattleT = t;
-    battles++;
+  for (const d of deployments) {
+    if (!(DIFFICULTIES as string[]).includes(d.difficulty)) continue;
+    const difficulty = d.difficulty as Difficulty;
+    const team = teams.find((t) => t.id === d.teamId);
+    if (!team) continue;
+    const allyChars = team.memberIds
+      .map((id) => characters.find((c) => c.id === id))
+      .filter((c): c is NonNullable<typeof c> => !!c);
+    if (allyChars.length === 0) continue;
 
-    const rng = makeRng((t >>> 0) ^ 0x9e3779b9);
-    const mobs = generateEncounter(difficulty, rng);
-    const allies = allyChars.map((ch) =>
-      buildAllyCombatant(ch, inventoryManager.equipmentFor(socketId, ch.id), currentRank));
-    const enemies = mobs.map((m) => buildEnemyCombatant(m, currentRank));
-    const { outcome } = resolveBattle({ allies, enemies, seed: (t >>> 0) || 1 });
+    const elapsed = now - d.lastResolvedAt;
+    const end = Math.min(now, d.lastResolvedAt + INACTIVITY_MS);
+    const encLevel = encounterLevel(difficulty);
 
-    if (outcome.victory) {
-      wins++;
-      totalXp += Math.min(500, mobs.length * (10 + encLevel * 2));
-      totalSilver += mobs.length * Math.round(encLevel * 1.5);
-      const { drops } = rollMaterials(encLevel, difficulty, false, rankMult);
-      for (const d of drops) matTotals[d.materialId] = (matTotals[d.materialId] ?? 0) + d.qty;
-    } else {
-      losses++;
+    let t = d.lastResolvedAt;
+    let lastBattleT = t;
+    let battles = 0, wins = 0, losses = 0, xp = 0, silver = 0;
+    const mats: Record<string, number> = {};
+
+    while (battles < MAX_IDLE_BATTLES) {
+      const next = t + intervalAt(stacks, t) * MINUTE;
+      if (next > end) break;
+      t = next;
+      lastBattleT = t;
+      battles++;
+
+      const rng = makeRng((t >>> 0) ^ 0x9e3779b9);
+      const mobs = generateEncounter(difficulty, rng);
+      const allies = allyChars.map((ch) =>
+        buildAllyCombatant(ch, inventoryManager.equipmentFor(socketId, ch.id), currentRank));
+      const enemies = mobs.map((m) => buildEnemyCombatant(m, currentRank));
+      const { outcome } = resolveBattle({ allies, enemies, seed: (t >>> 0) || 1, rankMult });
+
+      if (outcome.victory) {
+        wins++;
+        xp += Math.min(500, mobs.length * (10 + encLevel * 2));
+        silver += mobs.length * Math.round(encLevel * 1.5);
+        const { drops } = rollMaterials(encLevel, difficulty, false, rankMult);
+        for (const dr of drops) mats[dr.materialId] = (mats[dr.materialId] ?? 0) + dr.qty;
+      } else {
+        losses++;
+      }
     }
+
+    if (battles === 0) continue;
+
+    // Grant this deployment's XP to its own team members (tracked per-character
+    // for the summary); advance its clock (skip the paused gap on a >14d absence).
+    for (const ch of allyChars) {
+      playerManager.addXpToCharacter(socketId, ch.id, xp);
+      if (xp > 0) {
+        const e = xpByChar.get(ch.id) ?? { name: ch.name, xp: 0 };
+        e.xp += xp;
+        xpByChar.set(ch.id, e);
+      }
+    }
+    playerManager.setDeploymentResolvedAt(socketId, d.teamId, elapsed > INACTIVITY_MS ? now : lastBattleT);
+
+    totalBattles += battles; totalWins += wins; totalLosses += losses; totalSilver += silver;
+    for (const [id, q] of Object.entries(mats)) matTotals[id] = (matTotals[id] ?? 0) + q;
   }
 
-  if (battles === 0) return null;
+  if (totalBattles === 0) return null;
 
-  // Batch-grant rewards (each party character levels individually).
-  for (const ch of allyChars) playerManager.addXpToCharacter(socketId, ch.id, totalXp);
+  // Silver + materials are pooled to the account (shared bag).
   if (totalSilver > 0) playerManager.addSilver(socketId, totalSilver);
   const drops = Object.entries(matTotals).map(([materialId, qty]) => ({ materialId, qty }));
   if (drops.length) playerManager.grantMaterials(socketId, drops);
-
-  // Advance the clock: on a long (>14d) absence skip the paused gap and resume
-  // from now; otherwise keep the partial interval since the last battle.
-  playerManager.setIdleResolvedAt(socketId, elapsed > INACTIVITY_MS ? now : lastBattleT);
 
   const items = drops.map((d) => {
     const m = MATERIALS[d.materialId];
@@ -136,5 +159,39 @@ export function resolveIdle(
     return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
   });
 
-  return { battles, wins, losses, xpPerCharacter: totalXp, silver: totalSilver, items, intervalMinutes: intervalAt(stacks, now) };
+  return {
+    battles: totalBattles, wins: totalWins, losses: totalLosses,
+    xpByCharacter: [...xpByChar.values()].sort((a, b) => b.xp - a.xp),
+    silver: totalSilver, items, intervalMinutes: intervalAt(stacks, now),
+  };
+}
+
+/**
+ * PEEK: count the battles currently owed across all deployments WITHOUT resolving
+ * them or mutating any clock. Drives the "spoils ready" badge on entering The
+ * Garrison (TEAMS §5) — a one-shot check, no timer.
+ */
+export function peekBattlesOwed(
+  playerManager: PlayerManager,
+  socketId: string,
+): number {
+  const deployments = playerManager.getDeployments(socketId);
+  if (deployments.length === 0) return 0;
+  const teams = playerManager.getTeams(socketId);
+  const stacks = playerManager.getHasteStacks(socketId);
+  const now = Date.now();
+  let owed = 0;
+  for (const d of deployments) {
+    const team = teams.find((t) => t.id === d.teamId);
+    if (!team || team.memberIds.length === 0) continue;
+    const end = Math.min(now, d.lastResolvedAt + INACTIVITY_MS);
+    let t = d.lastResolvedAt, count = 0;
+    while (count < MAX_IDLE_BATTLES) {
+      const next = t + intervalAt(stacks, t) * MINUTE;
+      if (next > end) break;
+      t = next; count++;
+    }
+    owed += count;
+  }
+  return owed;
 }

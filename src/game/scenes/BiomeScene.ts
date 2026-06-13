@@ -57,6 +57,22 @@ interface BiomeSceneData {
   mode?: 'manual' | 'auto'
   returnX?: number
   returnY?: number
+  /** 1..3 when this run is a tutorial level (docs/TUTORIAL_DESIGN.md): fixed weak
+   *  mobs, a gentle boss on level 3's final encounter, and one-time fixed rewards
+   *  granted via `tutorial:complete_level` instead of the random campaign roll. */
+  tutorialLevel?: number
+}
+
+/** Fixed tutorial encounter mobs (1 per encounter; level 3's last is a gentle
+ *  boss). Tuned for near-guaranteed wins by a level-1 starter at M=1. */
+function tutorialMobs(level: number, encIdx: number, total: number, frame: number): MobDef[] {
+  if (level <= 1) return [{ name: 'Training Dummy', level: 1, maxHp: 12, attack: 2, defense: 0, speed: 8, frame }]
+  if (level === 2) return [{ name: 'Field Sprite', level: 2, maxHp: 22, attack: 4, defense: 1, speed: 9, frame }]
+  // Level 3: tougher mobs, with a deliberately easy BOSS on the final encounter.
+  if (encIdx === total - 1) {
+    return [{ name: 'Grove Warden', level: 4, maxHp: 70, attack: 7, defense: 3, speed: 9, frame, boss: true }]
+  }
+  return [{ name: 'Grove Stalker', level: 3, maxHp: 32, attack: 6, defense: 2, speed: 10, frame }]
 }
 
 interface PathNode {
@@ -135,6 +151,11 @@ const CAMPAIGN_PATHS: Record<string, WPDef[]> = {
     [0.15, 0.85, 'S'], [0.78, 0.85, 'W'], [0.78, 0.55, 'E'], [0.38, 0.55, 'W'],
     [0.38, 0.78, 'W'], [0.75, 0.78, 'E'], [0.75, 0.25, 'W'], [0.22, 0.25, 'E'], [0.48, 0.10, 'X'],
   ]),
+  // Tutorial: a short, straight climb with 3 encounters and the exit just past
+  // the last one (docs/TUTORIAL_DESIGN.md).
+  'Tutorial': P([
+    [0.50, 0.86, 'S'], [0.50, 0.64, 'E'], [0.50, 0.42, 'E'], [0.50, 0.22, 'E'], [0.50, 0.10, 'X'],
+  ]),
 }
 
 // Fallback for any biome without a bespoke layout.
@@ -150,6 +171,11 @@ export class BiomeScene extends Phaser.Scene {
   private playerHp = 100
   private playerMaxHp = 100
   private healthRegen = 0   // HP restored between battles (scales off Constitution)
+  /** Party combat: each ally's HP/mana carried BETWEEN encounters. Allies resume
+   *  the next fight at carried value + their own regen (never a full heal/refill);
+   *  a downed ally (0 HP) stays downed. Used by BOTH manual and auto modes. */
+  private partyHp = new Map<string, number>()
+  private partyMana = new Map<string, number>()
   private encountersCleared = 0
   private totalXpGained = 0
   private maxEnemyLevel = 1   // highest enemy level faced — scales the campaign reward
@@ -157,8 +183,6 @@ export class BiomeScene extends Phaser.Scene {
   private rng!: Phaser.Math.RandomDataGenerator
 
   private playerSprite!: Phaser.GameObjects.Sprite
-  private hpGfx!: Phaser.GameObjects.Graphics
-  private hpLabel!: Phaser.GameObjects.Text
   private progressText!: Phaser.GameObjects.Text
   private alertText!: Phaser.GameObjects.Text
   private escKey!: Phaser.Input.Keyboard.Key
@@ -169,6 +193,8 @@ export class BiomeScene extends Phaser.Scene {
     this.biomeData         = data
     this.pathState         = 'idle'
     this.currentNodeIdx    = 0
+    this.partyHp.clear()
+    this.partyMana.clear()
     this.encountersCleared = 0
     this.totalXpGained     = 0
     this.pathNodes         = []
@@ -299,6 +325,13 @@ export class BiomeScene extends Phaser.Scene {
         } else {
           node.mobs = Array.from({ length: count }, () =>
             makeMob(arch, this.rng.integerInRange(sliceLo, sliceHi)))
+        }
+
+        // Tutorial runs override the generated mobs with fixed, gentle ones
+        // (1 per encounter; level 3's final encounter is a gentle boss).
+        if (this.biomeData.tutorialLevel) {
+          const frame = TD_MONSTERS[cfg.pool][encIdx % TD_MONSTERS[cfg.pool].length]
+          node.mobs = tutorialMobs(this.biomeData.tutorialLevel, encIdx, totalEncounters, frame)
         }
       }
       return node
@@ -581,6 +614,21 @@ export class BiomeScene extends Phaser.Scene {
     // Manual: the client only has the ACTIVE character's stats, so fetch the
     // whole party's combat data (party:combat_data) before launching.
     const launch = (allies: ClientCombatant[]) => {
+      // Carry HP/mana between encounters: first fight is full; afterwards each
+      // ally resumes at carried value + their own regen (NOT a full heal/refill).
+      // A DOWNED ally (carried HP <= 0) stays downed — no revive, no regen.
+      for (const a of allies) {
+        const cHp = this.partyHp.get(a.id)
+        const cMana = this.partyMana.get(a.id)
+        if (cHp === undefined) {
+          a.startHp = a.maxHp; a.startMana = a.maxMana
+        } else if (cHp <= 0) {
+          a.startHp = 0; a.startMana = 0
+        } else {
+          a.startHp = Math.min(a.maxHp, cHp + (a.healthRegen ?? 0))
+          a.startMana = Math.min(a.maxMana, (cMana ?? a.maxMana) + (a.manaRegen ?? 0))
+        }
+      }
       const data: PartyManualData = {
         allies,
         mobs,
@@ -590,6 +638,7 @@ export class BiomeScene extends Phaser.Scene {
         biome:            this.biomeData.biome,
         encounterIndex:   encIdx,
         totalEncounters:  encNodes.length,
+        tutorialLevel:    this.biomeData.tutorialLevel,
       }
       this.scene.launch('PartyManualBattleScene', data)
       this.scene.pause()
@@ -611,8 +660,13 @@ export class BiomeScene extends Phaser.Scene {
     const onResolved = (data: {
       events?: unknown[]; victory?: boolean
       rewards?: { xpPerCharacter: number; silver: number; items: { name: string; icon: string; rarity: string }[] }
+      allyHp?: Record<string, number>; allyMana?: Record<string, number>
     }) => {
       socket.off('campaign:resolved', onResolved)
+      // Carry the resolver's ending HP/mana into the next encounter (regen is
+      // applied server-side, where each ally's regen stats are known).
+      if (data.allyHp) for (const [id, hp] of Object.entries(data.allyHp)) this.partyHp.set(id, hp)
+      if (data.allyMana) for (const [id, mp] of Object.entries(data.allyMana)) this.partyMana.set(id, mp)
       this.scene.launch('PartyBattleScene', {
         events: data.events ?? [],
         victory: data.victory ?? false,
@@ -621,15 +675,31 @@ export class BiomeScene extends Phaser.Scene {
       this.scene.pause()
     }
     socket.once('campaign:resolved', onResolved)
+    // Pass the HP/mana carried from prior encounters; the server applies regen and
+    // keeps downed allies downed. Empty on the first encounter → full HP/mana.
+    const startHp: Record<string, number> = {}
+    const startMana: Record<string, number> = {}
+    for (const [id, hp] of this.partyHp) startHp[id] = hp
+    for (const [id, mp] of this.partyMana) startMana[id] = mp
     socket.emit('campaign:resolve', {
       difficulty: this.biomeData.difficulty,
       level,
       campaignComplete: false,
       mobs: mobs.map(m => ({ name: m.name, maxHp: m.maxHp, attack: m.attack, defense: m.defense, speed: m.speed, level: m.level, boss: m.boss })),
+      startHp,
+      startMana,
     })
   }
 
   public onBattleResult(result: BattleResult) {
+    // Remember each ally's ending HP/mana so the next encounter resumes from it
+    // (party combat). Applied (+ regen) when the next battle launches.
+    if (result.allyHp) {
+      for (const [id, hp] of Object.entries(result.allyHp)) this.partyHp.set(id, hp)
+    }
+    if (result.allyMana) {
+      for (const [id, mp] of Object.entries(result.allyMana)) this.partyMana.set(id, mp)
+    }
     if (!result.victory) { this.showDefeatOverlay(); return }
 
     // playerHp < 0 is the party-combat sentinel: each ally tracks its own HP and
@@ -670,9 +740,10 @@ export class BiomeScene extends Phaser.Scene {
       fontSize: '13px', fontFamily: 'Georgia, serif', color: '#ffd700',
     }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(101)
 
-    this.add.text(GAME_WIDTH - 12, GAME_HEIGHT - 22, 'ESC — Return to World', {
+    // Centred so the bottom-right sound toggle (GamePage overlay) never covers it.
+    this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 22, 'ESC — Return to World', {
       fontSize: '12px', fontFamily: 'Arial', color: '#aaaaaa',
-    }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(101)
+    }).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(101)
 
     this.add.text(
       12 + (biome.length + location.length + 5) * 7.8 + 14, GAME_HEIGHT - 22,
@@ -681,29 +752,19 @@ export class BiomeScene extends Phaser.Scene {
         backgroundColor: '#00000088', padding: { x: 5, y: 2 } }
     ).setOrigin(0, 0.5).setScrollFactor(0).setDepth(101)
 
-    const hpBg = this.add.graphics().setScrollFactor(0).setDepth(100)
-    hpBg.fillStyle(0x000000, 0.65).fillRoundedRect(8, 8, 250, 36, 6)
+    // Per-ally HP is shown on each combatant's card in battle; a single biome-wide
+    // HP bar is meaningless for party combat, so the HUD only tracks progress.
+    const progBg = this.add.graphics().setScrollFactor(0).setDepth(100)
+    progBg.fillStyle(0x000000, 0.65).fillRoundedRect(GAME_WIDTH - 168, 8, 160, 30, 6)
 
-    this.hpGfx   = this.add.graphics().setScrollFactor(0).setDepth(101)
-    this.hpLabel = this.add.text(14, 26, '', {
-      fontSize: '11px', fontFamily: 'Arial', color: '#ffffff',
-    }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(102)
-
-    this.progressText = this.add.text(GAME_WIDTH - 12, 26, '', {
-      fontSize: '11px', fontFamily: 'Arial', color: '#ffd700',
+    this.progressText = this.add.text(GAME_WIDTH - 20, 23, '', {
+      fontSize: '12px', fontFamily: 'Arial', color: '#ffd700',
     }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(102)
 
     this.updateHUD()
   }
 
   private updateHUD() {
-    this.hpGfx.clear()
-    const pct  = Math.max(0, this.playerHp / this.playerMaxHp)
-    const barW = 228
-    this.hpGfx.fillStyle(0x333333, 1).fillRoundedRect(14, 17, barW, 14, 3)
-    const col = pct > 0.5 ? 0x44cc44 : pct > 0.25 ? 0xffcc00 : 0xff4444
-    this.hpGfx.fillStyle(col, 1).fillRoundedRect(14, 17, Math.round(barW * pct), 14, 3)
-    this.hpLabel.setText(`HP  ${this.playerHp} / ${this.playerMaxHp}`)
     const total = this.pathNodes.filter(n => n.type === 'encounter').length
     this.progressText.setText(`Encounters: ${this.encountersCleared} / ${total}`)
   }
@@ -714,12 +775,27 @@ export class BiomeScene extends Phaser.Scene {
     // Whole biome cleared — report the campaign completion so the server grants
     // a sizeable, difficulty/level-scaled reward of items (added to the bag).
     const socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket
-    socket?.emit('player:award_xp', {
-      xp: Math.min(this.totalXpGained, 500),
-      difficulty: this.biomeData.difficulty,
-      level: this.maxEnemyLevel,
-      campaignComplete: true,
-    })
+    if (this.biomeData.tutorialLevel) {
+      // Tutorial: fixed, one-time reward (materials + token) gated server-side;
+      // per-encounter XP already flowed through campaign:report. The server
+      // replies on combat:loot (campaignComplete:true), rendered below.
+      socket?.emit('tutorial:complete_level', { level: this.biomeData.tutorialLevel })
+      // Show the "what to do with your rewards" guidance back in town (any level).
+      this.registry.set('tutorialInstruct', true)
+      // Clearing the final level opens the world — flag it so WorldScene reveals
+      // the 8 portals and plays the finale on arrival (docs/TUTORIAL_DESIGN.md §6/§9).
+      if (this.biomeData.tutorialLevel === 3) {
+        this.registry.set('tutorialActive', false)
+        this.registry.set('tutorialJustCompleted', true)
+      }
+    } else {
+      socket?.emit('player:award_xp', {
+        xp: Math.min(this.totalXpGained, 500),
+        difficulty: this.biomeData.difficulty,
+        level: this.maxEnemyLevel,
+        campaignComplete: true,
+      })
+    }
     const W = 560, H = 364, cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
     const bg = this.add.graphics().setDepth(190).setScrollFactor(0)
     bg.fillStyle(0x000000, 0.9).fillRoundedRect(cx - W / 2, cy - H / 2, W, H, 16)

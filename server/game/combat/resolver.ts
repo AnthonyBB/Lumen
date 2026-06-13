@@ -45,6 +45,10 @@ export interface CombatantInput {
   strategy: CombatStrategy[];
   /** Campaign boss (enemies) — surfaced in the start snapshot for a special look. */
   boss?: boolean;
+  /** Starting HP/mana for this encounter (carried across a campaign). Full when
+   *  absent; startHp <= 0 means the ally enters already DOWNED (stays out). */
+  startHp?: number;
+  startMana?: number;
 }
 
 export interface BattleInput {
@@ -82,6 +86,10 @@ export interface BattleOutcome {
   rounds: number;
   /** Ally ids still alive at the end. */
   survivingAllyIds: string[];
+  /** Each ally's ENDING hp/mana (id → value, downed = 0) so a campaign can carry
+   *  state into the next encounter and apply regen instead of a full heal. */
+  allyHp: Record<string, number>;
+  allyMana: Record<string, number>;
 }
 
 // ── Internal runtime unit ──────────────────────────────────────────────────────
@@ -125,10 +133,12 @@ export function resolveBattle(input: BattleInput): { events: BattleEvent[]; outc
   const toUnit = (c: CombatantInput): Unit => ({
     ...c,
     idx: idx++,
-    hp: c.maxHp,
-    mana: c.maxMana,
+    hp: Math.max(0, Math.min(c.maxHp, c.startHp ?? c.maxHp)),
+    mana: Math.max(0, Math.min(c.maxMana, c.startMana ?? c.maxMana)),
     shield: 0,
-    alive: true,
+    // A unit entering with 0 HP is already downed (carried over from a prior
+    // encounter) — it stays out of the fight.
+    alive: (c.startHp ?? c.maxHp) > 0,
     dots: [], hots: [],
     defenseDown: 0, defenseDownRounds: 0,
     slowAmount: 0, slowRounds: 0,
@@ -236,9 +246,12 @@ export function resolveBattle(input: BattleInput): { events: BattleEvent[]; outc
 
   const victory = livingEnemies().length === 0 && livingAllies().length > 0;
   events.push({ t: 'end', victory });
+  const allyHp: Record<string, number> = {};
+  const allyMana: Record<string, number> = {};
+  for (const u of allies) { allyHp[u.id] = Math.max(0, Math.round(u.hp)); allyMana[u.id] = Math.max(0, Math.round(u.mana)); }
   return {
     events,
-    outcome: { victory, rounds: round, survivingAllyIds: livingAllies().map((u) => u.id) },
+    outcome: { victory, rounds: round, survivingAllyIds: livingAllies().map((u) => u.id), allyHp, allyMana },
   };
 
   // ── Turn logic ────────────────────────────────────────────────────────────

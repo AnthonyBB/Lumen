@@ -38,10 +38,12 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
   const [muted, setMuted] = useState(Sfx.isMuted)
   const [haste, setHaste] = useState<HasteData | null>(null)
   const [studyOpen, setStudyOpen] = useState(false)
+  const [rankInfoOpen, setRankInfoOpen] = useState(false)
   const [idleSummary, setIdleSummary] = useState<{
     battles: number; wins: number; losses: number; silver: number
     xpByCharacter: { name: string; xp: number }[]
     items: { name: string; icon: string; rarity: string }[]
+    tokensEarned?: number
   } | null>(null)
 
   const emit = (event: string, payload?: unknown) => {
@@ -239,6 +241,9 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
               </div>
             )}
             {idleSummary.silver > 0 && <p className="text-sm text-amber-200">+{idleSummary.silver} 🪙 silver</p>}
+            {(idleSummary.tokensEarned ?? 0) > 0 && (
+              <p className="mt-1 text-sm font-display text-lumen-gold">🎟️ +{idleSummary.tokensEarned} Recruit Token{idleSummary.tokensEarned === 1 ? '' : 's'}</p>
+            )}
             {idleSummary.items.length > 0 && (
               <div className="mt-3 flex flex-wrap justify-center gap-2">
                 {idleSummary.items.slice(0, 10).map((it, i) => (
@@ -293,8 +298,16 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
                 : '—'}
             </p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <p className="text-xs text-gray-500 mb-1 font-semibold uppercase tracking-wider">Adventure Rank</p>
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 relative">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider">Adventure Rank</p>
+              <button
+                onClick={() => setRankInfoOpen((v) => !v)}
+                aria-label="What does changing rank do?"
+                title="What does changing rank do?"
+                className="flex h-5 w-5 items-center justify-center rounded-full border border-white/20 text-[11px] font-bold text-gray-300 hover:border-lumen-gold/60 hover:text-lumen-gold"
+              >?</button>
+            </div>
             <select
               value={rankId ?? ''}
               onChange={(e) => changeRank(e.target.value)}
@@ -307,6 +320,25 @@ export default function GamePage({ token, user, setContentMode }: GamePageProps)
               ))}
             </select>
             <p className="text-[10px] text-gray-500 mt-1">Sets the grade level of your questions.</p>
+
+            {rankInfoOpen && (
+              <>
+                {/* click-away catcher */}
+                <div className="fixed inset-0 z-40" onClick={() => setRankInfoOpen(false)} />
+                <div className="absolute bottom-full right-0 mb-2 w-72 z-50 rounded-xl border border-lumen-gold/40 bg-lumen-dark p-4 text-left shadow-2xl shadow-purple-900/40">
+                  <p className="font-display text-sm font-bold text-lumen-gold mb-2">What changing rank does</p>
+                  <p className="text-xs text-gray-300 mb-2">
+                    <span className="font-semibold text-lumen-gold">Questions:</span> sets the grade level of the questions you're asked — from the early grades up to college.
+                  </p>
+                  <p className="text-xs text-gray-300 mb-2">
+                    <span className="font-semibold text-lumen-gold">Power scaling:</span> your heroes <em>and</em> the enemies grow together with rank. A higher rank makes the numbers on both sides bigger, so a rank-appropriate fight feels about the same at every rank.
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    In short: raising your rank means <span className="text-gray-200">harder questions</span>, not a harder fight — as long as your gear and heroes keep pace.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
           <button
             onClick={() => haste && setStudyOpen(true)}

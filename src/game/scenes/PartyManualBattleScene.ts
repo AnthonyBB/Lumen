@@ -32,6 +32,14 @@ export interface ClientCombatant {
   id: string; name: string; class: string; level: number
   maxHp: number; attack: number; defense: number; speed: number
   maxMana: number; healing: number
+  /** Per-encounter HP/mana recovery applied BETWEEN campaign fights (not a full
+   *  heal/refill). */
+  healthRegen?: number
+  manaRegen?: number
+  /** Starting HP/mana for this encounter (carried from the prior fight + regen).
+   *  Full when absent (first encounter / non-campaign); startHp <= 0 = downed. */
+  startHp?: number
+  startMana?: number
   basicAttack: { min: number; max: number }
   skillRanks: Record<string, number>
   strategyLoadout: string[]
@@ -46,6 +54,9 @@ export interface PartyManualData {
   biome: string
   encounterIndex: number
   totalEncounters: number
+  /** Set on tutorial runs (1..3) — the server then grants XP/silver only and
+   *  skips the random material roll (fixed rewards come from completion). */
+  tutorialLevel?: number
 }
 
 interface CardRect { cardX: number; cardY: number; slotW: number; cardH: number; cx: number }
@@ -324,9 +335,15 @@ export class PartyManualBattleScene extends Phaser.Scene {
       fontSize: '10px', fontFamily: 'Arial', color: '#ffffff', fontStyle: 'bold',
     }).setOrigin(0.5); container.add(mpText)
 
+    // Carried-in HP/mana (full when absent). startHp <= 0 means the ally enters
+    // already DOWNED (carried over from a prior encounter) and stays out.
+    const sHp = c.startHp ?? c.maxHp
     const u: Unit = {
       ...this.baseUnit('ally', cx, cardY + 44),
-      id: c.id, name: c.name, maxHp: c.maxHp, hp: c.maxHp, maxMana: c.maxMana, mana: c.maxMana,
+      id: c.id, name: c.name, maxHp: c.maxHp,
+      hp: Math.max(0, Math.min(c.maxHp, sHp)),
+      alive: sHp > 0,
+      maxMana: c.maxMana, mana: Math.max(0, Math.min(c.maxMana, c.startMana ?? c.maxMana)),
       attack: c.attack, defense: c.defense, speed: c.speed, healing: c.healing,
       basicAttack: c.basicAttack, skills: this.buildSkills(c),
       container, sprite: hero, baseTint: 0xffffff,
@@ -782,6 +799,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
       difficulty: this.battleData.difficulty, level: this.battleData.level,
       campaignComplete: this.battleData.campaignComplete, victory,
       mobCount: this.battleData.mobs.length,
+      tutorial: !!this.battleData.tutorialLevel,
     })
 
     const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
@@ -795,7 +813,15 @@ export class PartyManualBattleScene extends Phaser.Scene {
       backgroundColor: '#2a1060', padding: { x: 24, y: 10 },
     }).setOrigin(0.5).setDepth(41).setInteractive({ useHandCursor: true })
     btn.on('pointerdown', () => {
-      const result: BattleResult = { victory, playerHp: -1, xpGained: 0 }
+      // Carry each ally's ENDING HP back so the campaign applies health regen
+      // (not a full heal) before the next encounter.
+      const allyHp: Record<string, number> = {}
+      const allyMana: Record<string, number> = {}
+      for (const a of this.allies) {
+        allyHp[a.id] = Math.max(0, Math.round(a.hp))
+        allyMana[a.id] = Math.max(0, Math.round(a.mana))
+      }
+      const result: BattleResult = { victory, playerHp: -1, xpGained: 0, allyHp, allyMana }
       const biome = this.scene.get('BiomeScene') as BiomeScene
       this.scene.stop()
       this.scene.resume('BiomeScene')

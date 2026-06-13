@@ -77,19 +77,22 @@ export class WorldScene extends Phaser.Scene {
   private characterOpen = false
   private biomeMenuOpen = false
   private biomeMenuContainer: Phaser.GameObjects.Container | null = null
+  /** Tutorial "what to do with your rewards" panel (re-openable via the ? button). */
+  private instructPanel: Phaser.GameObjects.Container | null = null
   // Combat mode chosen at campaign start: hand-play every turn ('manual') or
   // watch the party's strategy loadout fight autonomously ('auto'). Persists
   // across menu opens within a session.
   private campaignMode: 'manual' | 'auto' = 'manual'
 
   // Chest
-  private chestPos = { x: 1280, y: 1220 }
+  private chestPos = { x: 1280, y: 1190 }
   private nearChest = false
 
   // Biome gates
   // Scattered around the town (center ~1280,1280): one gate per angular sector
   // but with irregular angles and radii so they don't sit on a perfect 45° grid.
-  private biomeGates: BiomeGate[] = [
+  // All 8 world campaign gates (shown once the tutorial is complete).
+  private allBiomeGates: BiomeGate[] = [
     { name: 'Ocean',               x: 2180, y: 1080, color: BIOME_COLORS['Ocean'] },
     { name: 'Tropical Rainforest', x: 2010, y: 1880, color: BIOME_COLORS['Tropical Rainforest'] },
     { name: 'Swamp',               x: 1480, y: 2270, color: BIOME_COLORS['Swamp'] },
@@ -99,6 +102,19 @@ export class WorldScene extends Phaser.Scene {
     { name: 'Snow',                x: 1100, y: 290,  color: BIOME_COLORS['Snow'] },
     { name: 'Deciduous Forest',    x: 2080, y: 540,  color: BIOME_COLORS['Deciduous Forest'] },
   ]
+  // The single Tutorial Portal, shown ONLY while the tutorial is active
+  // (docs/TUTORIAL_DESIGN.md). Placed just SOUTH of the plaza centre (the chest
+  // sits just NORTH), clear of the tavern crowd to the north and on the player's
+  // spawn sightline so it's obvious. When it disappears the chest still anchors
+  // the centre, so the layout doesn't look empty.
+  private tutorialGate: BiomeGate = { name: 'Tutorial', x: 1280, y: 1460, color: 0x66ddff }
+  // The gates actually built this scene-instance — tutorial portal OR the 8 world
+  // gates, decided from the cached tutorial state (registry) at create() time.
+  private biomeGates: BiomeGate[] = []
+  /** Active-ness used to build gates this instance (restart if the server differs). */
+  private builtTutorialActive = false
+  /** Highest tutorial level cleared (drives the tutorial menu's lock/✓ state). */
+  private tutorialLevelsDone = 0
   private nearBiomeGate: BiomeGate | null = null
 
   // Townsfolk you can talk to for guidance.
@@ -276,21 +292,26 @@ export class WorldScene extends Phaser.Scene {
     // The open heart of the town: a well, the town sign, a ring of lamps and
     // benches, and scattered greenery. With the buildings pushed outward this
     // square stays clear for the player to spawn into and move through.
-    this.add.image(1280, 1285, 'well').setDepth(3).setScale(3)
-    this.add.image(1280, 1160, 'sign').setDepth(3).setScale(3)
+    // The well is now decoration off to the SW (no longer the town centre, which
+    // is kept open for the chest/portal and the player's spawn).
+    this.add.image(1040, 1430, 'well').setDepth(3).setScale(3)
+    this.add.image(1110, 1205, 'sign').setDepth(3).setScale(3)
 
-    // Lamps + benches loosely ringing the plaza (not perfectly symmetric).
-    for (const [lx, ly] of [[1120, 1205], [1455, 1170], [1150, 1395], [1430, 1380]] as [number, number][]) {
+    // A few lamps placed STRATEGICALLY where the roads leave the plaza (not
+    // clustered in the open centre). Buildings carry their own door lamps already.
+    for (const [lx, ly] of [[1500, 1120], [1525, 1440], [1175, 1495], [1035, 1235]] as [number, number][]) {
       this.add.image(lx, ly, 'lamppost').setDepth(3).setScale(2.5)
     }
-    for (const [bx, by, flip] of [[1185, 1410, 0], [1380, 1415, 1]] as [number, number, number][]) {
+    // Benches flank the relocated well (a little SW rest spot), clear of the
+    // centre column where the chest/portal now sit.
+    for (const [bx, by, flip] of [[945, 1455, 0], [1140, 1455, 1]] as [number, number, number][]) {
       this.add.image(bx, by, 'bench').setDepth(3).setScale(2.4).setFlipX(flip === 1)
     }
 
     // Scattered greenery + a couple of in-town trees to break up the open grass.
     ;([
-      [1090, 1300, 'cp_bush1'], [1470, 1320, 'cp_bush4'],
-      [1230, 1145, 'cp_flower2'], [1335, 1150, 'cp_flower5'],
+      [1090, 1300, 'cp_bush1'], [1565, 1360, 'cp_bush4'],
+      [1165, 1135, 'cp_flower2'], [1400, 1135, 'cp_flower5'],
       [1175, 1340, 'cp_tuft1'], [1395, 1345, 'cp_tuft2'],
     ] as [number, number, string][]).forEach(([rx, ry, key]) => {
       this.add.image(rx, ry, key).setDepth(2)
@@ -316,6 +337,14 @@ export class WorldScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5).setDepth(5)
 
     // ── Biome entrance gates ──────────────────────────────────────────────────
+    // While the tutorial is active, ONLY the Tutorial Portal is shown; the 8 world
+    // gates appear once it's done. Tutorial state is cached in the global registry
+    // (set from roster:data); create() builds from the cache, and onRoster restarts
+    // the scene if the server's active-ness differs (docs/TUTORIAL_DESIGN.md §6).
+    this.builtTutorialActive = this.registry.get('tutorialActive') === true
+    this.tutorialLevelsDone = (this.registry.get('tutorialLevelsDone') as number) ?? 0
+    this.biomeGates = this.builtTutorialActive ? [this.tutorialGate] : this.allBiomeGates
+
     this.gateGlows.clear()   // scene instance is reused across restarts
     this.gateColliders = []
     for (const gate of this.biomeGates) {
@@ -387,6 +416,20 @@ export class WorldScene extends Phaser.Scene {
     // DOM input and E/WASD don't fire interactions/movement under it.
     bindOverlayInputSuspension(this)
 
+    // Returning from a cleared tutorial level: show the finale (level 3 only) and
+    // the "what to do with your rewards" guidance (any level). BiomeScene sets
+    // these registry flags on a tutorial victory.
+    const justFinished = this.registry.get('tutorialJustCompleted')
+    if (justFinished) {
+      this.registry.set('tutorialJustCompleted', false)
+      this.time.delayedCall(450, () => this.playTutorialCelebration())
+    }
+    if (this.registry.get('tutorialInstruct')) {
+      this.registry.set('tutorialInstruct', false)
+      // After the finale on level 3, otherwise shortly after arrival.
+      this.time.delayedCall(justFinished ? 4700 : 700, () => this.showTutorialInstructions())
+    }
+
     // Proximity prompt (camera-fixed)
     this.promptText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 100, 'Press E to enter', {
       fontSize: '18px',
@@ -439,8 +482,12 @@ export class WorldScene extends Phaser.Scene {
 
     // Track which campaigns have a team deployed, to badge the portal menu
     // (TEAMS §5 — informational only; never blocks entering a campaign).
-    const onRoster = (data: { deployments?: { biome: string }[] }) => {
+    const onRoster = (data: {
+      deployments?: { biome: string }[]
+      tutorial?: { levelsDone: number; active: boolean }
+    }) => {
       this.deployedBiomes = new Set((data?.deployments ?? []).map((d) => d.biome))
+      if (data?.tutorial) this.applyTutorial(data.tutorial.levelsDone, data.tutorial.active)
     }
 
     this.socket.on('zone:players', onZonePlayers)
@@ -531,11 +578,14 @@ export class WorldScene extends Phaser.Scene {
         for (let d = -HALF; d <= HALF; d++) mark(cC + d, r)
     }
 
-    // Roads only ever connect the town square to a biome gate — no full-map
-    // spans (those left dead-end paths running off to the empty map edges).
+    // Roads connect the town square to a biome gate — no full-map spans (those
+    // left dead-end paths running off to the empty map edges). The road network is
+    // PERMANENT town scenery drawn to ALL gate positions (+ the tutorial portal),
+    // independent of which portals are currently visible — otherwise the paths
+    // vanish during the tutorial (when only the tutorial portal is shown).
     const cx = Math.round(WORLD_WIDTH / 2 / CELL)
     const cy = Math.round(WORLD_HEIGHT / 2 / CELL)
-    for (const g of this.biomeGates) {
+    for (const g of [...this.allBiomeGates, this.tutorialGate]) {
       const gc = Phaser.Math.Clamp(Math.round(g.x / CELL), 0, cols - 1)
       const gr = Phaser.Math.Clamp(Math.round(g.y / CELL), 0, rows - 1)
       hRoad(cx, gc, cy)          // run out along the town's centre row…
@@ -1152,7 +1202,216 @@ export class WorldScene extends Phaser.Scene {
     this.biomeMenuOpen = false
   }
 
+  // ── Tutorial portal (docs/TUTORIAL_DESIGN.md) ───────────────────────────────
+
+  /** Cache a server tutorial-state push; restart the scene to swap portals if the
+   *  active-ness no longer matches the gates this instance was built with. */
+  private applyTutorial(levelsDone: number, active: boolean) {
+    this.tutorialLevelsDone = levelsDone
+    this.registry.set('tutorialLevelsDone', levelsDone)
+    this.registry.set('tutorialActive', active)
+    if (active !== this.builtTutorialActive && !this.biomeMenuOpen && !this.popupOpen) {
+      this.scene.restart({ spawnX: this.player.x, spawnY: this.player.y })
+    }
+  }
+
+  /** The 3-level Training Grounds menu (reuses the biome-menu container slot so
+   *  ESC-to-close + proximity logic work unchanged). */
+  private openTutorialMenu() {
+    if (this.biomeMenuOpen) return
+    this.biomeMenuOpen = true
+    this.player.setVelocity(0, 0)
+    Sfx.play('menu')
+
+    const color = this.tutorialGate.color
+    const panelW = 470, panelH = 430
+    const cam = this.cameras.main
+    const container = this.add.container(cam.scrollX + GAME_WIDTH / 2, cam.scrollY + GAME_HEIGHT / 2).setDepth(200)
+
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0a0a1a, 0.97).fillRoundedRect(-panelW / 2, -panelH / 2, panelW, panelH, 14)
+    bg.lineStyle(2, color, 1).strokeRoundedRect(-panelW / 2, -panelH / 2, panelW, panelH, 14)
+    container.add(bg)
+
+    container.add(this.add.text(0, -panelH / 2 + 30, '✦ The Proving Grounds', {
+      fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5))
+    container.add(this.add.text(0, -panelH / 2 + 58, 'Walk the three trials, and the realm shall open to you.', {
+      fontSize: '12px', fontFamily: 'Arial', color: '#9aa0c0',
+    }).setOrigin(0.5))
+
+    const levels = [
+      { n: 1, title: 'The First Trial',  sub: 'Restless sprites stir in the hollow. Cut a path and earn your first companion.' },
+      { n: 2, title: 'The Tempered Path', sub: 'Hardier beasts bar the way. Steel and a glimmering shard await the bold.' },
+      { n: 3, title: 'The Grove Warden',  sub: 'An ancient guardian holds the final gate. Fell it, and the world is yours.' },
+    ]
+    const firstY = -panelH / 2 + 96
+    levels.forEach((lv, i) => this.createTutorialButton(container, lv, firstY + i * 94, color))
+
+    container.add(this.add.text(0, panelH / 2 - 22, 'Press E or Escape to close', {
+      fontSize: '12px', fontFamily: 'Arial', color: '#777a9a',
+    }).setOrigin(0.5))
+
+    this.biomeMenuContainer = container
+  }
+
+  private createTutorialButton(
+    container: Phaser.GameObjects.Container,
+    lv: { n: number; title: string; sub: string },
+    y: number, color: number,
+  ) {
+    const bw = 430, bh = 76, bx = -bw / 2
+    const done = lv.n <= this.tutorialLevelsDone
+    const next = lv.n === this.tutorialLevelsDone + 1
+
+    const bg = this.add.graphics()
+    const paint = (hover: boolean) => {
+      bg.clear()
+      bg.fillStyle(done ? 0x16261a : next ? (hover ? 0x2a2a5a : 0x1a1a3a) : 0x141422, 1)
+      bg.fillRoundedRect(bx, y, bw, bh, 10)
+      bg.lineStyle(next ? 2 : 1, done ? 0x44cc66 : next ? color : 0x33335a, next || done ? 0.9 : 0.5)
+      bg.strokeRoundedRect(bx, y, bw, bh, 10)
+    }
+    paint(false)
+    container.add(bg)
+
+    const tag = done ? '✓ ' : next ? '' : '🔒 '
+    container.add(this.add.text(bx + 16, y + 14, tag + lv.title, {
+      fontSize: '15px', fontFamily: 'Georgia, serif',
+      color: done ? '#8fdca0' : next ? '#ffd700' : '#666688', fontStyle: 'bold',
+    }).setOrigin(0, 0))
+    container.add(this.add.text(bx + 16, y + 42, done ? 'Conquered' : lv.sub, {
+      fontSize: '11px', fontFamily: 'Arial', color: next ? '#9aa0c0' : '#5a5a7a',
+    }).setOrigin(0, 0))
+
+    if (next) {
+      const zone = this.add.zone(bx, y, bw, bh).setOrigin(0, 0).setInteractive({ useHandCursor: true })
+      zone.on('pointerover', () => paint(true))
+      zone.on('pointerout', () => paint(false))
+      zone.on('pointerdown', () => { Sfx.play('click'); this.startTutorialLevel(lv.n) })
+      container.add(zone)
+    }
+
+    // Completed trials carry a "?" on their right edge that re-opens the
+    // rewards/next-steps guidance for that trial.
+    if (done) {
+      const hr = 13, hx = bx + bw - 26, hy = y + bh / 2
+      const help = this.add.graphics()
+      help.fillStyle(0x14361f, 1).fillCircle(hx, hy, hr)
+      help.lineStyle(1, 0x44cc66, 0.9).strokeCircle(hx, hy, hr)
+      container.add(help)
+      container.add(this.add.text(hx, hy, '?', {
+        fontSize: '14px', fontFamily: 'Georgia, serif', color: '#bfe9ff', fontStyle: 'bold',
+      }).setOrigin(0.5))
+      const hz = this.add.circle(hx, hy, hr, 0x000000, 0).setInteractive({ useHandCursor: true })
+      hz.on('pointerup', () => { Sfx.play('click'); this.showTutorialInstructions() })
+      container.add(hz)
+    }
+  }
+
+  private startTutorialLevel(level: number) {
+    this.closeBiomeMenu()
+    this.scene.stop('UIScene')
+    this.scene.start('BiomeScene', {
+      biome: 'Tutorial', difficulty: 'novice', location: `Training — Level ${level}`,
+      mode: 'manual', tutorialLevel: level, returnX: this.player.x, returnY: this.player.y,
+    })
+  }
+
+  /** Level-up-style finale shown once, on returning to town after clearing Level 3. */
+  private playTutorialCelebration() {
+    const cam = this.cameras.main
+    const c = this.add.container(cam.scrollX + GAME_WIDTH / 2, cam.scrollY + GAME_HEIGHT / 2).setDepth(300)
+    cam.flash(900, 255, 215, 0)
+    const bg = this.add.graphics()
+    bg.fillStyle(0x000000, 0.6).fillRoundedRect(-300, -120, 600, 240, 18)
+    bg.lineStyle(3, 0xffd700, 1).strokeRoundedRect(-300, -120, 600, 240, 18)
+    c.add(bg)
+    c.add(this.add.text(0, -52, '🏆  Training Complete!', {
+      fontSize: '34px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5))
+    c.add(this.add.text(0, 6, 'The realm opens to you.', {
+      fontSize: '18px', fontFamily: 'Georgia, serif', color: '#ffffff',
+    }).setOrigin(0.5))
+    c.add(this.add.text(0, 44, 'New portals have appeared across the world — and you have heroes to recruit at the Garrison.', {
+      fontSize: '12px', fontFamily: 'Arial', color: '#9be7ff', align: 'center', wordWrap: { width: 540 },
+    }).setOrigin(0.5))
+    Sfx.play('victory')
+    this.tweens.add({ targets: c, alpha: { from: 1, to: 0 }, delay: 3400, duration: 900, onComplete: () => c.destroy() })
+  }
+
+  /** Guidance shown after clearing a tutorial level (and re-openable via the ?
+   *  button) — what to do with the materials + Recruit Token just earned. */
+  private showTutorialInstructions() {
+    this.closeTutorialInstructions()
+    Sfx.play('menu')
+    const allDone = this.tutorialLevelsDone >= 3
+    const lines = [
+      'Your victory earned crafting materials and a Recruit Token.',
+      '',
+      '• The Garrison  —  spend a Recruit Token with the Barracks Master to',
+      '   recruit a hero, then add them to your squad with the Squad Captain.',
+      '• The Forge  —  craft a weapon from your metal (answer a few questions).',
+      '• The Armory  —  craft armor from metal; a catalyst raises its rarity.',
+      '• Press  I  —  equip your new gear onto any squad member.',
+      allDone
+        ? '• The realm is open — step through any portal to begin a true campaign.'
+        : '• Then return here and take on the next trial.',
+    ]
+
+    const panelW = 600, panelH = 320
+    const cam = this.cameras.main
+    const c = this.add.container(cam.scrollX + GAME_WIDTH / 2, cam.scrollY + GAME_HEIGHT / 2).setDepth(260)
+
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0a0a1a, 0.98).fillRoundedRect(-panelW / 2, -panelH / 2, panelW, panelH, 14)
+    bg.lineStyle(2, 0x66ddff, 1).strokeRoundedRect(-panelW / 2, -panelH / 2, panelW, panelH, 14)
+    c.add(bg)
+
+    c.add(this.add.text(0, -panelH / 2 + 26, '✦ Your Next Steps', {
+      fontSize: '22px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+    }).setOrigin(0.5))
+
+    let y = -panelH / 2 + 64
+    for (const line of lines) {
+      c.add(this.add.text(-panelW / 2 + 28, y, line, {
+        fontSize: line.startsWith('•') || line.startsWith('   ') ? '13px' : '14px',
+        fontFamily: 'Arial', color: line.startsWith('•') || line.startsWith('   ') ? '#cdd2f0' : '#9be7ff',
+      }).setOrigin(0, 0))
+      y += line === '' ? 12 : 28
+    }
+
+    const btnW = 120, btnH = 30, by = panelH / 2 - 44
+    const btn = this.add.graphics()
+    btn.fillStyle(0x223344, 1).fillRoundedRect(-btnW / 2, by, btnW, btnH, 8)
+    btn.lineStyle(1, 0x66ddff, 0.8).strokeRoundedRect(-btnW / 2, by, btnW, btnH, 8)
+    c.add(btn)
+    c.add(this.add.text(0, by + btnH / 2, 'Got it', {
+      fontSize: '14px', fontFamily: 'Georgia, serif', color: '#bfe9ff', fontStyle: 'bold',
+    }).setOrigin(0.5))
+    const zone = this.add.zone(-btnW / 2, by, btnW, btnH).setOrigin(0, 0).setInteractive({ useHandCursor: true })
+    zone.on('pointerup', () => { Sfx.play('click'); this.closeTutorialInstructions() })
+    c.add(zone)
+
+    this.instructPanel = c
+  }
+
+  private closeTutorialInstructions() {
+    this.instructPanel?.destroy()
+    this.instructPanel = null
+  }
+
   update() {
+    // Tutorial guidance panel is modal: block movement/interactions; E or Esc closes.
+    if (this.instructPanel) {
+      this.player.setVelocity(0, 0)
+      this.promptText.setVisible(false)
+      if (Phaser.Input.Keyboard.JustDown(this.eKey) || Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.closeTutorialInstructions()
+      }
+      return
+    }
+
     // Open character screen with C key
     if (!this.popupOpen && !this.characterOpen && !this.biomeMenuOpen && Phaser.Input.Keyboard.JustDown(this.cKey)) {
       this.characterOpen = true
@@ -1236,9 +1495,13 @@ export class WorldScene extends Phaser.Scene {
         this.closeBiomeMenu()
       }
     } else if (this.nearBiomeGate && !this.popupOpen) {
-      this.promptText.setText(`Press E to enter the ${this.nearBiomeGate.name} Campaign`).setVisible(true)
+      const isTutorial = this.nearBiomeGate.name === 'Tutorial'
+      this.promptText.setText(isTutorial
+        ? 'Press E to enter the Training Grounds'
+        : `Press E to enter the ${this.nearBiomeGate.name} Campaign`).setVisible(true)
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        this.openBiomeMenu(this.nearBiomeGate.name)
+        if (isTutorial) this.openTutorialMenu()
+        else this.openBiomeMenu(this.nearBiomeGate.name)
       }
     } else if (nearBuilding && !this.popupOpen) {
       this.promptText

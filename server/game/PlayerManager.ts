@@ -473,6 +473,25 @@ function sanitiseDeployments(raw: unknown, teams: Team[]): Deployment[] {
   return out;
 }
 
+/** Resolve a loaded doc's tutorial progress. If the field is present, clamp it.
+ *  If absent (legacy account), infer "done" (=3) when the account shows ANY prior
+ *  progress so we never hide portals from an in-flight player; otherwise 0 (fresh).
+ *  (docs/TUTORIAL_DESIGN.md §10.) */
+function migrateTutorial(doc: {
+  tutorialLevelsDone?: unknown; campaignsCompleted?: number; recruitTokens?: number;
+  characters?: unknown[]; level?: number;
+}): number {
+  if (typeof doc.tutorialLevelsDone === 'number') {
+    return Math.max(0, Math.min(3, Math.floor(doc.tutorialLevelsDone)));
+  }
+  const hasProgress =
+    (doc.campaignsCompleted ?? 0) > 0 ||
+    (doc.recruitTokens ?? 0) > 0 ||
+    (Array.isArray(doc.characters) && doc.characters.length > 1) ||
+    (doc.level ?? 1) > 1;
+  return hasProgress ? 3 : 0;
+}
+
 /** Human-readable labels for stat rows pushed to the client. */
 const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   strength: 'Strength',
@@ -503,8 +522,10 @@ export interface LoadedProgress {
   materials: Record<string, number>;
   campaignsCompleted: number;
   recruitTokens: number;
+  recruitTokensEarned: number;
   hasteStacks: HasteStack[];
   deployments: Deployment[];
+  tutorialLevelsDone: number;
 }
 
 /** Skill shards granted for completing any quiz (effort reward, every test). */
@@ -513,6 +534,17 @@ export const QUIZ_COMPLETE_SKILL_SHARDS = 1;
 /** Shard awards granted once per grade completion. */
 export const GRADE_COMPLETE_SKILL_SHARDS = 10;
 export const GRADE_COMPLETE_COMBAT_SHARDS = 5;
+
+/** Fixed one-time tutorial reward bundles (docs/TUTORIAL_DESIGN.md §4). Metal +
+ *  catalysts only — no reagents. Granted exactly once per level, server-side. */
+const TUTORIAL_REWARDS: Record<number, { materialId: string; qty: number }[]> = {
+  // L1: one weapon or basic armor piece (sword/helm/greaves cost 3 Copper).
+  1: [{ materialId: 'metal_copper', qty: 3 }],
+  // L2: a Chestplate (4 Copper) + a catalyst to bump its rarity.
+  2: [{ materialId: 'metal_copper', qty: 4 }, { materialId: 'cat_glimmer_dust', qty: 1 }],
+  // L3: a plentiful haul (≈two crafts incl. a chest) + 2 catalysts.
+  3: [{ materialId: 'metal_copper', qty: 8 }, { materialId: 'cat_glimmer_dust', qty: 2 }],
+};
 
 export class PlayerManager {
   /** socketId → Player */
@@ -571,8 +603,10 @@ export class PlayerManager {
       materials: {},
       campaignsCompleted: 0,
       recruitTokens: 0,
+      recruitTokensEarned: 0,
       hasteStacks: [],
       deployments: [],
+      tutorialLevelsDone: 0,
     };
 
     this.players.set(socketId, player);
@@ -880,8 +914,15 @@ export class PlayerManager {
           materials: { ...((doc.materials as Record<string, number>) ?? {}) },
           campaignsCompleted: Math.max(0, doc.campaignsCompleted ?? 0),
           recruitTokens: Math.max(0, (doc as { recruitTokens?: number }).recruitTokens ?? 0),
+          // Lifetime earned defaults to at least the current balance for legacy docs
+          // (can't have fewer earned than you hold).
+          recruitTokensEarned: Math.max(
+            (doc as { recruitTokensEarned?: number }).recruitTokensEarned ?? 0,
+            (doc as { recruitTokens?: number }).recruitTokens ?? 0,
+          ),
           hasteStacks: sanitiseHasteStacks((doc as { hasteStacks?: unknown }).hasteStacks),
           deployments,
+          tutorialLevelsDone: migrateTutorial(doc),
         };
       }
     } catch (err) {
@@ -894,7 +935,8 @@ export class PlayerManager {
       teams: [newTeam([starter.id])],
       subjectGrades: defaultSubjectGrades(), adventureRank: DEFAULT_RANK_ID, rankPersisted: false,
       topicPasses: {}, unlockedStrategies: [], combatShards: 0, silver: 0, materials: {},
-      campaignsCompleted: 0, recruitTokens: 0, hasteStacks: [], deployments: [],
+      campaignsCompleted: 0, recruitTokens: 0, recruitTokensEarned: 0, hasteStacks: [], deployments: [],
+      tutorialLevelsDone: 0,
     };
   }
 
@@ -916,6 +958,8 @@ export class PlayerManager {
     player.materials = { ...(progress.materials ?? {}) };
     player.campaignsCompleted = Math.max(0, Math.floor(progress.campaignsCompleted ?? 0));
     player.recruitTokens = Math.max(0, Math.floor(progress.recruitTokens ?? 0));
+    player.recruitTokensEarned = Math.max(player.recruitTokens, Math.floor(progress.recruitTokensEarned ?? 0));
+    player.tutorialLevelsDone = Math.max(0, Math.min(3, Math.floor(progress.tutorialLevelsDone ?? 0)));
     player.hasteStacks = sanitiseHasteStacks(progress.hasteStacks);
 
     // Roster — finalise each character: clamp its allocation to its level cap and
@@ -1014,6 +1058,8 @@ export class PlayerManager {
         materials: player.materials,
         campaignsCompleted: player.campaignsCompleted,
         recruitTokens: player.recruitTokens,
+        recruitTokensEarned: player.recruitTokensEarned,
+        tutorialLevelsDone: player.tutorialLevelsDone,
         hasteStacks: player.hasteStacks,
         deployments: player.deployments,
         // Legacy mirror of the active character's level/xp — kept so older code
@@ -1115,13 +1161,50 @@ export class PlayerManager {
     return this.players.get(socketId)?.recruitTokens ?? 0;
   }
 
-  /** Add Recruit Tokens (server-side callers only). Persists. */
-  addRecruitTokens(socketId: string, amount: number): void {
+  /** Lifetime Recruit Tokens ever earned (drives the escalating recruit cost). */
+  getRecruitTokensEarned(socketId: string): number {
+    return this.players.get(socketId)?.recruitTokensEarned ?? 0;
+  }
+
+  /** Add Recruit Tokens (server-side callers only). Persists. `countAsEarned`
+   *  (default true) also bumps the lifetime-earned total — pass false for a refund
+   *  of already-earned tokens (e.g. a failed recruit) so it isn't double-counted. */
+  addRecruitTokens(socketId: string, amount: number, countAsEarned = true): void {
     if (amount <= 0) return;
     const player = this.players.get(socketId);
     if (!player) return;
     player.recruitTokens += Math.floor(amount);
+    if (countAsEarned) player.recruitTokensEarned += Math.floor(amount);
     this.persistProgress(socketId);
+  }
+
+  // ── Tutorial (docs/TUTORIAL_DESIGN.md) ──────────────────────────────────────
+  /** Highest contiguous tutorial level cleared (0..3). */
+  getTutorialLevelsDone(socketId: string): number {
+    return this.players.get(socketId)?.tutorialLevelsDone ?? 0;
+  }
+
+  /**
+   * Mark a tutorial level cleared and grant its FIXED, one-time reward bundle —
+   * server-authoritative and idempotent. A level is only completable when it is
+   * exactly the next one (`level === levelsDone + 1`); replays return null and
+   * grant nothing, so tokens/materials can never be farmed. Returns the granted
+   * material drops + token count for the reward screen, or null if not allowed.
+   */
+  completeTutorialLevel(socketId: string, level: number):
+    { drops: { materialId: string; qty: number }[]; tokens: number } | null {
+    const player = this.players.get(socketId);
+    if (!player) return null;
+    if (!Number.isInteger(level) || level < 1 || level > 3) return null;
+    if (level !== player.tutorialLevelsDone + 1) return null; // out of order / replay
+
+    const drops = TUTORIAL_REWARDS[level];
+    this.grantMaterials(socketId, drops);
+    player.recruitTokens += 1;
+    player.recruitTokensEarned += 1;
+    player.tutorialLevelsDone = level;
+    this.persistProgress(socketId);
+    return { drops, tokens: 1 };
   }
 
   /** Spend Recruit Tokens. Returns false (unchanged) if the player can't afford it. */

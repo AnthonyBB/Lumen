@@ -12,7 +12,7 @@ import type { PlayerManager } from '../PlayerManager.js';
 import { HASTE_DEFAULT_MIN, HASTE_FLOOR_MIN } from '../PlayerManager.js';
 import type { InventoryManager } from '../InventoryManager.js';
 import type { HasteStack } from '../../types/index.js';
-import { DIFFICULTIES, rollMaterials, type Difficulty } from '../loot.js';
+import { DIFFICULTIES, rollMaterials, TOKEN_DROP_CHANCE, type Difficulty } from '../loot.js';
 import { rankMultiplier } from '../data/adventureRanks.js';
 import { MATERIALS } from '../data/materials.js';
 import { resolveBattle } from './resolver.js';
@@ -32,6 +32,8 @@ export interface IdleSummary {
   xpByCharacter: { name: string; xp: number }[];
   silver: number;
   items: { name: string; icon: string; rarity: string }[];
+  /** Recruit Tokens dropped across all idle battles (flat per-win chance, uncapped). */
+  tokensEarned: number;
   /** Current interval (minutes) so the client can show "next battle in …". */
   intervalMinutes: number;
 }
@@ -80,7 +82,7 @@ export function resolveIdle(
   const rankMult = rankMultiplier(currentRank);
   const now = Date.now();
 
-  let totalBattles = 0, totalWins = 0, totalLosses = 0, totalSilver = 0;
+  let totalBattles = 0, totalWins = 0, totalLosses = 0, totalSilver = 0, totalTokens = 0;
   const matTotals: Record<string, number> = {};
   const xpByChar = new Map<string, { name: string; xp: number }>();
 
@@ -100,7 +102,7 @@ export function resolveIdle(
 
     let t = d.lastResolvedAt;
     let lastBattleT = t;
-    let battles = 0, wins = 0, losses = 0, xp = 0, silver = 0;
+    let battles = 0, wins = 0, losses = 0, xp = 0, silver = 0, tokens = 0;
     const mats: Record<string, number> = {};
 
     while (battles < MAX_IDLE_BATTLES) {
@@ -123,6 +125,9 @@ export function resolveIdle(
         silver += mobs.length * Math.round(encLevel * 1.5);
         const { drops } = rollMaterials(encLevel, difficulty, false, rankMult);
         for (const dr of drops) mats[dr.materialId] = (mats[dr.materialId] ?? 0) + dr.qty;
+        // Recruit Token: flat per-win chance, uncapped — idle is a token faucet
+        // (the escalating recruit cost throttles, not the drop rate).
+        if (rng() < TOKEN_DROP_CHANCE) tokens++;
       } else {
         losses++;
       }
@@ -143,13 +148,15 @@ export function resolveIdle(
     playerManager.setDeploymentResolvedAt(socketId, d.teamId, elapsed > INACTIVITY_MS ? now : lastBattleT);
 
     totalBattles += battles; totalWins += wins; totalLosses += losses; totalSilver += silver;
+    totalTokens += tokens;
     for (const [id, q] of Object.entries(mats)) matTotals[id] = (matTotals[id] ?? 0) + q;
   }
 
   if (totalBattles === 0) return null;
 
-  // Silver + materials are pooled to the account (shared bag).
+  // Silver + materials + tokens are pooled to the account.
   if (totalSilver > 0) playerManager.addSilver(socketId, totalSilver);
+  if (totalTokens > 0) playerManager.addRecruitTokens(socketId, totalTokens);
   const drops = Object.entries(matTotals).map(([materialId, qty]) => ({ materialId, qty }));
   if (drops.length) playerManager.grantMaterials(socketId, drops);
 
@@ -162,7 +169,8 @@ export function resolveIdle(
   return {
     battles: totalBattles, wins: totalWins, losses: totalLosses,
     xpByCharacter: [...xpByChar.values()].sort((a, b) => b.xp - a.xp),
-    silver: totalSilver, items, intervalMinutes: intervalAt(stacks, now),
+    silver: totalSilver, items, tokensEarned: totalTokens,
+    intervalMinutes: intervalAt(stacks, now),
   };
 }
 

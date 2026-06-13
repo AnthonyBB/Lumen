@@ -175,6 +175,9 @@ export function createItem(itemType: string, quantity = 1): InventoryItem | null
     quantity: template.stackable ? quantity : 1,
     stackable: template.stackable,
     icon: template.icon,
+    // Equippable legacy gear carries an explicit Lv 1 gate so every wearable item
+    // shows a level requirement (crafted gear gets its own from rollCraftedItem).
+    ...(template.slot ? { requiredLevel: 1 } : {}),
   };
 }
 

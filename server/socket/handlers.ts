@@ -40,7 +40,7 @@ import type {
 } from '../types/index.js';
 import { ATTRIBUTE_KEYS } from '../types/index.js';
 import { ATTRIBUTE_TYPES, type EquipSlot } from '../game/data/equipmentGen.js';
-import { rollMaterials, DIFFICULTIES, type Difficulty } from '../game/loot.js';
+import { rollMaterials, DIFFICULTIES, TOKEN_DROP_CHANCE, type Difficulty } from '../game/loot.js';
 import { resolveBattle } from '../game/combat/resolver.js';
 import { buildAllyCombatant, buildEnemyCombatant, type MobInput } from '../game/combat/adapter.js';
 import { resolveIdle, peekBattlesOwed } from '../game/combat/idle.js';
@@ -94,13 +94,16 @@ const SKILL_PRICE_BY_TIER: Record<1 | 2 | 3 | 4 | 5, number> = {
 
 /** Free starting team size — the first team of 4 is frictionless; beyond that
  *  costs Recruit Tokens. See CHARACTERS_DESIGN.md §2. */
-const FREE_ROSTER_SIZE = 4;
+const FREE_ROSTER_SIZE = 1;
 /** Generous hard cap on roster size (bounds abuse). */
 const MAX_ROSTER = 50;
-/** Recruit-Token cost of the NEXT character given the current roster size: free
- *  up to FREE_ROSTER_SIZE, then escalating 1, 2, 3, … (triangular). */
-const recruitCostFor = (ownedCount: number): number =>
-  ownedCount < FREE_ROSTER_SIZE ? 0 : ownedCount - FREE_ROSTER_SIZE + 1;
+/** Recruit-Token cost of the NEXT character — scales with LIFETIME tokens earned
+ *  (not roster size), so hoarding tokens can't dodge the price ramp: the cost
+ *  rises by 1 every 4 tokens you've ever earned. The tutorial grants 3 (cost stays
+ *  1 → a full party of 4); the more you farm thereafter, the pricier each hero,
+ *  which throttles team sprawl. See CHARACTERS_DESIGN.md §2. */
+const recruitCostFor = (lifetimeEarned: number): number =>
+  1 + Math.floor(Math.max(0, lifetimeEarned) / 4);
 
 /** strategyId → strategy. */
 const STRATEGY_MAP: ReadonlyMap<string, CombatStrategy> = new Map(
@@ -282,6 +285,12 @@ export function registerHandlers(
     if (!requireJoinedPlayer('You must join before setting your rank.')) return;
     playerManager.setAdventureRank(socket.id, payload.rankId);
     pushAdventureRank();
+    // Rank scales derived stats / gear / power (the rank "zoom"), so refresh every
+    // open view: the active character's stats, the roster's power, and the team
+    // sheet that the Character/Equipment screens render live.
+    pushStats();
+    pushRoster();
+    pushTeamSheet();
   });
 
   // ── Roster (multi-character) ──────────────────────────────────────────────
@@ -320,8 +329,9 @@ export function registerHandlers(
       idleIntervalMinutes: playerManager.getHaste(socket.id).intervalMinutes,
       freeSlots: Math.max(0, FREE_ROSTER_SIZE - chars.length),
       recruitTokens: playerManager.getRecruitTokens(socket.id),
-      recruitCost: recruitCostFor(chars.length),
+      recruitCost: recruitCostFor(playerManager.getRecruitTokensEarned(socket.id)),
       maxRoster: MAX_ROSTER,
+      tutorial: tutorialState(),
     };
   };
   const pushRoster = (): void => { socket.emit('roster:data', buildRoster()); };
@@ -391,6 +401,50 @@ export function registerHandlers(
   socket.on('team:get_sheet', () => {
     if (!requireJoinedPlayer('You must join before viewing your team.')) return;
     pushTeamSheet();
+  });
+
+  // ── Tutorial (docs/TUTORIAL_DESIGN.md) ──────────────────────────────────────
+  // A 3-level onboarding campaign near town. While incomplete the world hides all
+  // but the Tutorial Portal; each level clears once and grants a FIXED reward +
+  // 1 recruit token (server-authoritative, un-farmable via levelsDone).
+  const tutorialState = () => {
+    const levelsDone = playerManager.getTutorialLevelsDone(socket.id);
+    return { levelsDone, active: levelsDone < 3 };
+  };
+  const pushTutorialState = (): void => { socket.emit('tutorial:state', tutorialState()); };
+
+  socket.on('tutorial:get_state', () => {
+    if (!requireJoinedPlayer('You must join first.')) return;
+    pushTutorialState();
+  });
+
+  socket.on('tutorial:complete_level', (payload: { level?: unknown }) => {
+    const player = requireJoinedPlayer('You must join first.');
+    if (!player) return;
+    const level = typeof payload?.level === 'number' ? Math.floor(payload.level) : 0;
+    const result = playerManager.completeTutorialLevel(socket.id, level);
+    if (!result) {
+      // Out of order, already cleared, or invalid — no reward, no state change.
+      socket.emit('error', { message: 'That tutorial level is not available.' });
+      pushTutorialState();
+      return;
+    }
+
+    // Build the reward-screen chips (same shape as combat:loot) — materials + token.
+    const items = result.drops.map((d) => {
+      const m = MATERIALS[d.materialId];
+      const rarity = m?.family === 'catalyst' ? (m.rarityGate ?? 'uncommon') : 'common';
+      return { name: `${m?.name ?? d.materialId} ×${d.qty}`, icon: m?.icon ?? '📦', rarity };
+    });
+    items.push({ name: `Recruit Token ×${result.tokens}`, icon: '🎟️', rarity: 'rare' });
+
+    pushCurrency();
+    pushInventoryUpdate();
+    pushRoster();          // token balance + tutorial state (buildRoster includes it)
+    pushTutorialState();
+    socket.emit('combat:loot', { campaignComplete: true, items, richVein: false, catalystRarity: null });
+    if (level === 3) socket.emit('tutorial:complete', {});
+    console.log(`[tutorial] ${player.username} cleared tutorial level ${level} (+1 token)`);
   });
 
   socket.on('party:set', (payload: { party?: unknown }) => {
@@ -475,8 +529,8 @@ export function registerHandlers(
       socket.emit('error', { message: 'Your roster is full.' });
       return;
     }
-    // The first FREE_ROSTER_SIZE are free; beyond that costs Recruit Tokens.
-    const cost = recruitCostFor(owned);
+    // Cost scales with LIFETIME tokens earned (hoarding can't dodge the ramp).
+    const cost = recruitCostFor(playerManager.getRecruitTokensEarned(socket.id));
     if (cost > 0 && !playerManager.spendRecruitTokens(socket.id, cost)) {
       socket.emit('error', {
         message: `Recruiting costs ${cost} Recruit Token${cost !== 1 ? 's' : ''} — clear campaigns to earn more!`,
@@ -485,8 +539,9 @@ export function registerHandlers(
     }
     const res = playerManager.createCharacter(socket.id, payload.name, payload.class);
     if ('error' in res) {
-      // Refund the tokens if creation failed for a bad name, etc.
-      if (cost > 0) playerManager.addRecruitTokens(socket.id, cost);
+      // Refund the tokens if creation failed for a bad name, etc. (NOT counted as
+      // newly earned — they were already earned before being spent here).
+      if (cost > 0) playerManager.addRecruitTokens(socket.id, cost, false);
       socket.emit('error', { message: res.error });
       return;
     }
@@ -538,11 +593,17 @@ export function registerHandlers(
       .map((id) => {
         const ch = characters.find((c) => c.id === id);
         if (!ch) return null;
-        const c = buildAllyCombatant(ch, inventoryManager.equipmentFor(socket.id, id), currentRank);
+        const equipment = inventoryManager.equipmentFor(socket.id, id);
+        const c = buildAllyCombatant(ch, equipment, currentRank);
+        // health/mana regen are the per-encounter recovery (NOT a full heal
+        // between fights) — see computeStats; carried client-side by BiomeScene.
+        const st = playerManager.computeStats(socket.id, equipment, ch);
         return {
           id: ch.id, name: ch.name, class: ch.class, level: ch.level,
           maxHp: c.maxHp, attack: c.attack, defense: c.defense, speed: c.speed,
-          maxMana: c.maxMana, healing: c.healingPower, basicAttack: c.basicAttack,
+          maxMana: c.maxMana, healing: c.healingPower,
+          healthRegen: st?.healthRegen ?? 0, manaRegen: st?.manaRegen ?? 0,
+          basicAttack: c.basicAttack,
           skillRanks: { ...ch.skillRanks }, strategyLoadout: [...ch.strategyLoadout],
         };
       })
@@ -859,11 +920,14 @@ export function registerHandlers(
         if (skillAward > 0) playerManager.addShards(socket.id, 'skill', skillAward);
         if (combatAward > 0) playerManager.addShards(socket.id, 'combat', combatAward);
 
-        // Recruit Tokens — every campaign clear grants 1 (the steady source for
-        // recruiting characters beyond the free team; see CHARACTERS_DESIGN.md §2).
-        const tokenAward = 1;
-        playerManager.addRecruitTokens(socket.id, tokenAward);
-        items.push({ name: `Recruit Token ×${tokenAward}`, icon: '🎟️', rarity: 'rare' });
+        // Recruit Tokens — a rare flat-chance drop (no longer guaranteed); also
+        // earned from idle play. The escalating recruit cost is the throttle, not
+        // the drop rate (see CHARACTERS_DESIGN.md §2).
+        const tokenAward = Math.random() < TOKEN_DROP_CHANCE ? 1 : 0;
+        if (tokenAward > 0) {
+          playerManager.addRecruitTokens(socket.id, tokenAward);
+          items.push({ name: `Recruit Token ×${tokenAward}`, icon: '🎟️', rarity: 'rare' });
+        }
 
         playerManager.recordCampaignCompletion(socket.id);
 
@@ -886,6 +950,7 @@ export function registerHandlers(
   // never decides the outcome or the rewards (docs/CHARACTERS_DESIGN.md §5).
   socket.on('campaign:resolve', (payload: {
     difficulty?: unknown; level?: unknown; campaignComplete?: unknown; mobs?: unknown;
+    startHp?: unknown; startMana?: unknown;
   }) => {
     const player = requireJoinedPlayer('You must join before fighting.');
     if (!player) return;
@@ -915,13 +980,32 @@ export function registerHandlers(
 
     const currentRank = playerManager.getAdventureRank(socket.id);
 
+    // Carried HP/mana from the previous encounter (client shuttles the resolver's
+    // ending values back). Regen is applied HERE (the server knows each ally's
+    // regen); a downed ally (carried <= 0) stays downed — no revive, no regen.
+    const carriedHp = (payload?.startHp ?? {}) as Record<string, unknown>;
+    const carriedMana = (payload?.startMana ?? {}) as Record<string, unknown>;
+
     // Build the party (server-authoritative — from the roster + per-char gear).
     const characters = playerManager.getCharacters(socket.id);
     const allies = playerManager.getParty(socket.id)
       .map((id) => {
         const ch = characters.find((c) => c.id === id);
         if (!ch) return null;
-        return buildAllyCombatant(ch, inventoryManager.equipmentFor(socket.id, id), currentRank);
+        const equipment = inventoryManager.equipmentFor(socket.id, id);
+        const c = buildAllyCombatant(ch, equipment, currentRank);
+        const cHp = carriedHp[id];
+        if (isSafeNumber(cHp, 0, 1_000_000)) {
+          const hp = Math.floor(cHp as number);
+          if (hp <= 0) { c.startHp = 0; c.startMana = 0; } // downed stays downed
+          else {
+            const st = playerManager.computeStats(socket.id, equipment, ch);
+            c.startHp = Math.min(c.maxHp, hp + (st?.healthRegen ?? 0));
+            const cMana = isSafeNumber(carriedMana[id], 0, 1_000_000) ? Math.floor(carriedMana[id] as number) : c.maxMana;
+            c.startMana = Math.min(c.maxMana, cMana + (st?.manaRegen ?? 0));
+          }
+        }
+        return c;
       })
       .filter((c): c is NonNullable<typeof c> => !!c);
     if (allies.length === 0) { socket.emit('error', { message: 'Your party is empty.' }); return; }
@@ -986,6 +1070,8 @@ export function registerHandlers(
 
     socket.emit('campaign:resolved', {
       events, victory: outcome.victory, rounds: outcome.rounds, levelUps, rewards,
+      // Ending HP/mana so the client carries it into the next encounter.
+      allyHp: outcome.allyHp, allyMana: outcome.allyMana,
     });
   });
 
@@ -1000,11 +1086,14 @@ export function registerHandlers(
   // through player:award_xp(campaignComplete=true) from BiomeScene's victory
   // screen, so this handler only ever grants per-encounter rewards.
   socket.on('campaign:report', (payload: {
-    difficulty?: unknown; level?: unknown; mobCount?: unknown; victory?: unknown;
+    difficulty?: unknown; level?: unknown; mobCount?: unknown; victory?: unknown; tutorial?: unknown;
   }) => {
     const player = requireJoinedPlayer('You must join before fighting.');
     if (!player) return;
     if (payload?.victory !== true) return; // losses grant nothing
+    // Tutorial fights grant XP/silver only — their materials + token come from the
+    // fixed, one-time `tutorial:complete_level` reward, never the random roll.
+    const isTutorial = payload?.tutorial === true;
 
     const diff: Difficulty | null =
       typeof payload?.difficulty === 'string' && (DIFFICULTIES as string[]).includes(payload.difficulty)
@@ -1035,9 +1124,11 @@ export function registerHandlers(
     // campaign bonus is granted separately by player:award_xp on campaign clear).
     const silver = Math.min(5000, mobCount * Math.round(level * 1.5));
     if (silver > 0) playerManager.addSilver(socket.id, silver);
-    const rankMult = rankMultiplier(currentRank);
-    const { drops } = rollMaterials(level, diff, false, rankMult);
-    if (drops.length) playerManager.grantMaterials(socket.id, drops);
+    if (!isTutorial) {
+      const rankMult = rankMultiplier(currentRank);
+      const { drops } = rollMaterials(level, diff, false, rankMult);
+      if (drops.length) playerManager.grantMaterials(socket.id, drops);
+    }
 
     playerManager.persistProgress(socket.id);
     pushStats(); pushCurrency(); pushInventoryUpdate(); pushRoster();

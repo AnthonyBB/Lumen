@@ -60,6 +60,10 @@ export interface BattleResult {
   victory: boolean
   playerHp: number
   xpGained: number
+  /** Party combat only: each ally's ENDING HP/mana (id → value), so the campaign
+   *  can carry it into the next encounter and apply regen instead of a full heal. */
+  allyHp?: Record<string, number>
+  allyMana?: Record<string, number>
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────

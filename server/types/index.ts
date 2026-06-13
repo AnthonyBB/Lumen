@@ -101,6 +101,9 @@ export interface Player {
   campaignsCompleted: number;
   /** Recruit Tokens (persisted, ACCOUNT-wide) — spent to recruit new characters. */
   recruitTokens: number;
+  /** Lifetime Recruit Tokens EVER earned (monotonic; refunds don't count). Drives
+   *  the escalating recruit cost so hoarding tokens can't dodge the price ramp. */
+  recruitTokensEarned: number;
   /** Study-to-Haste stacks (persisted, ACCOUNT-wide). Each passed study test adds
    *  one; they reduce the automated-battle interval and expire on rolling 3-day
    *  clocks (see docs/CHARACTERS_DESIGN.md §3). */
@@ -108,6 +111,9 @@ export interface Player {
   /** Team deployments — each entry is one team auto-battling a campaign. Resolved
    *  lazily on access (docs/TEAMS_DESIGN.md §5; CHARACTERS_DESIGN.md §6/§7). */
   deployments: Deployment[];
+  /** Highest contiguous tutorial level cleared (0..3). 3 = tutorial done; while
+   *  < 3 the world hides all but the Tutorial Portal (docs/TUTORIAL_DESIGN.md). */
+  tutorialLevelsDone: number;
 }
 
 /** A team deployed to fight a campaign automatically while the player is away.

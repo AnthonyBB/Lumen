@@ -128,6 +128,11 @@ export interface MaterialRoll {
   richVein: boolean;
 }
 
+/** Chance a won battle drops a Recruit Token — earned anywhere (idle per battle,
+ *  live per campaign clear). Flat & uncapped; the escalating recruit cost is the
+ *  throttle, not the drop rate. Tune as needed. (CHARACTERS_DESIGN.md §2.) */
+export const TOKEN_DROP_CHANCE = 0.12;
+
 /**
  * Roll the materials a victory grants. Campaigns drop a mixed batch of metal +
  * reagent (tiers blended per difficulty) plus a chance-based, difficulty-gated

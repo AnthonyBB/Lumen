@@ -794,6 +794,9 @@ export class ChestScene extends Phaser.Scene {
     const slot = item.equipSlot ?? ''
 
     const lines: string[] = []
+    // Equip level gate first (so the player sees what it takes to use it).
+    if ((item.requiredLevel ?? 0) > 0) lines.push(`Requires Level ${item.requiredLevel}`)
+    else if ((item.xpRequired ?? 0) > 0) lines.push(`Requires ${item.xpRequired} XP`)
     if (item.baseDamage) lines.push(`Damage: ${item.baseDamage.min}–${item.baseDamage.max}`)
     if (typeof item.baseDefense === 'number') lines.push(`Defense: ${item.baseDefense}`)
     for (const a of item.attributes ?? []) lines.push(`+${a.value} ${this.attrLabel(a.type)}`)

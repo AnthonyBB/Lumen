@@ -116,7 +116,9 @@ const MID_PANEL_W  = 364
 const RIGHT_PANEL_X = 934
 const RIGHT_PANEL_W = 346
 const PANEL_Y       = 60
-const PANEL_H       = GAME_HEIGHT - 80
+// Leave room for the footer bar/text (drawn at GAME_HEIGHT-26..-13) so the panels
+// don't overlap it. Bottom ends at GAME_HEIGHT-36.
+const PANEL_H       = GAME_HEIGHT - 96
 const SLOT_SIZE     = 68
 const ITEM_ROW_H    = 64
 

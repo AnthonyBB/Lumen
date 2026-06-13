@@ -51,6 +51,8 @@ export interface IPlayerProgress extends Document {
   teams: unknown[]
   /** Recruit Tokens — spent to recruit new characters. */
   recruitTokens: number
+  /** Lifetime Recruit Tokens ever earned (drives the escalating recruit cost). */
+  recruitTokensEarned: number
   /** Study-to-Haste stacks ({ expiresAt, minutes }). */
   hasteStacks: unknown[]
   /** Idle campaign assignment ({ biome, difficulty, lastResolvedAt }) or null —
@@ -58,6 +60,8 @@ export interface IPlayerProgress extends Document {
   idle: unknown
   /** Team deployments ({ teamId, biome, difficulty, lastResolvedAt }[]). */
   deployments: unknown[]
+  /** Highest contiguous tutorial level cleared (0..3). 3 = tutorial done. */
+  tutorialLevelsDone: number
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -156,6 +160,11 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       default: 0,
       min: 0,
     },
+    recruitTokensEarned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     hasteStacks: {
       type: Schema.Types.Mixed,
       default: () => [],
@@ -167,6 +176,12 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     deployments: {
       type: Schema.Types.Mixed,
       default: () => [],
+    },
+    tutorialLevelsDone: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 3,
     },
   },
   { timestamps: true },

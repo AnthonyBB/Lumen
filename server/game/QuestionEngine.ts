@@ -18,6 +18,10 @@ import { MATH_QUESTIONS } from './data/questions/math.js';
 import { SCIENCE_QUESTIONS } from './data/questions/science.js';
 import { HISTORY_QUESTIONS } from './data/questions/history.js';
 import { LANGUAGE_QUESTIONS } from './data/questions/language.js';
+import { GEOGRAPHY_QUESTIONS } from './data/questions/geography.js';
+import { TECHNOLOGY_QUESTIONS } from './data/questions/technology.js';
+import { ARTS_QUESTIONS } from './data/questions/arts.js';
+import { HEALTH_QUESTIONS } from './data/questions/health.js';
 
 /** Seconds a player has to submit an answer (enforced server-side too). */
 export const ANSWER_TIME_LIMIT_SECONDS = 30;
@@ -35,6 +39,10 @@ const RAW_QUESTIONS: Omit<Question, 'id'>[] = [
   ...SCIENCE_QUESTIONS,
   ...HISTORY_QUESTIONS,
   ...LANGUAGE_QUESTIONS,
+  ...GEOGRAPHY_QUESTIONS,
+  ...TECHNOLOGY_QUESTIONS,
+  ...ARTS_QUESTIONS,
+  ...HEALTH_QUESTIONS,
 ];
 
 // ---------------------------------------------------------------------------

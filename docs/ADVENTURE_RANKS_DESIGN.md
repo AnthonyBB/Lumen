@@ -85,6 +85,37 @@ answer trivial questions, and gain power/loot cheaply, then exploit a high rank.
 base stats (tier comes from campaign **difficulty**, the bigger power axis). Rank
 scales you AND your foes together → **rank is the learning-level axis; tier/difficulty is the power-progression axis.** Range `M(college)/M(grade_1_3) ≈ 2.07×`. Keep `RANK_STEP = 1.2` as the single tuning knob.
 
+### 2b. Rank as a uniform "zoom" (IMPLEMENTED)
+
+The keystone above only cancels cleanly if *every* combat quantity scales with `M`
+— otherwise an un-scaled term (e.g. attribute-derived HP, or the flat damage
+mitigation constant) re-introduces drift. The implemented rule: **rank multiplies
+the whole fight uniformly.**
+
+- **Player innate stats ×M(currentRank)** — `deriveCombatStats` / `computeStats`
+  scale the flat-base + class-attribute portion (`(50 + CON·6)·M`, etc.). Gear's
+  `baseDefense` keeps `M(min(craftRank,currentRank))` (so off-rank gear still
+  lags — the learning gate survives, softened); gear affixes are added flat.
+- **Mob HP / attack / defense ×M(currentRank)** — `buildEnemyCombatant` (server)
+  and `PartyManualBattleScene.makeEnemy` (client).
+- **Mitigation constant ×M(currentRank)** — the `100` in `raw·100/(100+def)`
+  becomes `100·M` in both `resolver.ts` (`BattleInput.rankMult`) and
+  `PartyManualBattleScene.damageUnit`. Without this the ratio's fixed `+100`
+  makes defence relatively stronger at high `M` (higher ranks too *easy*).
+
+Result: a rank-appropriate fight is **identical at every rank** (≈11 enemy
+hits-to-down an ally, mid-game), instead of drifting harder/easier.
+
+### 2c. Attribute→stat coefficients reduced ×0.6 (IMPLEMENTED)
+
+With class-based attribute scaling (+5 effective points/level) the old
+coefficients made allies far too durable at the M=1 baseline (~18 hits-to-down).
+All attribute-tied coefficients were reduced by a uniform ×0.6 (so relative class
+profiles are preserved): HP `CON·10→·6`, attack/magic/defense/speed/healing
+`·2→·1.2`, mana `·8→·5`, crit/mana-regen `·0.5→·0.3`, health-regen `·1→·0.6`.
+Flat bases (50 HP, 20 mana, etc.) are unchanged. This sets the (now flat) baseline
+to ≈11 hits-to-down. Supersedes the earlier "tempering" options.
+
 ## 3. Item data changes (`craftRank` tag)
 
 Crafted gear AND potions must carry the rank they were crafted at.

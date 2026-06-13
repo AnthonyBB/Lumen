@@ -44,14 +44,20 @@ export interface IPlayerProgress extends Document {
   characters: Character[]
   /** Which roster character is active. */
   activeCharacterId: string
-  /** Ordered campaign party (≤4 owned character ids). */
+  /** Ordered campaign party (≤4 owned character ids) — LEGACY mirror of teams[0],
+   *  kept for migration/rollback (see docs/TEAMS_DESIGN.md §8). */
   party: string[]
+  /** Saved teams (squads); teams[0] is the active campaign party. */
+  teams: unknown[]
   /** Recruit Tokens — spent to recruit new characters. */
   recruitTokens: number
   /** Study-to-Haste stacks ({ expiresAt, minutes }). */
   hasteStacks: unknown[]
-  /** Idle campaign assignment ({ biome, difficulty, lastResolvedAt }) or null. */
+  /** Idle campaign assignment ({ biome, difficulty, lastResolvedAt }) or null —
+   *  LEGACY single-deploy, kept for migration into `deployments` (TEAMS §5/§8). */
   idle: unknown
+  /** Team deployments ({ teamId, biome, difficulty, lastResolvedAt }[]). */
+  deployments: unknown[]
 }
 
 const PlayerProgressSchema = new Schema<IPlayerProgress>(
@@ -75,7 +81,7 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     },
     subjectGrades: {
       type: Schema.Types.Mixed,
-      default: () => ({ math: 1, science: 1, history: 1, language: 1 }),
+      default: () => ({ math: 1, science: 1, history: 1, language: 1, geography: 1, technology: 1, arts: 1, health: 1 }),
     },
     adventureRank: {
       type: String,
@@ -141,6 +147,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
       type: [String],
       default: [],
     },
+    teams: {
+      type: Schema.Types.Mixed,
+      default: () => [],
+    },
     recruitTokens: {
       type: Number,
       default: 0,
@@ -153,6 +163,10 @@ const PlayerProgressSchema = new Schema<IPlayerProgress>(
     idle: {
       type: Schema.Types.Mixed,
       default: null,
+    },
+    deployments: {
+      type: Schema.Types.Mixed,
+      default: () => [],
     },
   },
   { timestamps: true },

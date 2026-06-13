@@ -65,37 +65,9 @@ export class UIScene extends Phaser.Scene {
     panelBg.fillRoundedRect(6, 6, 180, 54, 8)
     panelBg.setDepth(-1)
 
-    // Top-right: HP bar
-    const hpBarX = GAME_WIDTH - 210
-    const hpBarY = 14
-
-    const hpBg = this.add.graphics()
-    hpBg.fillStyle(0x000000, 0.5)
-    hpBg.fillRoundedRect(hpBarX - 10, hpBarY - 8, 210, 46, 8)
-
-    this.add.text(hpBarX + 5, hpBarY, 'HP', {
-      fontSize: '13px',
-      fontFamily: 'Arial, sans-serif',
-      color: '#ffffff',
-      fontStyle: 'bold',
-    })
-
-    // HP bar background
-    const hpBarBg = this.add.graphics()
-    hpBarBg.fillStyle(0x555555, 1)
-    hpBarBg.fillRoundedRect(hpBarX + 28, hpBarY + 2, 160, 18, 5)
-
-    // HP bar fill
-    const hpBarFill = this.add.graphics()
-    hpBarFill.fillStyle(0xdd2222, 1)
-    hpBarFill.fillRoundedRect(hpBarX + 30, hpBarY + 4, 154, 14, 4)
-
-    // HP text
-    this.add.text(hpBarX + 110, hpBarY + 3, '100 / 100', {
-      fontSize: '11px',
-      fontFamily: 'Arial, sans-serif',
-      color: '#ffffff',
-    }).setOrigin(0.5, 0)
+    // (No overworld HP bar: HP is a per-character combat resource that
+    // regenerates between fights and is shown in the battle screens, so a single
+    // town-wide HP readout is meaningless.)
 
     // Bottom-center: movement hint + equipment shortcut
     this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 22, 'Arrow keys or WASD to move', {

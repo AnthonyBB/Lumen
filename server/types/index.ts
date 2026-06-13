@@ -48,6 +48,23 @@ export interface Character {
   attributePoints: Record<AttributeKey, number>;
 }
 
+/** A saved squad: an ordered group of up to 4 owned character ids that fight
+ *  together, with display identity (name/crest/color). Teams partition the
+ *  roster — a character is on at most one team (see docs/TEAMS_DESIGN.md §2).
+ *  Slot order is cosmetic; combat turn order is by Speed (§4). */
+export interface Team {
+  /** Stable uuid (persisted). */
+  id: string;
+  /** Player-facing team name. */
+  name: string;
+  /** Crest icon key (display only). */
+  crest: string;
+  /** Accent color, hex or palette id (display only). */
+  color: string;
+  /** Ordered owned character ids, ≤4. */
+  memberIds: string[];
+}
+
 export interface Player {
   id: string;           // socket ID
   username: string;     // account name
@@ -59,9 +76,10 @@ export interface Player {
   /** Which character is currently active (drives the town avatar and the
    *  Character/Equipment screens). */
   activeCharacterId: string;
-  /** The campaign party — an ordered list of up to 4 owned character ids that
-   *  fight together (see docs/CHARACTERS_DESIGN.md §5). Always has ≥1 entry. */
-  party: string[];
+  /** Saved teams (squads). Each is an ordered ≤4 group of owned character ids;
+   *  a character is on at most one team (exclusive — docs/TEAMS_DESIGN.md §2).
+   *  teams[0] is the active campaign party and always has ≥1 entry. */
+  teams: Team[];
   /** Current grade per subject (persisted, ACCOUNT-wide), 1..12, or 13
    *  (MASTERED_GRADE) when all 12 grades of a subject are complete. */
   subjectGrades: Record<Subject, number>;
@@ -87,14 +105,28 @@ export interface Player {
    *  one; they reduce the automated-battle interval and expire on rolling 3-day
    *  clocks (see docs/CHARACTERS_DESIGN.md §3). */
   hasteStacks: HasteStack[];
-  /** The team's idle campaign assignment, or null when not deployed. Resolved
-   *  lazily on access (see docs/CHARACTERS_DESIGN.md §6/§7). */
-  idle: IdleAssignment | null;
+  /** Team deployments — each entry is one team auto-battling a campaign. Resolved
+   *  lazily on access (docs/TEAMS_DESIGN.md §5; CHARACTERS_DESIGN.md §6/§7). */
+  deployments: Deployment[];
 }
 
-/** A team deployed to fight a campaign automatically while the player is away. */
+/** A team deployed to fight a campaign automatically while the player is away.
+ *  Legacy single-assignment shape; superseded by Deployment (kept for migration). */
 export interface IdleAssignment {
   /** Campaign biome (for display). */
+  biome: string;
+  /** Campaign difficulty (a Difficulty key). */
+  difficulty: string;
+  /** Unix ms up to which idle battles have already been credited. */
+  lastResolvedAt: number;
+}
+
+/** One team deployed to auto-battle a campaign (docs/TEAMS_DESIGN.md §5). One
+ *  deployment per team; many teams may be deployed at once. */
+export interface Deployment {
+  /** The deployed team's id (Team.id). */
+  teamId: string;
+  /** Campaign biome (for display + encounter flavour). */
   biome: string;
   /** Campaign difficulty (a Difficulty key). */
   difficulty: string;
@@ -143,6 +175,12 @@ export interface StatsUpdatePayload {
   derived: StatRow[];
   unspentPoints: number;
   level: number;
+  /** Total accumulated XP for the active character. */
+  xp: number;
+  /** XP earned INTO the current level (0 .. xpForNextLevel). */
+  xpIntoLevel: number;
+  /** XP span of the current level (current→next threshold). 0 at LEVEL_CAP. */
+  xpForNextLevel: number;
 }
 
 /** Client → server `character:allocate` payload. */
@@ -165,7 +203,7 @@ export interface PublicPlayer {
 // Questions
 // ---------------------------------------------------------------------------
 
-export type Subject = 'math' | 'science' | 'history' | 'language';
+export type Subject = 'math' | 'science' | 'history' | 'language' | 'geography' | 'technology' | 'arts' | 'health';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 
 /** Full question record — stored server-side only. */
@@ -434,7 +472,11 @@ export interface InventoryItem {
    *  These are the authoritative source for stats — the client never sets them. */
   equipSlot?: EquipSlot;
   attributes?: ItemAttribute[];
+  /** Legacy XP gate — kept for market valuation + back-compat. */
   xpRequired?: number;
+  /** Minimum character LEVEL to equip (tier + rarity) — the authoritative equip
+   *  gate for newly-rolled gear. Legacy items fall back to xpRequired. */
+  requiredLevel?: number;
   /** Weapons: level-scaled base damage range (drives the basic attack). */
   baseDamage?: { min: number; max: number };
   /** Armor: level-scaled base defense (adds to the Defense stat). */
@@ -502,6 +544,9 @@ export interface InventorySnapshot {
  */
 export interface EquipmentEquipPayload {
   itemId: string;
+  /** Roster member to equip onto. Validated server-side; defaults to the active
+   *  character when absent. The level gate checks THIS character's level. */
+  characterId?: string;
 }
 
 /**
@@ -511,6 +556,8 @@ export interface EquipmentEquipPayload {
  */
 export interface EquipmentUnequipPayload {
   slot: EquipmentSlotKey;
+  /** Roster member to unequip from. Validated server-side; defaults to active. */
+  characterId?: string;
 }
 
 // ---------------------------------------------------------------------------

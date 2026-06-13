@@ -1,17 +1,20 @@
 // ============================================================
-// CharacterScene — the character sheet.
+// CharacterScene — the ACTIVE TEAM sheet.
 //
-// SECURITY: this scene only RENDERS the server-pushed stats
-// snapshot (StatsStore, fed by 'stats:update') and requests
-// allocation via 'character:allocate'.  The five attributes,
-// allocation points, and all derived combat stats are computed
-// and validated server-side; nothing here changes a stat locally.
+// Shows every member of the active team (teams[0]) as a selectable
+// rail; the selected member's full attribute + combat breakdown fills
+// the detail panels. You can also switch which member you "play as".
+//
+// SECURITY: this scene only RENDERS the server-pushed team sheet
+// ('team:sheet', computed by handlers from server-authoritative
+// PlayerManager.computeStats per member). Nothing here changes a stat
+// locally; "play as" just requests 'roster:set_active'.
 // ============================================================
 
 import Phaser from 'phaser'
 import type { Socket } from 'socket.io-client'
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants'
-import { StatsStore, type ClientStats, type ClientStatRow } from '../systems/StatsStore'
+import type { ClientStats, ClientStatRow } from '../systems/StatsStore'
 
 const STAT_COLORS: Record<string, number> = {
   constitution: 0xdd4444,
@@ -29,18 +32,54 @@ const STAT_DESCRIPTIONS: Record<string, string> = {
   spirit: 'Willpower & healing',
 }
 
+/** Accent color per class (mirrors BattleScene CLASS_COLORS). */
+const CLASS_COLORS: Record<string, number> = {
+  fire_mage: 0xff4400, ice_mage: 0x44aaff, lightning_mage: 0xffee00,
+  sword: 0xcc8855, spear: 0xaa9966, axe: 0xbb5533, hammer: 0x997755,
+  monk: 0xffaa66, paladin: 0xffd700, assassin: 0x9955cc,
+  cleric: 0x44ff88, shaman: 0x55cc77, bard: 0xff77cc,
+}
+const classColor = (cls: string): number => CLASS_COLORS[cls] ?? 0x8888aa
+/** 'fire_mage' → 'Fire Mage'. */
+const classLabel = (cls: string): string =>
+  cls.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+
+/** A single active-team member with its full server-computed sheet. */
+interface SheetMember {
+  id: string
+  name: string
+  class: string
+  level: number
+  power: number
+  stats: ClientStats
+}
+interface TeamSheet {
+  teamId: string
+  teamName: string
+  activeCharacterId: string
+  members: SheetMember[]
+}
+
+// Left panel geometry (the member rail + selected portrait live here).
+const LEFT_X = 30, LEFT_W = 370
+const RAIL_TOP = 374, CARD_H = 44, CARD_GAP = 6
+
 export class CharacterScene extends Phaser.Scene {
   private cKey!: Phaser.Input.Keyboard.Key
   private escKey!: Phaser.Input.Keyboard.Key
 
   private socket: Socket | null = null
-  private stats: ClientStats | null = null
+  private sheet: TeamSheet | null = null
+  private selectedId = ''
 
-  // Dynamic containers (rebuilt on every stats:update)
+  // Dynamic containers (rebuilt on every sheet update / selection change)
+  private leftContainer!: Phaser.GameObjects.Container
   private attrContainer!: Phaser.GameObjects.Container
   private derivedContainer!: Phaser.GameObjects.Container
-  private pointsText!: Phaser.GameObjects.Text
+  private headerTitle!: Phaser.GameObjects.Text
   private feedbackText!: Phaser.GameObjects.Text
+
+  private xpBar = { x: 0, y: 0, w: 0, h: 12 }
 
   constructor() {
     super({ key: 'CharacterScene' })
@@ -48,15 +87,15 @@ export class CharacterScene extends Phaser.Scene {
 
   create() {
     this.socket = (window as typeof window & { __lumenSocket?: Socket }).__lumenSocket ?? null
-    this.stats = StatsStore.get()
 
     this.drawBackground()
     this.buildHeader()
-    this.buildLeftPanel()
+    this.buildLeftFrame()
     this.buildCenterPanelFrame()
     this.buildRightPanelFrame()
     this.buildFooter()
 
+    this.leftContainer = this.add.container(0, 0)
     this.attrContainer = this.add.container(0, 0)
     this.derivedContainer = this.add.container(0, 0)
 
@@ -66,18 +105,19 @@ export class CharacterScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5).setDepth(50).setVisible(false)
 
     // ── Server state is the only source of truth ──────────────────────────
-    const unsubscribe = StatsStore.onUpdate((s) => this.applyStats(s))
+    const onSheet = (data: TeamSheet) => this.applySheet(data)
     const onError = (err: { message?: string }) => {
       if (err?.message) this.showFeedback(err.message)
     }
+    this.socket?.on('team:sheet', onSheet)
     this.socket?.on('error', onError)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      unsubscribe()
+      this.socket?.off('team:sheet', onSheet)
       this.socket?.off('error', onError)
     })
 
-    this.renderStats()
-    this.socket?.emit('stats:get')
+    this.renderAll()
+    this.socket?.emit('team:get_sheet')
 
     this.cKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.C)
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
@@ -94,9 +134,35 @@ export class CharacterScene extends Phaser.Scene {
     this.scene.resume('WorldScene')
   }
 
-  private applyStats(stats: ClientStats) {
-    this.stats = stats
-    this.renderStats()
+  private applySheet(sheet: TeamSheet) {
+    this.sheet = sheet
+    // Keep the current selection if it still exists, else default to the active
+    // member (or the first member).
+    const ids = new Set(sheet.members.map((m) => m.id))
+    if (!ids.has(this.selectedId)) {
+      this.selectedId = ids.has(sheet.activeCharacterId)
+        ? sheet.activeCharacterId
+        : (sheet.members[0]?.id ?? '')
+    }
+    this.renderAll()
+  }
+
+  private selected(): SheetMember | undefined {
+    return this.sheet?.members.find((m) => m.id === this.selectedId)
+  }
+
+  private select(id: string) {
+    if (this.selectedId === id) return
+    this.selectedId = id
+    this.renderAll()
+  }
+
+  /** Ask the server to make `id` the character the player controls. */
+  private playAs(id: string) {
+    if (!this.socket || this.sheet?.activeCharacterId === id) return
+    this.socket.emit('roster:set_active', { characterId: id })
+    // Refresh the sheet so the active marker + portrait update.
+    this.socket.emit('team:get_sheet')
   }
 
   private showFeedback(message: string) {
@@ -121,7 +187,7 @@ export class CharacterScene extends Phaser.Scene {
   }
 
   private buildHeader() {
-    this.add.text(GAME_WIDTH / 2, 56, 'Character Sheet', {
+    this.headerTitle = this.add.text(GAME_WIDTH / 2, 56, 'Active Team', {
       fontSize: '32px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
     }).setOrigin(0.5, 0.5)
 
@@ -130,65 +196,14 @@ export class CharacterScene extends Phaser.Scene {
     div.lineBetween(40, 96, GAME_WIDTH - 40, 96)
   }
 
-  // ─── LEFT PANEL (portrait + level + allocation summary) ──────────────────
-
-  private buildLeftPanel() {
-    const panelX = 30
-    const panelY = 110
-    const panelW = 370
+  /** Static frame for the left panel (member rail + selected portrait). */
+  private buildLeftFrame() {
     const panelH = GAME_HEIGHT - 150
-
-    const panel = this.add.container(panelX, panelY)
     const panelBg = this.add.graphics()
     panelBg.fillStyle(0x12122e, 1)
-    panelBg.fillRoundedRect(0, 0, panelW, panelH, 12)
+    panelBg.fillRoundedRect(LEFT_X, 110, LEFT_W, panelH, 12)
     panelBg.lineStyle(1, 0xffd700, 0.35)
-    panelBg.strokeRoundedRect(0, 0, panelW, panelH, 12)
-    panel.add(panelBg)
-
-    // Character portrait — the player's front-facing sprite
-    this.addCharacterPortrait(panel, panelW / 2, 150)
-
-    // Level badge (updated from stats)
-    const levelY = 300
-    const levelBadge = this.add.graphics()
-    levelBadge.fillStyle(0x1e1e42, 1)
-    levelBadge.fillRoundedRect(panelW / 2 - 70, levelY, 140, 30, 8)
-    levelBadge.lineStyle(1, 0xffd700, 0.7)
-    levelBadge.strokeRoundedRect(panelW / 2 - 70, levelY, 140, 30, 8)
-    panel.add(levelBadge)
-
-    const levelText = this.add.text(panelW / 2, levelY + 15, `Level  ${this.stats?.level ?? 1}`, {
-      fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5)
-    panel.add(levelText)
-
-    // Unspent-points callout
-    const pointsY = levelY + 56
-    const pBadge = this.add.graphics()
-    pBadge.fillStyle(0x1a2a1a, 1)
-    pBadge.fillRoundedRect(30, pointsY, panelW - 60, 64, 10)
-    pBadge.lineStyle(1, 0x44cc66, 0.6)
-    pBadge.strokeRoundedRect(30, pointsY, panelW - 60, 64, 10)
-    panel.add(pBadge)
-
-    panel.add(
-      this.add.text(panelW / 2, pointsY + 12, 'Unspent Points', {
-        fontSize: '13px', fontFamily: 'Arial, sans-serif', color: '#88cc99',
-      }).setOrigin(0.5, 0)
-    )
-    this.pointsText = this.add.text(panelW / 2, pointsY + 30, String(this.stats?.unspentPoints ?? 0), {
-      fontSize: '24px', fontFamily: 'Georgia, serif', color: '#66ff88', fontStyle: 'bold',
-    }).setOrigin(0.5, 0)
-    panel.add(this.pointsText)
-
-    panel.add(
-      this.add.text(panelW / 2, panelH - 60,
-        'You earn 3 points per level.\nSpend them with the  +  buttons.', {
-          fontSize: '11px', fontFamily: 'Arial, sans-serif',
-          color: '#556699', align: 'center',
-        }).setOrigin(0.5, 0)
-    )
+    panelBg.strokeRoundedRect(LEFT_X, 110, LEFT_W, panelH, 12)
   }
 
   private buildCenterPanelFrame() {
@@ -234,35 +249,239 @@ export class CharacterScene extends Phaser.Scene {
   }
 
   private buildFooter() {
-    this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 24, 'Press  C  or  Escape  to close', {
+    this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 24, 'Click a member to inspect  ·  Press  C  or  Escape  to close', {
       fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#666688',
       backgroundColor: '#00000066', padding: { x: 14, y: 5 },
     }).setOrigin(0.5, 1)
   }
 
-  // ─── DYNAMIC STAT RENDERING ──────────────────────────────────────────────
+  // ─── RENDER ──────────────────────────────────────────────────────────────
 
-  private renderStats() {
+  private renderAll() {
     this.attrContainer?.removeAll(true)
     this.derivedContainer?.removeAll(true)
+    this.leftContainer?.removeAll(true)
 
-    if (this.pointsText) this.pointsText.setText(String(this.stats?.unspentPoints ?? 0))
+    if (this.sheet) {
+      this.headerTitle.setText(`Active Team — ${this.sheet.teamName}`)
+    }
 
-    if (!this.stats) {
-      this.attrContainer.add(
-        this.add.text(660, 300, 'Loading stats…', {
-          fontSize: '15px', fontFamily: 'Arial, sans-serif', color: '#445566',
+    const sel = this.selected()
+    if (!sel) {
+      this.leftContainer.add(
+        this.add.text(LEFT_X + LEFT_W / 2, 300, this.sheet ? 'No members in this team.' : 'Loading team…', {
+          fontSize: '14px', fontFamily: 'Arial, sans-serif', color: '#556699', align: 'center',
         }).setOrigin(0.5, 0.5)
       )
       return
     }
 
-    this.renderAttributes(this.stats.attributes, this.stats.unspentPoints)
-    this.renderDerived(this.stats.derived)
+    this.renderLeft(sel)
+    this.renderAttributes(sel.stats.attributes)
+    this.renderDerived(sel.stats.derived)
   }
 
-  /** Five attribute rows, each with total, base+gear breakdown, and a [+] button. */
-  private renderAttributes(rows: ClientStatRow[], unspent: number) {
+  /** Left panel: selected member's portrait + level/XP + the team rail. */
+  private renderLeft(sel: SheetMember) {
+    const cx = LEFT_X + LEFT_W / 2
+
+    // Selected portrait (class-ringed hero sprite).
+    this.drawPortrait(cx, 168, 46, sel.class)
+    this.leftContainer.add(
+      this.add.text(cx, 224, sel.name, {
+        fontSize: '20px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0)
+    )
+    this.leftContainer.add(
+      this.add.text(cx, 248, classLabel(sel.class), {
+        fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#aab0d6',
+      }).setOrigin(0.5, 0)
+    )
+
+    // Level badge.
+    const levelY = 270
+    const lb = this.add.graphics()
+    lb.fillStyle(0x1e1e42, 1)
+    lb.fillRoundedRect(cx - 70, levelY, 140, 26, 8)
+    lb.lineStyle(1, 0xffd700, 0.7)
+    lb.strokeRoundedRect(cx - 70, levelY, 140, 26, 8)
+    this.leftContainer.add(lb)
+    this.leftContainer.add(
+      this.add.text(cx, levelY + 13, `Level  ${sel.stats.level}`, {
+        fontSize: '15px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5)
+    )
+
+    // XP bar.
+    const xpY = levelY + 34
+    const xpW = LEFT_W - 80
+    this.xpBar = { x: LEFT_X + 40, y: xpY, w: xpW, h: 12 }
+    this.drawXpBar(sel.stats)
+
+    // Active / Play-as control.
+    const isActive = this.sheet?.activeCharacterId === sel.id
+    const ctlY = xpY + 24
+    if (isActive) {
+      this.leftContainer.add(
+        this.add.text(cx, ctlY, '★ Currently playing as this hero', {
+          fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#66ff88',
+        }).setOrigin(0.5, 0)
+      )
+    } else {
+      const bw = 200, bx = cx - bw / 2
+      const btn = this.add.graphics()
+      btn.fillStyle(0x223322, 1)
+      btn.fillRoundedRect(bx, ctlY, bw, 24, 6)
+      btn.lineStyle(1, 0x44cc66, 0.8)
+      btn.strokeRoundedRect(bx, ctlY, bw, 24, 6)
+      this.leftContainer.add(btn)
+      this.leftContainer.add(
+        this.add.text(cx, ctlY + 12, '▶  Play as this hero', {
+          fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#aaffbb', fontStyle: 'bold',
+        }).setOrigin(0.5, 0.5)
+      )
+      const hit = this.add.rectangle(bx, ctlY, bw, 24, 0x000000, 0).setOrigin(0, 0).setInteractive({ useHandCursor: true })
+      hit.on('pointerup', () => this.playAs(sel.id))
+      this.leftContainer.add(hit)
+    }
+
+    // Team rail divider + label.
+    const div = this.add.graphics()
+    div.lineStyle(1, 0xffd700, 0.2)
+    div.lineBetween(LEFT_X + 20, RAIL_TOP - 14, LEFT_X + LEFT_W - 20, RAIL_TOP - 14)
+    this.leftContainer.add(div)
+    this.leftContainer.add(
+      this.add.text(LEFT_X + 24, RAIL_TOP - 30, 'TEAM', {
+        fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#8888bb', fontStyle: 'bold',
+      }).setOrigin(0, 0)
+    )
+
+    // Member cards.
+    const members = this.sheet?.members ?? []
+    members.forEach((m, i) => this.drawMemberCard(m, RAIL_TOP + i * (CARD_H + CARD_GAP)))
+  }
+
+  private drawXpBar(stats: ClientStats) {
+    const { x, y, w, h } = this.xpBar
+    const bg = this.add.graphics()
+    bg.fillStyle(0x05050f, 1)
+    bg.fillRoundedRect(x, y, w, h, 6)
+    bg.lineStyle(1, 0xffd700, 0.4)
+    bg.strokeRoundedRect(x, y, w, h, 6)
+    this.leftContainer.add(bg)
+
+    const span = stats.xpForNextLevel
+    const into = stats.xpIntoLevel
+    const maxed = span <= 0
+    const frac = maxed ? 1 : Phaser.Math.Clamp(into / span, 0, 1)
+    if (frac > 0) {
+      const fill = this.add.graphics()
+      fill.fillStyle(maxed ? 0xffd700 : 0x55bbff, 1)
+      fill.fillRoundedRect(x + 1, y + 1, Math.max(2, (w - 2) * frac), h - 2, 5)
+      this.leftContainer.add(fill)
+    }
+    this.leftContainer.add(
+      this.add.text(x + w / 2, y + h / 2, maxed ? 'MAX LEVEL' : `${into} / ${span} XP`, {
+        fontSize: '10px', fontFamily: 'Arial, sans-serif', color: '#e8e8ff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5)
+    )
+  }
+
+  /** A selectable member card in the team rail. */
+  private drawMemberCard(m: SheetMember, y: number) {
+    const x = LEFT_X + 14
+    const w = LEFT_W - 28
+    const selected = m.id === this.selectedId
+    const isActive = this.sheet?.activeCharacterId === m.id
+    const accent = classColor(m.class)
+
+    const card = this.add.graphics()
+    card.fillStyle(selected ? 0x24244e : 0x161632, selected ? 1 : 0.55)
+    card.fillRoundedRect(x, y, w, CARD_H, 8)
+    card.lineStyle(selected ? 2 : 1, selected ? 0xffd700 : 0x33335a, selected ? 0.9 : 0.6)
+    card.strokeRoundedRect(x, y, w, CARD_H, 8)
+    // Class accent stripe.
+    card.fillStyle(accent, 1)
+    card.fillRoundedRect(x, y, 4, CARD_H, 2)
+    this.leftContainer.add(card)
+
+    // Class medallion.
+    this.drawMedallion(x + 28, y + CARD_H / 2, 15, m.class)
+
+    // Name + meta.
+    this.leftContainer.add(
+      this.add.text(x + 50, y + 7, m.name, {
+        fontSize: '14px', fontFamily: 'Georgia, serif',
+        color: selected ? '#ffffff' : '#ccccdd', fontStyle: 'bold',
+      }).setOrigin(0, 0)
+    )
+    this.leftContainer.add(
+      this.add.text(x + 50, y + 26, `Lv ${m.level} · ${classLabel(m.class)}`, {
+        fontSize: '10px', fontFamily: 'Arial, sans-serif', color: '#8a90bb',
+      }).setOrigin(0, 0)
+    )
+
+    // Power (right) + active marker.
+    this.leftContainer.add(
+      this.add.text(x + w - 12, y + 8, `${m.power}`, {
+        fontSize: '16px', fontFamily: 'Georgia, serif', color: '#ffd700', fontStyle: 'bold',
+      }).setOrigin(1, 0)
+    )
+    this.leftContainer.add(
+      this.add.text(x + w - 12, y + 28, isActive ? '★ playing' : 'PWR', {
+        fontSize: '9px', fontFamily: 'Arial, sans-serif', color: isActive ? '#66ff88' : '#7777aa',
+      }).setOrigin(1, 0)
+    )
+
+    const hit = this.add.rectangle(x, y, w, CARD_H, 0x000000, 0).setOrigin(0, 0).setInteractive({ useHandCursor: true })
+    hit.on('pointerup', () => this.select(m.id))
+    this.leftContainer.add(hit)
+  }
+
+  /** Class-colored medallion (placeholder portrait until per-class sprites land). */
+  private drawMedallion(cx: number, cy: number, r: number, cls: string) {
+    const color = classColor(cls)
+    const g = this.add.graphics()
+    g.fillStyle(color, 0.22); g.fillCircle(cx, cy, r)
+    g.lineStyle(2, color, 0.9); g.strokeCircle(cx, cy, r)
+    this.leftContainer.add(g)
+    this.leftContainer.add(
+      this.add.text(cx, cy, classLabel(cls).charAt(0), {
+        fontSize: `${Math.round(r * 1.1)}px`, fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5)
+    )
+  }
+
+  /** Large selected portrait: animated hero sprite inside a class-colored ring. */
+  private drawPortrait(cx: number, cy: number, r: number, cls: string) {
+    const color = classColor(cls)
+    const shadow = this.add.graphics()
+    shadow.fillStyle(0x000000, 0.18)
+    shadow.fillEllipse(cx, cy + r + 6, r * 1.5, 10)
+    this.leftContainer.add(shadow)
+
+    const ring = this.add.graphics()
+    ring.fillStyle(color, 0.16); ring.fillCircle(cx, cy, r + 4)
+    ring.lineStyle(3, color, 0.9); ring.strokeCircle(cx, cy, r + 4)
+    this.leftContainer.add(ring)
+
+    if (this.textures.exists('character_idle')) {
+      const hero = this.add.sprite(cx, cy + 4, 'character_idle', 12).setScale(2.2)
+      if (this.anims.exists('idle_down')) hero.play('idle_down')
+      this.leftContainer.add(hero)
+    } else {
+      this.leftContainer.add(
+        this.add.text(cx, cy, classLabel(cls).charAt(0), {
+          fontSize: `${r}px`, fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
+        }).setOrigin(0.5, 0.5)
+      )
+    }
+  }
+
+  // ─── DYNAMIC STAT RENDERING (selected member) ────────────────────────────
+
+  /** Five attribute rows, each with total and a base/+gear breakdown. */
+  private renderAttributes(rows: ClientStatRow[]) {
     const panX = 410
     const panW = 500
     const rowStartY = 110 + 60
@@ -297,8 +516,8 @@ export class CharacterScene extends Phaser.Scene {
         }).setOrigin(0, 0)
       )
 
-      // Total value + (base / +gear) breakdown, right side, left of the [+] button.
-      const valRightX = panX + panW - 70
+      // Total value + (base / +gear) breakdown, right side.
+      const valRightX = panX + panW - 30
       this.attrContainer.add(
         this.add.text(valRightX, rowY + 8, String(row.total), {
           fontSize: '28px', fontFamily: 'Georgia, serif', color: '#ffffff', fontStyle: 'bold',
@@ -314,16 +533,13 @@ export class CharacterScene extends Phaser.Scene {
         }).setOrigin(1, 0)
       )
 
-      // Two-segment bar (base blue + gear green)
+      // Two-segment bar (base + gear)
       this.drawAttrBar(row, panX + 76, rowY + 56, panW - 160, color)
-
-      // [+] allocation button
-      this.createAllocateButton(row.key, panX + panW - 52, rowY + 14, unspent > 0)
     })
   }
 
   private drawAttrBar(row: ClientStatRow, x: number, y: number, maxW: number, baseColor: number) {
-    const scale = 30 // attributes rarely exceed this in early game
+    const scale = 40 // attributes rarely exceed this in early game
     const baseFrac = Math.min(1, row.base / scale)
     const totFrac = Math.min(1, row.total / scale)
     const baseW = baseFrac * maxW
@@ -339,43 +555,6 @@ export class CharacterScene extends Phaser.Scene {
     bar.fillStyle(baseColor, 1)
     bar.fillRoundedRect(x, y, Math.max(Math.min(baseW, totW), 2), 10, 4)
     this.attrContainer.add(bar)
-  }
-
-  private createAllocateButton(attrKey: string, x: number, y: number, enabled: boolean) {
-    const w = 40
-    const h = 40
-    const btn = this.add.graphics()
-    const draw = (col: number, border: number) => {
-      btn.clear()
-      btn.fillStyle(col, 1)
-      btn.fillRoundedRect(x, y, w, h, 8)
-      btn.lineStyle(2, border, enabled ? 1 : 0.4)
-      btn.strokeRoundedRect(x, y, w, h, 8)
-    }
-    draw(enabled ? 0x1a3a1a : 0x222233, enabled ? 0x44cc66 : 0x444455)
-    this.attrContainer.add(btn)
-
-    const label = this.add.text(x + w / 2, y + h / 2, '+', {
-      fontSize: '24px', fontFamily: 'Arial, sans-serif',
-      color: enabled ? '#66ff88' : '#555566', fontStyle: 'bold',
-    }).setOrigin(0.5, 0.5)
-    this.attrContainer.add(label)
-
-    if (!enabled) return
-
-    const hit = this.add.rectangle(x + w / 2, y + h / 2, w, h, 0, 0)
-      .setInteractive({ useHandCursor: true })
-    hit.on('pointerover', () => draw(0x2a5a2a, 0x66ff88))
-    hit.on('pointerout', () => draw(0x1a3a1a, 0x44cc66))
-    hit.on('pointerdown', () => {
-      if (!this.socket?.connected) {
-        this.showFeedback('Not connected to the server.')
-        return
-      }
-      // Request only — the server validates unspent points and pushes new stats.
-      this.socket.emit('character:allocate', { attribute: attrKey })
-    })
-    this.attrContainer.add(hit)
   }
 
   /** Derived combat stats, each showing total and a base/+gear breakdown. */
@@ -418,7 +597,7 @@ export class CharacterScene extends Phaser.Scene {
     })
   }
 
-  // ─── ICON / PORTRAIT ART ─────────────────────────────────────────────────
+  // ─── ICON ART ────────────────────────────────────────────────────────────
 
   private drawStatIcon(g: Phaser.GameObjects.Graphics, stat: string, cx: number, cy: number, color: number) {
     g.fillStyle(color, 0.2)
@@ -461,23 +640,6 @@ export class CharacterScene extends Phaser.Scene {
         g.fillStyle(0xff88ff, 0.8)
         g.fillTriangle(cx, cy - 6, cx - 5, cy + 8, cx + 5, cy + 8)
         break
-    }
-  }
-
-  /** The player's own front-facing character sprite (same art as the overworld
-   *  avatar), added to the given panel container at local (cx, cy). */
-  private addCharacterPortrait(
-    container: Phaser.GameObjects.Container, cx: number, cy: number,
-  ) {
-    const shadow = this.add.graphics()
-    shadow.fillStyle(0x000000, 0.18)
-    shadow.fillEllipse(cx, cy + 70, 72, 12)
-    container.add(shadow)
-
-    if (this.textures.exists('character_idle')) {
-      const hero = this.add.sprite(cx, cy, 'character_idle', 12).setScale(3)
-      if (this.anims.exists('idle_down')) hero.play('idle_down')
-      container.add(hero)
     }
   }
 }

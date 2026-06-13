@@ -51,6 +51,10 @@ export interface BattleInput {
   allies: CombatantInput[];
   enemies: CombatantInput[];
   seed: number;
+  /** M(currentRank) — scales the damage-mitigation constant so the ratio-based
+   *  mitigation stays proportionate as all stats scale with rank (the "zoom").
+   *  Defaults to 1 (grade_1_3 / unscaled). */
+  rankMult?: number;
 }
 
 // ── Output ───────────────────────────────────────────────────────────────────
@@ -147,11 +151,19 @@ export function resolveBattle(input: BattleInput): { events: BattleEvent[]; outc
 
   const effSpeed = (u: Unit) => Math.max(1, Math.round(u.speed * (1 + u.buffSpdPct / 100) - u.slowAmount));
   const effDefense = (u: Unit) => Math.max(0, u.defense * (1 + u.buffDefPct / 100) - u.defenseDown);
+  // Mitigation constant scales with rank so the ratio stays proportionate as all
+  // stats scale ×M (a rank-appropriate fight is identical at every rank).
+  const mitig = 100 * (input.rankMult ?? 1);
 
   /** Deal `amount` to a unit, applying shield + defending, emitting events. */
   const dealDamage = (src: Unit, tgt: Unit, raw: number) => {
     if (!tgt.alive) return 0;
-    let dmg = Math.max(1, Math.round(raw - effDefense(tgt) * 0.5));
+    // Ratio mitigation (must mirror PartyManualBattleScene.damageUnit): defence
+    // gives diminishing returns instead of a flat subtraction, so high-defence
+    // (level-scaled) targets still take meaningful hits — never floored to 1. The
+    // mitig constant is the tuning knob (higher = defence matters less); it scales
+    // with rank so mitigation stays proportionate as stats grow ×M.
+    let dmg = Math.max(1, Math.round(raw * mitig / (mitig + effDefense(tgt))));
     if (tgt.defending) dmg = Math.max(1, Math.round(dmg * 0.5));
     if (tgt.shield > 0) {
       const absorbed = Math.min(tgt.shield, dmg);

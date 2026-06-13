@@ -380,6 +380,7 @@ export class CraftSessionManager {
         equipSlot: rolled.slot,
         attributes: rolled.attributes,
         xpRequired: rolled.xpRequired,
+        requiredLevel: rolled.requiredLevel,
         baseDamage: rolled.baseDamage,
         baseDefense: rolled.baseDefense,
         recipeId: recipe.id,

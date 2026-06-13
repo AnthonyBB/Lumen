@@ -486,6 +486,8 @@ export interface CraftedItem {
   rarity: Rarity
   attributes: ItemAttribute[]
   xpRequired: number
+  /** Minimum character level to equip (tier + rarity). Authoritative gate. */
+  requiredLevel: number
   icon: string
   description: string
   /** Weapons only: a level-scaled base damage RANGE (drives the basic attack).
@@ -524,6 +526,23 @@ export function tierXpRequired(tier: number): number {
 }
 
 const MAX_GEN_TIER = 7
+
+// ── Equip LEVEL requirement (tier + rarity) ──────────────────────────────────
+// A new (low-level) hero shouldn't be able to equip powerful gear. The required
+// level scales with BOTH the item's tier (base) and its rarity (bump) — so a
+// low-tier but high-rarity item (lots of strong affixes) still needs a real
+// level, not just high-tier gear. Common starter gear stays free (Lv 1).
+const TIER_BASE_LEVEL = [1, 1, 1, 3, 6, 10, 15, 20]   // index = tier (1..7)
+const RARITY_LEVEL_BUMP: Record<Rarity, number> = {
+  common: 0, uncommon: 1, rare: 3, epic: 5, legendary: 8,
+}
+const LEVEL_REQ_CAP = 50   // mirrors PlayerManager.LEVEL_CAP
+
+/** Minimum character level required to equip an item of the given tier + rarity. */
+export function requiredLevelFor(tier: number, rarity: Rarity): number {
+  const base = TIER_BASE_LEVEL[Math.max(1, Math.min(MAX_GEN_TIER, tier))] ?? 1
+  return Math.min(LEVEL_REQ_CAP, base + (RARITY_LEVEL_BUMP[rarity] ?? 0))
+}
 
 export interface RollOptions {
   slot: EquipSlot
@@ -576,6 +595,7 @@ export function rollCraftedItem(opts: RollOptions): CraftedItem {
     rarity,
     attributes,
     xpRequired: tierXpRequired(tier),
+    requiredLevel: requiredLevelFor(tier, rarity),
     icon,
     description: buildDescription(rng, slot, rarity, cls),
     baseDamage,

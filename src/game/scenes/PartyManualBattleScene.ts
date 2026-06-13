@@ -21,8 +21,6 @@ import { SKILL_MAP, skillRankMultiplier } from '../data/skillTrees'
 import { rankMultiplier } from '../data/adventureRanks'
 import { RankStore } from '../systems/RankStore'
 import { Sfx } from '../systems/Sfx'
-import { StatsStore } from '../systems/StatsStore'
-import { InventoryStore, type ClientInventoryItem } from '../systems/InventoryStore'
 import { DIFFICULTIES } from '../data/mobs'
 import { TD_MONSTERS } from '../data/tileFrames'
 import { toBattleSkill } from './BattleScene'
@@ -115,6 +113,8 @@ export class PartyManualBattleScene extends Phaser.Scene {
   private enemyCountText: Phaser.GameObjects.Text | null = null
   private skillButtons: Phaser.GameObjects.Container[] = []
   private charPanel: Phaser.GameObjects.Container | null = null
+  /** Which ally's inspect panel is open (for proper toggle / switching). */
+  private charPanelForId: string | null = null
 
   constructor() { super({ key: 'PartyManualBattleScene' }) }
 
@@ -123,7 +123,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
     this.allies = []; this.enemies = []; this.order = []
     this.turnIdx = 0; this.round = 0; this.phase = 'idle'
     this.active = null; this.selectedSkill = null
-    this.skillButtons = []; this.charPanel = null; this.enemyCountText = null
+    this.skillButtons = []; this.charPanel = null; this.charPanelForId = null; this.enemyCountText = null
     this.rankMult = rankMultiplier(RankStore.get())
   }
 
@@ -255,7 +255,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
         ...this.baseUnit('enemy', x, py),
         id: `e${i}`, name: m.name, level: m.level, boss,
         maxHp: hpv, hp: hpv, maxMana: 0, mana: 0,
-        attack: atkv, defense: m.defense, speed: m.speed, healing: 0,
+        attack: atkv, defense: Math.round(m.defense * this.rankMult), speed: m.speed, healing: 0,
         basicAttack: { min: atkv, max: Math.round(atkv * 1.25) },
         skills: [], container: c, sprite, baseTint,
         hpBar, hpText: nameText, mpBar: null, mpText: null, nameText,
@@ -342,7 +342,7 @@ export class PartyManualBattleScene extends Phaser.Scene {
     zone.on('pointerout', () => this.paintCard(u, this.active === u))
     zone.on('pointerdown', () => {
       if (this.phase === 'target_select' && this.selectedSkill?.isHeal && u.alive) this.fireOnAlly(u)
-      else this.showCharacterPanel()
+      else this.showCharacterPanel(u, c)
     })
     return u
   }
@@ -643,7 +643,13 @@ export class PartyManualBattleScene extends Phaser.Scene {
 
   private damageUnit(src: Unit, tgt: Unit, raw: number, color: string): number {
     if (!tgt.alive) return 0
-    let dmg = Math.max(1, Math.round(raw - this.effDef(tgt) * 0.5))
+    // Ratio mitigation (must mirror server/game/combat/resolver.ts): defence gives
+    // diminishing returns instead of a flat subtraction, so high-defence targets
+    // (level-scaled allies) still take meaningful hits — never floored to 1. The
+    // mitig constant is the tuning knob (higher = defence matters less); it scales
+    // with rank so mitigation stays proportionate as stats grow ×M.
+    const mitig = 100 * this.rankMult
+    let dmg = Math.max(1, Math.round(raw * mitig / (mitig + this.effDef(tgt))))
     if (tgt.defending) dmg = Math.max(1, Math.round(dmg * 0.5))
     if (tgt.shield > 0) { const a = Math.min(tgt.shield, dmg); tgt.shield -= a; dmg -= a }
     if (tgt.asleepRounds > 0) tgt.asleepRounds = 0
@@ -703,70 +709,59 @@ export class PartyManualBattleScene extends Phaser.Scene {
     this.tweens.add({ targets: t, y: u.y - 70, alpha: 0, duration: 800, ease: 'Sine.easeOut', onComplete: () => t.destroy() })
   }
 
-  // ── Character inspect (gear + stats) ─────────────────────────────────────────
-  /** Modal showing the account-active character's equipped gear + derived stats
-   *  (StatsStore / InventoryStore snapshots). Toggle by clicking again. */
-  private showCharacterPanel() {
-    if (this.charPanel) { this.charPanel.destroy(); this.charPanel = null; return }
-    const stats = StatsStore.get()
-    const eq = (InventoryStore.get()?.equipment ?? {}) as Record<string, ClientInventoryItem | undefined>
-    const level = stats?.level ?? 1
-    const RARITY: Record<string, string> = {
-      common: '#cfd8dc', uncommon: '#66bb6a', rare: '#42a5f5', epic: '#ab47bc', legendary: '#ffb300',
-    }
-    const SLOTS: [string, string][] = [
-      ['mainHand', 'Weapon'], ['offHand', 'Off-hand'], ['helm', 'Helm'], ['chest', 'Chest'],
-      ['legs', 'Legs'], ['gloves', 'Gloves'], ['shoes', 'Boots'], ['belt', 'Belt'],
-      ['necklace', 'Necklace'], ['ring1', 'Ring'], ['ring2', 'Ring'], ['earring', 'Earring'],
+  // ── Character inspect (per-ally combat stats) ────────────────────────────────
+  /** Modal showing the CLICKED ally's combat stats. Click the same ally's ⓘ again
+   *  (or the backdrop) to close; clicking a different ally switches to it. Per-ally
+   *  equipment isn't sent to the client, so this shows the combat-relevant stats
+   *  each hero brings to the fight. */
+  private showCharacterPanel(u: Unit, c: ClientCombatant) {
+    const sameOpen = this.charPanel !== null && this.charPanelForId === c.id
+    if (this.charPanel) { this.charPanel.destroy(); this.charPanel = null; this.charPanelForId = null }
+    if (sameOpen) return
+
+    const cls = c.class.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+    const rows: [string, string][] = [
+      ['Max HP', `${u.maxHp}`],
+      ['Max MP', `${u.maxMana}`],
+      ['Attack', `${u.attack}`],
+      ['Defense', `${u.defense}`],
+      ['Speed', `${u.speed}`],
+      ['Healing', `${u.healing}`],
     ]
-    const pw = 600, ph = 470
+    const pw = 320, ph = 86 + rows.length * 26 + 18
     const px = (GAME_WIDTH - pw) / 2, py = (GAME_HEIGHT - ph) / 2
-    const c = this.add.container(0, 0).setDepth(50)
-    this.charPanel = c
-    const close = () => { c.destroy(); this.charPanel = null }
+    const panel = this.add.container(0, 0).setDepth(50)
+    this.charPanel = panel
+    this.charPanelForId = c.id
+    const close = () => { panel.destroy(); this.charPanel = null; this.charPanelForId = null }
 
     const backdrop = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.6).setOrigin(0).setInteractive()
     backdrop.on('pointerdown', close)
-    c.add(backdrop)
+    panel.add(backdrop)
 
     const g = this.add.graphics()
     g.fillStyle(0x12122a, 1).fillRoundedRect(px, py, pw, ph, 12)
     g.lineStyle(2, 0x4a4a7a, 1).strokeRoundedRect(px, py, pw, ph, 12)
-    c.add(g)
-    c.add(this.add.zone(px, py, pw, ph).setOrigin(0).setInteractive())
+    panel.add(g)
+    panel.add(this.add.zone(px, py, pw, ph).setOrigin(0).setInteractive())
 
-    c.add(this.add.text(px + pw / 2, py + 22, `Your Hero  ·  Level ${level}`, {
+    panel.add(this.add.text(px + pw / 2, py + 20, c.name, {
       fontSize: '20px', fontFamily: 'Georgia, serif', color: '#ffd54f', fontStyle: 'bold',
     }).setOrigin(0.5))
-    const closeBtn = this.add.text(px + pw - 16, py + 18, '✕', {
+    panel.add(this.add.text(px + pw / 2, py + 44, `${cls}  ·  Level ${c.level}`, {
+      fontSize: '12px', fontFamily: 'Arial', color: '#9a9ac0',
+    }).setOrigin(0.5))
+    const closeBtn = this.add.text(px + pw - 16, py + 16, '✕', {
       fontSize: '18px', color: '#ff8888', fontStyle: 'bold',
     }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true })
     closeBtn.on('pointerdown', close)
-    c.add(closeBtn)
+    panel.add(closeBtn)
 
-    const colLX = px + 28
-    let ly = py + 62
-    c.add(this.add.text(colLX, ly, 'EQUIPPED GEAR', { fontSize: '12px', fontFamily: 'Arial', color: '#8888aa', fontStyle: 'bold' }))
-    ly += 26
-    for (const [key, label] of SLOTS) {
-      const item = eq[key]
-      c.add(this.add.text(colLX, ly, label, { fontSize: '12px', color: '#9a9ac0' }))
-      c.add(item
-        ? this.add.text(colLX + 92, ly, `${item.icon ?? ''} ${item.name}`, { fontSize: '12px', color: RARITY[item.rarity] ?? '#ffffff', fontStyle: 'bold' }).setWordWrapWidth(180)
-        : this.add.text(colLX + 92, ly, '— empty —', { fontSize: '12px', color: '#55556e', fontStyle: 'italic' }))
-      ly += 26
-    }
-
-    const colRX = px + pw / 2 + 18
-    let ry = py + 62
-    c.add(this.add.text(colRX, ry, 'STATS', { fontSize: '12px', fontFamily: 'Arial', color: '#8888aa', fontStyle: 'bold' }))
-    ry += 26
-    const rows = [...(stats?.attributes ?? []), ...(stats?.derived ?? [])]
-    if (rows.length === 0) c.add(this.add.text(colRX, ry, 'Stats not loaded yet.', { fontSize: '12px', color: '#9a9ac0' }))
-    for (const r of rows) {
-      c.add(this.add.text(colRX, ry, r.label, { fontSize: '12px', color: '#9a9ac0' }))
-      c.add(this.add.text(px + pw - 28, ry, r.isPercent ? `${r.total}%` : `${r.total}`, { fontSize: '12px', color: '#ffffff', fontStyle: 'bold' }).setOrigin(1, 0))
-      ry += 21
+    let ry = py + 72
+    for (const [label, val] of rows) {
+      panel.add(this.add.text(px + 28, ry, label, { fontSize: '13px', color: '#9a9ac0' }))
+      panel.add(this.add.text(px + pw - 28, ry, val, { fontSize: '13px', color: '#ffffff', fontStyle: 'bold' }).setOrigin(1, 0))
+      ry += 26
     }
   }
 

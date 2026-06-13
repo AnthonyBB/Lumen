@@ -93,6 +93,7 @@ export interface MobInput {
   attack: number;
   defense?: number;
   speed?: number;
+  boss?: boolean;
 }
 
 /** Build an ENEMY combatant from a mob, scaling HP/attack by M(currentRank). */
@@ -113,5 +114,6 @@ export function buildEnemyCombatant(mob: MobInput, currentRank: string): Combata
     basicAttack: { min: atk, max: Math.round(atk * 1.25) },
     skills: [],
     strategy: [],
+    boss: mob.boss,
   };
 }

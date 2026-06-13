@@ -807,6 +807,7 @@ export function registerHandlers(
       attack: num(m?.attack, 1, 5000, 5),
       defense: num(m?.defense, 0, 5000, 0),
       speed: num(m?.speed, 1, 1000, 10),
+      boss: m?.boss === true,
     }));
     const mobLevels = rawMobs.map((m) => num(m?.level, 1, 100, 1));
     const campaignComplete = payload?.campaignComplete === true;

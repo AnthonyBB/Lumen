@@ -43,6 +43,8 @@ export interface CombatantInput {
   skills: ResolverSkill[];
   /** Ordered strategy loadout (allies). Evaluated top-down. */
   strategy: CombatStrategy[];
+  /** Campaign boss (enemies) — surfaced in the start snapshot for a special look. */
+  boss?: boolean;
 }
 
 export interface BattleInput {
@@ -55,6 +57,7 @@ export interface BattleInput {
 
 export interface UnitSnapshot {
   id: string; name: string; side: 'ally' | 'enemy'; hp: number; maxHp: number;
+  boss?: boolean;
 }
 
 export type BattleEvent =
@@ -133,7 +136,7 @@ export function resolveBattle(input: BattleInput): { events: BattleEvent[]; outc
   const allies = input.allies.map(toUnit);
   const enemies = input.enemies.map(toUnit);
   const all = [...allies, ...enemies];
-  const snap = (u: Unit): UnitSnapshot => ({ id: u.id, name: u.name, side: u.side, hp: u.hp, maxHp: u.maxHp });
+  const snap = (u: Unit): UnitSnapshot => ({ id: u.id, name: u.name, side: u.side, hp: u.hp, maxHp: u.maxHp, boss: u.boss });
 
   const livingAllies = () => allies.filter((u) => u.alive);
   const livingEnemies = () => enemies.filter((u) => u.alive);

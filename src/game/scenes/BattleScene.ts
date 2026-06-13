@@ -42,6 +42,8 @@ export interface MobDef {
   /** Optional tiny_dungeon frame chosen by BiomeScene so the map marker and
    *  battle enemy show the same creature. Falls back to the difficulty pool. */
   frame?: number
+  /** Campaign boss — rendered bigger with a special aura in the battle scenes. */
+  boss?: boolean
 }
 
 export interface BattleSceneData {
